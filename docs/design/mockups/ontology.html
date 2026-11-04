@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ontological: Ontology</title>
+<!-- Reference mockup exported from the design canvas. See docs/DESIGN.md. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F7}
+a{color:#3446D4;text-decoration:none}a:hover{color:#2433A8}
+a:focus-visible,button:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid #3446D4;outline-offset:2px}
+.nav a{color:#3D4350}.nav a:hover{background:#E0E3E9;color:#151821}
+button{font:inherit;cursor:pointer}
+</style>
+</head>
+<body>
+<div style="min-height: 980px; display: flex; flex-direction: column; background: #F4F5F7; color: #151821; font-family: Geist, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+<div style="display: flex; flex-wrap: wrap; flex: 1 1 auto">
+
+<nav class="nav" aria-label="Main" style="flex: 1 1 232px; background: #EBEDF1; border-right: 1px solid #DCE0E6; display: flex; flex-direction: column; padding: 0 10px 12px">
+<div style="height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 6px; -webkit-app-region: drag">
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #FF5F57"></span>
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #FEBC2E"></span>
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #28C840"></span>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px">
+<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5L5.5 17.5h13z" fill="none" stroke="#3446D4" stroke-width="1.6"></path><circle cx="12" cy="5.5" r="2.6" fill="#3446D4"></circle><circle cx="5.5" cy="17.5" r="2.6" fill="#3446D4"></circle><circle cx="18.5" cy="17.5" r="2.6" fill="#151821"></circle></svg>
+<span style="font-weight: 600; font-size: 15px; letter-spacing: -0.01em">Ontological</span>
+</div>
+<button type="button" style="display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 10px; margin-bottom: 14px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px; text-align: left; color: #151821">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5F6675" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"></path></svg>
+<span style="flex: 1; display: flex; flex-direction: column; line-height: 1.2"><span style="font-weight: 500">pagila</span><span style="font-size: 12px; color: #5F6675">DuckDB · 22 tables · 15 terms</span></span>
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5F6675" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+</button>
+<a href="ask.html" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"></path></svg><span style="flex: 1">Ask</span><span style="font-size: 11px; color: #5F6675">⌘1</span></a>
+<a href="ontology.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px; background: #FFFFFF; color: #151821; font-weight: 500; box-shadow: 0 1px 0 rgba(20,24,33,0.06)">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="9" r="2.5"></circle><circle cx="10" cy="18" r="2.5"></circle><path d="M8.3 7l7.3 1.4M16.6 11l-5.2 5M7 8.4l2.3 7.2"></path></svg><span style="flex: 1">Ontology</span><span style="font-size: 11px; color: #5F6675">⌘2</span></a>
+<a href="#terms" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"></path><path d="M5 17a3 3 0 0 1 3-3h11"></path></svg><span style="flex: 1">Terms</span><span style="font-size: 11px; color: #5F6675">⌘3</span></a>
+<a href="#catalog" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"></path></svg><span style="flex: 1">Catalog</span><span style="font-size: 11px; color: #5F6675">⌘4</span></a>
+<a href="#analyses" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 4h10v16l-5-4-5 4z"></path></svg><span style="flex: 1">Analyses</span><span style="font-size: 11px; color: #5F6675">⌘5</span></a>
+<a href="jobs.html" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span style="flex: 1">Jobs</span><span style="font-size: 11px; font-weight: 500; color: #9A4A00; background: #FDF0E2; padding: 1px 6px; border-radius: 999px">31/48</span></a>
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5F6675; padding: 22px 10px 6px">Certification</div>
+<div style="padding: 0 10px; display: flex; flex-direction: column; gap: 6px">
+<span role="meter" aria-label="Terms certified" aria-valuenow="9" aria-valuemin="0" aria-valuemax="15" style="display: block; height: 6px; background: #D6DAE1; border-radius: 3px; overflow: hidden"><span style="display: block; width: 60%; height: 6px; background: #0A7259"></span></span>
+<span style="font-size: 12px; color: #3D4350">9 of 15 terms certified</span>
+</div>
+<div style="flex: 1"></div>
+<a href="#settings" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle></svg><span style="flex: 1">Settings</span><span style="font-size: 11px; color: #5F6675">⌘,</span></a>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 20px; border-bottom: 1px solid #DCE0E6; -webkit-app-region: drag">
+<h1 style="margin: 0; font-size: 14px; font-weight: 600; flex: 0 0 auto">Ontology</h1>
+<div role="radiogroup" aria-label="Layer" style="-webkit-app-region: no-drag; display: flex; padding: 3px; background: #E3E6EB; border-radius: 8px">
+<button type="button" role="radio" aria-checked="true" style="min-height: 28px; padding: 0 12px; border: 0; background: #FFFFFF; border-radius: 6px; font-weight: 500; color: #151821; box-shadow: 0 1px 2px rgba(20,24,33,0.08)">Semantic</button>
+<button type="button" role="radio" aria-checked="false" style="min-height: 28px; padding: 0 12px; border: 0; background: transparent; border-radius: 6px; color: #3D4350">Data</button>
+</div>
+<div style="-webkit-app-region: no-drag; display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 6px 0 10px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px">
+<span style="font-size: 12px; color: #5F6675">Path</span>
+<span style="font-size: 13px; font-weight: 500; padding: 1px 8px; background: #E8EBFC; color: #2433A8; border-radius: 999px">Customer</span>
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5F6675" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+<span style="font-size: 13px; font-weight: 500; padding: 1px 8px; background: #E8EBFC; color: #2433A8; border-radius: 999px">Category</span>
+<button type="button" aria-label="Clear path" style="width: 26px; height: 26px; display: grid; place-items: center; border: 0; background: transparent; color: #5F6675; border-radius: 6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+</div>
+<span style="flex: 1"></span>
+<button type="button" style="-webkit-app-region: no-drag; display: flex; align-items: center; gap: 8px; min-height: 32px; min-width: 220px; padding: 0 10px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px; color: #5F6675">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M20 20l-4.5-4.5"></path></svg>
+<span style="flex: 1; text-align: left">Find a term</span><span style="font-size: 11px; border: 1px solid #DCE0E6; border-radius: 4px; padding: 0 5px">⌘K</span>
+</button>
+</header>
+
+<div style="display: flex; flex-wrap: wrap; flex: 1 1 auto">
+<section aria-label="Ontology graph" style="flex: 999 1 520px; min-width: 0; position: relative; overflow: auto; background-color: #F4F5F7; background-image: radial-gradient(#D3D7DE 1px, transparent 1px); background-size: 20px 20px">
+<div style="position: relative; width: 880px; height: 860px; margin: 0 auto">
+
+<svg width="880" height="760" style="position: absolute; left: 0; top: 40px" aria-hidden="true">
+<g stroke="#C3C8D1" stroke-width="1.5" fill="none">
+<line x1="140" y1="170" x2="360" y2="90"></line>
+<line x1="360" y1="90" x2="340" y2="290"></line>
+<line x1="140" y1="170" x2="140" y2="420"></line>
+<line x1="140" y1="420" x2="380" y2="540"></line>
+<line x1="380" y1="540" x2="220" y2="650"></line>
+<line x1="560" y1="380" x2="380" y2="540"></line>
+<line x1="720" y1="490" x2="800" y2="300"></line>
+<line x1="720" y1="490" x2="560" y2="640"></line>
+</g>
+<g stroke="#3446D4" stroke-width="3" fill="none" stroke-linecap="round">
+<line x1="140" y1="170" x2="340" y2="290"></line>
+<line x1="340" y1="290" x2="560" y2="380"></line>
+<line x1="560" y1="380" x2="720" y2="490"></line>
+<line x1="720" y1="490" x2="720" y2="680" stroke-dasharray="7 6"></line>
+</g>
+</svg>
+
+<div style="position: absolute; left: 20px; top: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 10px; font-size: 13px; box-shadow: 0 2px 8px rgba(20,24,33,0.05)">
+<span style="font-weight: 600">4 hops</span><span style="color: #3D4350">Customer → Rental → Inventory → Film → Category</span><span style="color: #5F6675">via film_category</span>
+</div>
+
+<button type="button" style="position: absolute; left: 76px; top: 190px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; background: #FFFFFF; border: 2px solid #3446D4; border-radius: 999px; font-weight: 600; color: #151821"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.4" aria-label="certified" role="img"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Customer</button>
+<button type="button" style="position: absolute; left: 296px; top: 110px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; background: #FFFFFF; border: 1px solid #C3C8D1; border-radius: 999px; color: #3D4350"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.4" aria-label="certified" role="img"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Payment</button>
+<button type="button" aria-pressed="true" style="position: absolute; left: 276px; top: 308px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; background: #3446D4; border: 2px solid #3446D4; border-radius: 999px; font-weight: 600; color: #FFFFFF; box-shadow: 0 0 0 6px rgba(52,70,212,0.18)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.4" aria-label="certified" role="img"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Rental</button>
+<button type="button" style="position: absolute; left: 496px; top: 398px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; background: #FFFFFF; border: 2px dashed #3446D4; border-radius: 999px; font-weight: 600; color: #151821">Inventory</button>
+<button type="button" style="position: absolute; left: 656px; top: 508px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; background: #FFFFFF; border: 2px solid #3446D4; border-radius: 999px; font-weight: 600; color: #151821"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.4" aria-label="certified" role="img"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Film</button>
+<button type="button" style="position: absolute; left: 656px; top: 698px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; background: #FFFFFF; border: 2px solid #3446D4; border-radius: 999px; font-weight: 600; color: #151821"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.4" aria-label="certified" role="img"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Category</button>
+<span style="position: absolute; left: 734px; top: 610px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #2433A8; background: #F4F5F7; padding: 1px 4px">film_category</span>
+<button type="button" style="position: absolute; left: 76px; top: 440px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; background: #FFFFFF; border: 1px dashed #A3A9B4; border-radius: 999px; color: #5F6675">Address</button>
+<button type="button" style="position: absolute; left: 316px; top: 560px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; background: #FFFFFF; border: 1px solid #C3C8D1; border-radius: 999px; color: #3D4350"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.4" aria-label="certified" role="img"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Store</button>
+<button type="button" style="position: absolute; left: 156px; top: 670px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; background: #FFFFFF; border: 1px dashed #A3A9B4; border-radius: 999px; color: #5F6675">Staff</button>
+<button type="button" style="position: absolute; left: 736px; top: 318px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; background: #FFFFFF; border: 1px dashed #A3A9B4; border-radius: 999px; color: #5F6675">Actor</button>
+<button type="button" style="position: absolute; left: 496px; top: 660px; width: 128px; min-height: 44px; display: flex; align-items: center; justify-content: center; background: #FFFFFF; border: 1px dashed #A3A9B4; border-radius: 999px; color: #5F6675">Language</button>
+
+<div style="position: absolute; left: 20px; bottom: 20px; display: flex; flex-wrap: wrap; gap: 14px; padding: 8px 12px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 10px; font-size: 12px; color: #3D4350">
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 18px; height: 3px; background: #3446D4; border-radius: 2px"></span>On path</span>
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 14px; height: 10px; border: 1.5px solid #3D4350; border-radius: 6px"></span>Certified</span>
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 14px; height: 10px; border: 1.5px dashed #5F6675; border-radius: 6px"></span>Not yet reviewed</span>
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 18px; height: 0; border-top: 2px dashed #3446D4"></span>Through a junction</span>
+</div>
+<div style="position: absolute; right: 20px; bottom: 20px; display: flex; align-items: center; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 10px; overflow: hidden">
+<button type="button" aria-label="Zoom out" style="width: 36px; height: 36px; border: 0; background: transparent; color: #3D4350; font-size: 16px">−</button>
+<span style="font-size: 12px; color: #3D4350; padding: 0 6px">100%</span>
+<button type="button" aria-label="Zoom in" style="width: 36px; height: 36px; border: 0; background: transparent; color: #3D4350; font-size: 16px">+</button>
+<button type="button" style="height: 36px; padding: 0 12px; border: 0; border-left: 1px solid #DCE0E6; background: transparent; color: #3D4350; font-size: 13px">Fit</button>
+</div>
+</div>
+</section>
+
+<aside aria-label="Term editor" style="flex: 1 1 360px; min-width: 0; border-left: 1px solid #DCE0E6; background: #FFFFFF; display: flex; flex-direction: column">
+<div style="padding: 20px 22px 16px; border-bottom: 1px solid #E6E9EE; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 12px; color: #5F6675">Term · represents <span style="font-family: 'Geist Mono', ui-monospace, monospace">rental</span></span>
+<div style="display: flex; align-items: center; gap: 10px">
+<h2 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em">Rental</h2>
+<span style="display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; color: #0A5C48; background: #E3F4EE; padding: 2px 8px; border-radius: 999px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Name certified</span>
+</div>
+</div>
+
+<div style="padding: 18px 22px; display: flex; flex-direction: column; gap: 20px; flex: 1 1 auto">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; justify-content: space-between">
+<label for="desc" style="font-size: 12px; font-weight: 600; color: #3D4350">Description</label>
+<span style="font-size: 12px; color: #9A4A00">Written by Sonnet · not certified</span>
+</div>
+<textarea id="desc" rows="4" style="font: inherit; font-size: 14px; line-height: 1.5; color: #151821; border: 1px solid #DCE0E6; border-radius: 8px; padding: 10px 12px; resize: vertical">One checkout of a single inventory copy by a customer, from rental_date until return_date. Rentals not yet returned have no return_date.</textarea>
+<button type="button" style="align-self: flex-start; display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; border: 1px solid #A9D9C8; background: #E3F4EE; border-radius: 8px; color: #0A5C48; font-weight: 500"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Certify description</button>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 12px; font-weight: 600; color: #3D4350">Synonyms</span>
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<span style="font-size: 13px; padding: 3px 10px; background: #F1F3F6; border-radius: 999px">checkout</span>
+<span style="font-size: 13px; padding: 3px 10px; background: #F1F3F6; border-radius: 999px">hire</span>
+<span style="font-size: 13px; padding: 3px 10px; background: #F1F3F6; border-radius: 999px">loan</span>
+<button type="button" style="font-size: 13px; min-height: 28px; padding: 0 10px; border: 1px dashed #A3A9B4; background: transparent; border-radius: 999px; color: #3D4350">+ Add</button>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 12px; font-weight: 600; color: #3D4350">Attributes · 6</span>
+<ul style="list-style: none; margin: 0; padding: 0; border: 1px solid #E6E9EE; border-radius: 8px; font-size: 13px">
+<li style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #EEF0F3"><span style="font-family: 'Geist Mono', ui-monospace, monospace">rental_date</span><span style="color: #5F6675">timestamp</span></li>
+<li style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #EEF0F3"><span style="font-family: 'Geist Mono', ui-monospace, monospace">return_date</span><span style="color: #5F6675">timestamp · nullable</span></li>
+<li style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #EEF0F3"><span style="font-family: 'Geist Mono', ui-monospace, monospace">customer_id</span><a href="#customer" style="font-size: 13px">→ Customer</a></li>
+<li style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #EEF0F3"><span style="font-family: 'Geist Mono', ui-monospace, monospace">inventory_id</span><a href="#inventory" style="font-size: 13px">→ Inventory</a></li>
+<li style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px 12px"><span style="font-family: 'Geist Mono', ui-monospace, monospace">staff_id</span><a href="#staff" style="font-size: 13px">→ Staff</a></li>
+</ul>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 12px; font-weight: 600; color: #3D4350">SQL attributes · 1</span>
+<div style="border: 1px solid #E6E9EE; border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px"><span style="font-weight: 500">Days out</span><span style="font-size: 12px; color: #5F6675">from query history · used 14×</span></div>
+<code style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #3D4350; background: #F8F9FA; padding: 6px 8px; border-radius: 6px; overflow-x: auto; white-space: nowrap">date_diff('day', rental_date, coalesce(return_date, now()))</code>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 12px; font-weight: 600; color: #3D4350">History</span>
+<ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #3D4350">
+<li style="display: flex; justify-content: space-between; gap: 8px"><span>You certified the name</span><span style="color: #5F6675">Today 2:14 PM</span></li>
+<li style="display: flex; justify-content: space-between; gap: 8px"><span>You added synonym “loan”</span><span style="color: #5F6675">Today 2:12 PM</span></li>
+<li style="display: flex; justify-content: space-between; gap: 8px"><span>Compiled · split · Sonnet 5.5</span><span style="color: #5F6675">Nov 3</span></li>
+</ol>
+</div>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 22px; border-top: 1px solid #E6E9EE; background: #FBFBFC">
+<span style="flex: 1 1 180px; font-size: 12px; color: #5F6675">Saving re-embeds Rental, so the next answer uses your wording.</span>
+<button type="button" style="min-height: 36px; padding: 0 12px; border: 1px solid #DCE0E6; background: #FFFFFF; border-radius: 8px; color: #3D4350">Undo</button>
+<button type="button" style="min-height: 36px; padding: 0 14px; border: 0; background: #151821; border-radius: 8px; color: #FFFFFF; font-weight: 500">Save</button>
+</div>
+</aside>
+</div>
+</main>
+</div>
+
+<footer style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; min-height: 28px; padding: 4px 14px; border-top: 1px solid #DCE0E6; background: #EBEDF1; font-size: 12px; color: #3D4350">
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: #0A7259"></span>Engine running</span>
+<span>Claude Code 2.1.318 · logged in</span>
+<span style="flex: 1"></span>
+<a href="jobs.html" style="color: #9A4A00">Compile wwi slowed to 1 at a time</a>
+<span style="display: flex; align-items: center; gap: 8px">Usage
+<span role="meter" aria-label="Claude usage" aria-valuenow="71" aria-valuemin="0" aria-valuemax="100" style="width: 90px; height: 6px; background: #D6DAE1; border-radius: 3px; overflow: hidden; display: block"><span style="display: block; width: 71%; height: 6px; background: #C26A12"></span></span>71% · resets 4:10 PM</span>
+</footer>
+</div>
+</body>
+</html>

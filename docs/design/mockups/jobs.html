@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ontological: Jobs</title>
+<!-- Reference mockup exported from the design canvas. See docs/DESIGN.md. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F7}
+a{color:#3446D4;text-decoration:none}a:hover{color:#2433A8}
+a:focus-visible,button:focus-visible{outline:2px solid #3446D4;outline-offset:2px}
+.nav a{color:#3D4350}.nav a:hover{background:#E0E3E9;color:#151821}
+button{font:inherit;cursor:pointer}
+</style>
+</head>
+<body>
+<div style="min-height: 980px; display: flex; flex-direction: column; background: #F4F5F7; color: #151821; font-family: Geist, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+<div style="display: flex; flex-wrap: wrap; flex: 1 1 auto">
+
+<nav class="nav" aria-label="Main" style="flex: 1 1 232px; background: #EBEDF1; border-right: 1px solid #DCE0E6; display: flex; flex-direction: column; padding: 0 10px 12px">
+<div style="height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 6px; -webkit-app-region: drag">
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #FF5F57"></span>
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #FEBC2E"></span>
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #28C840"></span>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px">
+<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5L5.5 17.5h13z" fill="none" stroke="#3446D4" stroke-width="1.6"></path><circle cx="12" cy="5.5" r="2.6" fill="#3446D4"></circle><circle cx="5.5" cy="17.5" r="2.6" fill="#3446D4"></circle><circle cx="18.5" cy="17.5" r="2.6" fill="#151821"></circle></svg>
+<span style="font-weight: 600; font-size: 15px; letter-spacing: -0.01em">Ontological</span>
+</div>
+<button type="button" style="display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 10px; margin-bottom: 14px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px; text-align: left; color: #151821">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5F6675" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"></path></svg>
+<span style="flex: 1; display: flex; flex-direction: column; line-height: 1.2"><span style="font-weight: 500">All sources</span><span style="font-size: 12px; color: #5F6675">pagila, wwi, chinook</span></span>
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5F6675" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+</button>
+<a href="ask.html" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"></path></svg><span style="flex: 1">Ask</span><span style="font-size: 11px; color: #5F6675">⌘1</span></a>
+<a href="ontology.html" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="9" r="2.5"></circle><circle cx="10" cy="18" r="2.5"></circle><path d="M8.3 7l7.3 1.4M16.6 11l-5.2 5M7 8.4l2.3 7.2"></path></svg><span style="flex: 1">Ontology</span><span style="font-size: 11px; color: #5F6675">⌘2</span></a>
+<a href="#terms" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"></path><path d="M5 17a3 3 0 0 1 3-3h11"></path></svg><span style="flex: 1">Terms</span><span style="font-size: 11px; color: #5F6675">⌘3</span></a>
+<a href="#catalog" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"></path></svg><span style="flex: 1">Catalog</span><span style="font-size: 11px; color: #5F6675">⌘4</span></a>
+<a href="#analyses" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 4h10v16l-5-4-5 4z"></path></svg><span style="flex: 1">Analyses</span><span style="font-size: 11px; color: #5F6675">⌘5</span></a>
+<a href="jobs.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px; background: #FFFFFF; color: #151821; font-weight: 500; box-shadow: 0 1px 0 rgba(20,24,33,0.06)">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span style="flex: 1">Jobs</span><span style="font-size: 11px; font-weight: 500; color: #9A4A00; background: #FDF0E2; padding: 1px 6px; border-radius: 999px">Paused</span></a>
+<div style="flex: 1"></div>
+<a href="#settings" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle></svg><span style="flex: 1">Settings</span><span style="font-size: 11px; color: #5F6675">⌘,</span></a>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 20px; border-bottom: 1px solid #DCE0E6; -webkit-app-region: drag">
+<h1 style="margin: 0; font-size: 14px; font-weight: 600">Jobs</h1>
+<span style="flex: 1"></span>
+<button type="button" style="-webkit-app-region: no-drag; min-height: 32px; padding: 0 12px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px; color: #3D4350">Ingest metadata</button>
+<button type="button" style="-webkit-app-region: no-drag; min-height: 32px; padding: 0 12px; background: #151821; border: 0; border-radius: 8px; color: #FFFFFF; font-weight: 500">New compile…</button>
+</header>
+
+<div style="display: flex; flex-wrap: wrap; flex: 1 1 auto">
+<section style="flex: 999 1 560px; min-width: 0; padding: 24px 28px; display: flex; flex-direction: column; gap: 20px">
+
+<div role="status" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 14px 16px; background: #FDF0E2; border: 1px solid #F2D2AE; border-radius: 12px; color: #5C2D00">
+<span aria-hidden="true" style="width: 36px; height: 36px; display: grid; place-items: center; background: #FFFFFF; border-radius: 50%; color: #9A4A00"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 5v14M15 5v14"></path></svg></span>
+<div style="flex: 1 1 320px; display: flex; flex-direction: column; gap: 2px">
+<span style="font-weight: 600">Paused: your Claude usage limit is reached</span>
+<span style="font-size: 13px">Compile picks up by itself at 4:10 PM, in 38 min. The 31 finished tables are saved.</span>
+</div>
+<button type="button" style="min-height: 36px; padding: 0 12px; border: 1px solid #E3B985; background: #FFFFFF; border-radius: 8px; color: #5C2D00">Don’t resume</button>
+</div>
+
+<article style="background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 14px; padding: 20px 22px; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px">
+<div style="flex: 1 1 280px; display: flex; flex-direction: column; gap: 4px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Compile · wwi</h2>
+<span style="font-size: 13px; color: #5F6675">Split calls · started 2:31 PM · concurrency 3, lowered to 1 at 3:12 PM</span>
+</div>
+<dl style="margin: 0; display: flex; flex-wrap: wrap; gap: 24px">
+<div style="display: flex; flex-direction: column"><dt style="font-size: 12px; color: #5F6675">Tables</dt><dd style="margin: 0; font-size: 18px; font-weight: 600">31 / 48</dd></div>
+<div style="display: flex; flex-direction: column"><dt style="font-size: 12px; color: #5F6675">Claude calls</dt><dd style="margin: 0; font-size: 18px; font-weight: 600">142</dd></div>
+<div style="display: flex; flex-direction: column"><dt style="font-size: 12px; color: #5F6675">Cache hits</dt><dd style="margin: 0; font-size: 18px; font-weight: 600">37</dd></div>
+</dl>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: #3D4350">
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 12px; height: 12px; background: #3446D4; border-radius: 3px"></span>Done</span>
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 12px; height: 12px; background: #C26A12; border-radius: 3px"></span>Stopped mid-table (checkpointed)</span>
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 12px; height: 12px; background: #E3E6EB; border-radius: 3px"></span>Queued</span>
+<span style="color: #5F6675">Each bar: keys · descriptions · terms · synonyms</span>
+</div>
+
+<ul aria-label="Tables" style="list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px">
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">cities</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">countries</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">delivery_methods</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">payment_methods</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">people</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">state_provinces</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">system_parameters</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">transaction_types</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">purchase_orders</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">purchase_order_lines</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">supplier_categories</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">suppliers</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">supplier_transactions</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">buying_groups</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">customer_categories</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">customers</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">customer_transactions</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">invoice_lines</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">invoices</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">order_lines</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">orders</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">special_deals</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">cold_room_temperatures</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">colors</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">package_types</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">stock_groups</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">stock_item_holdings</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">stock_items</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">stock_item_stock_groups</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">stock_item_transactions</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">vehicle_temperatures</span>
+<span aria-label="done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+<span style="height: 5px; border-radius: 2px; background: #3446D4"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #151821; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">cities_archive</span>
+<span aria-label="2 of 4 stages done" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #C26A12"></span>
+<span style="height: 5px; border-radius: 2px; background: #C26A12"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">countries_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">delivery_methods_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">payment_methods_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">people_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">state_provinces_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">transaction_types_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">supplier_categories_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">suppliers_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">buying_groups_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">customer_categories_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">customers_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">special_deals_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">colors_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">package_types_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">stock_groups_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+<li style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid #E6E9EE; border-radius: 8px; background: #FBFBFC">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">stock_items_archive</span>
+<span aria-label="queued" role="img" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px">
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+<span style="height: 5px; border-radius: 2px; background: #E3E6EB"></span>
+</span>
+</li>
+
+</ul>
+</article>
+
+<article style="background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 14px; padding: 18px 22px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px">
+<h2 style="margin: 0; font-size: 15px; font-weight: 600; flex: 1 1 240px">Remaining 17 tables: estimate</h2>
+<span style="font-size: 12px; color: #5F6675">Rough until measured on your data</span>
+</div>
+<div role="radiogroup" aria-label="Call shape" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+<button type="button" role="radio" aria-checked="true" style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px 14px; border: 2px solid #3446D4; background: #F5F6FE; border-radius: 10px; text-align: left; color: #151821">
+<span style="font-weight: 600">Split · current</span>
+<span style="font-size: 13px; color: #3D4350">≈ 70 calls · ≈ 15 min · bulk on Haiku</span>
+</button>
+<button type="button" role="radio" aria-checked="false" style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px 14px; border: 1px solid #DCE0E6; background: #FFFFFF; border-radius: 10px; text-align: left; color: #151821">
+<span style="font-weight: 600">Merged</span>
+<span style="font-size: 13px; color: #3D4350">≈ 20 calls · ≈ 5 min · one Sonnet call per table</span>
+</button>
+</div>
+</article>
+</section>
+
+<aside aria-label="Call log and history" style="flex: 1 1 340px; min-width: 0; border-left: 1px solid #DCE0E6; background: #FBFBFC; padding: 24px 22px; display: flex; flex-direction: column; gap: 22px">
+<div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; background: #FFFFFF; border: 1px solid #C9CFF5; border-radius: 12px">
+<span style="font-weight: 600">3 new tables in pagila</span>
+<span style="font-size: 13px; color: #3D4350">Found when metadata refreshed at 9:02 AM. That refresh used no Claude quota. Compiling them will.</span>
+<div style="display: flex; gap: 8px"><button type="button" style="min-height: 34px; padding: 0 12px; border: 0; background: #3446D4; border-radius: 8px; color: #FFFFFF; font-weight: 500">Review and compile</button><button type="button" style="min-height: 34px; padding: 0 12px; border: 1px solid #DCE0E6; background: #FFFFFF; border-radius: 8px; color: #3D4350">Later</button></div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; justify-content: space-between"><h2 style="margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5F6675">Claude calls</h2><a href="#all-calls" style="font-size: 13px">All 142</a></div>
+<ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid #E6E9EE; border-radius: 10px; background: #FFFFFF; font-size: 13px">
+
+<li style="display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 12px; border-bottom: 1px solid #EEF0F3">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">3:31:58</span>
+<span style="display: flex; flex-direction: column; min-width: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">table_terms</span><span style="font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">cities_archive · Sonnet 5.5</span></span>
+<span style="font-size: 12px; color: #9A4A00; white-space: nowrap">limit reached</span>
+</li>
+
+<li style="display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 12px; border-bottom: 1px solid #EEF0F3">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">3:31:40</span>
+<span style="display: flex; flex-direction: column; min-width: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">column_descriptions</span><span style="font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">cities_archive · Haiku 5.5</span></span>
+<span style="font-size: 12px; color: #3D4350; white-space: nowrap">6.1 s</span>
+</li>
+
+<li style="display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 12px; border-bottom: 1px solid #EEF0F3">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">3:31:22</span>
+<span style="display: flex; flex-direction: column; min-width: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">table_keys</span><span style="font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">cities_archive · Sonnet 5.5</span></span>
+<span style="font-size: 12px; color: #3D4350; white-space: nowrap">9.8 s</span>
+</li>
+
+<li style="display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 12px; border-bottom: 1px solid #EEF0F3">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">3:30:57</span>
+<span style="display: flex; flex-direction: column; min-width: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">table_synonyms</span><span style="font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">vehicle_temperatures · Haiku 5.5</span></span>
+<span style="font-size: 12px; color: #3D4350; white-space: nowrap">3.4 s</span>
+</li>
+
+<li style="display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 12px; border-bottom: 1px solid #EEF0F3">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">3:30:41</span>
+<span style="display: flex; flex-direction: column; min-width: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">table_terms</span><span style="font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">vehicle_temperatures · Sonnet 5.5</span></span>
+<span style="font-size: 12px; color: #0A5C48; white-space: nowrap">cached</span>
+</li>
+
+<li style="display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 12px; border-bottom: 1px solid #EEF0F3">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">3:30:40</span>
+<span style="display: flex; flex-direction: column; min-width: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">column_descriptions</span><span style="font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">vehicle_temperatures · Haiku 5.5</span></span>
+<span style="font-size: 12px; color: #0A5C48; white-space: nowrap">cached</span>
+</li>
+
+<li style="display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 12px; border-bottom: 1px solid #EEF0F3">
+<span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">3:30:39</span>
+<span style="display: flex; flex-direction: column; min-width: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">table_keys</span><span style="font-size: 12px; color: #5F6675; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">vehicle_temperatures · Sonnet 5.5</span></span>
+<span style="font-size: 12px; color: #0A5C48; white-space: nowrap">cached</span>
+</li>
+
+</ol>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5F6675">Earlier</h2>
+<ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<li style="display: flex; justify-content: space-between; gap: 8px"><span>Ingest metadata · all sources</span><span style="color: #5F6675">9:02 AM</span></li>
+<li style="display: flex; justify-content: space-between; gap: 8px"><span>Compile · pagila · 22 tables</span><span style="color: #5F6675">Nov 3</span></li>
+<li style="display: flex; justify-content: space-between; gap: 8px"><span>Compile · chinook · 11 tables</span><span style="color: #5F6675">Nov 2</span></li>
+</ul>
+</div>
+</aside>
+</div>
+</main>
+</div>
+
+<footer style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; min-height: 28px; padding: 4px 14px; border-top: 1px solid #DCE0E6; background: #EBEDF1; font-size: 12px; color: #3D4350">
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: #0A7259"></span>Engine running</span>
+<span>Claude Code 2.1.318 · logged in</span>
+<span style="flex: 1"></span>
+<span style="color: #9A4A00">Compile wwi paused until 4:10 PM</span>
+<span style="display: flex; align-items: center; gap: 8px">Usage
+<span role="meter" aria-label="Claude usage" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100" style="width: 90px; height: 6px; background: #D6DAE1; border-radius: 3px; overflow: hidden; display: block"><span style="display: block; width: 100%; height: 6px; background: #9A4A00"></span></span>Limit reached · resets 4:10 PM</span>
+</footer>
+</div>
+</body>
+</html>

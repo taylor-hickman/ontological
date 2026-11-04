@@ -8,4 +8,4 @@ Status: design. No code yet.
 
 - [Architecture](docs/ARCHITECTURE.md): how upstream auto-ontology works, and the design for Ontological's engine, storage, Claude gateway, answer agent and surfaces.
 - [Build plan](docs/BUILD_PLAN.md): spikes, the eval set, and milestones M0 to M7.
-- [Design](docs/DESIGN.md): the Electron UI, with tokens, window and shell, components, screens and states.
+- [Design](docs/DESIGN.md): the Electron UI, with tokens, window and shell, components, screens and states. Mockups are in [docs/design/mockups/](docs/design/mockups/).

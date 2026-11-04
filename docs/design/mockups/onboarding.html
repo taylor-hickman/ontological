@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ontological: Welcome</title>
+<!-- Reference mockup exported from the design canvas. See docs/DESIGN.md. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F7}
+a{color:#3446D4;text-decoration:none}a:hover{color:#2433A8}
+a:focus-visible,button:focus-visible{outline:2px solid #3446D4;outline-offset:2px}
+button{font:inherit;cursor:pointer}
+</style>
+</head>
+<body>
+<div style="min-height: 980px; display: flex; flex-wrap: wrap; background: #F4F5F7; color: #151821; font-family: Geist, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+
+<aside style="flex: 1 1 320px; background: #151821; color: #E9EBF0; display: flex; flex-direction: column; padding: 0 32px 32px">
+<div style="height: 52px; display: flex; align-items: center; gap: 8px; -webkit-app-region: drag">
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #FF5F57"></span>
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #FEBC2E"></span>
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #28C840"></span>
+</div>
+<div style="display: flex; align-items: center; gap: 12px; padding: 36px 0 12px">
+<svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5L5.5 17.5h13z" fill="none" stroke="#8A96EA" stroke-width="1.4"></path><circle cx="12" cy="5.5" r="2.6" fill="#8A96EA"></circle><circle cx="5.5" cy="17.5" r="2.6" fill="#8A96EA"></circle><circle cx="18.5" cy="17.5" r="2.6" fill="#FFFFFF"></circle></svg>
+<span style="font-weight: 600; font-size: 20px; letter-spacing: -0.01em; color: #FFFFFF">Ontological</span>
+</div>
+<p style="margin: 0 0 40px; font-size: 15px; color: #B8BDC8; max-width: 300px">Map what your data means, then ask it questions and get SQL you can check.</p>
+
+<ol aria-label="Setup steps" style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px">
+<li style="display: flex; gap: 14px; padding: 12px 0">
+<span aria-hidden="true" style="flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: #0A7259; color: #FFFFFF"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M5 12.5l4.5 4.5L19 7"></path></svg></span>
+<span style="display: flex; flex-direction: column"><span style="font-weight: 500; color: #FFFFFF">Connect Claude Code</span><span style="font-size: 13px; color: #A9AFBB">Done</span></span>
+</li>
+<li aria-current="step" style="display: flex; gap: 14px; padding: 12px 0">
+<span aria-hidden="true" style="flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: #FFFFFF; color: #151821; font-weight: 600; font-size: 13px">2</span>
+<span style="display: flex; flex-direction: column"><span style="font-weight: 600; color: #FFFFFF">Add a source</span><span style="font-size: 13px; color: #A9AFBB">A file or a database, read-only</span></span>
+</li>
+<li style="display: flex; gap: 14px; padding: 12px 0">
+<span aria-hidden="true" style="flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; border: 1.5px solid #5C6270; color: #A9AFBB; font-size: 13px">3</span>
+<span style="display: flex; flex-direction: column"><span style="font-weight: 500; color: #C9CDD5">Choose scope</span><span style="font-size: 13px; color: #A9AFBB">See the cost before anything runs</span></span>
+</li>
+<li style="display: flex; gap: 14px; padding: 12px 0">
+<span aria-hidden="true" style="flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; border: 1.5px solid #5C6270; color: #A9AFBB; font-size: 13px">4</span>
+<span style="display: flex; flex-direction: column"><span style="font-weight: 500; color: #C9CDD5">Compile and ask</span><span style="font-size: 13px; color: #A9AFBB">Runs in the background</span></span>
+</li>
+</ol>
+<div style="flex: 1; min-height: 40px"></div>
+<p style="margin: 0; font-size: 13px; color: #A9AFBB; max-width: 300px">Your data stays on this Mac. The only thing that leaves it is the text of prompts sent to Claude through your own Claude Code login.</p>
+</aside>
+
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<div style="height: 52px; -webkit-app-region: drag"></div>
+<div style="width: 100%; max-width: 720px; margin: 0 auto; padding: 24px 32px 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 22px">
+
+<section aria-label="Claude Code" style="background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
+<h2 style="margin: 0; font-size: 15px; font-weight: 600">Claude Code</h2>
+<span style="font-size: 12px; font-weight: 500; color: #0A5C48; background: #E3F4EE; padding: 2px 9px; border-radius: 999px">Ready</span>
+</div>
+<ul style="list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+<li style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: #F8F9FA; border-radius: 8px"><span style="display: flex; align-items: center; gap: 6px; font-weight: 500"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.6" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Installed</span><span style="font-size: 12px; color: #5F6675; font-family: 'Geist Mono', ui-monospace, monospace">v2.1.318</span></li>
+<li style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: #F8F9FA; border-radius: 8px"><span style="display: flex; align-items: center; gap: 6px; font-weight: 500"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.6" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Logged in</span><span style="font-size: 12px; color: #5F6675">with your subscription</span></li>
+<li style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: #F8F9FA; border-radius: 8px"><span style="display: flex; align-items: center; gap: 6px; font-weight: 500"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.6" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Test call</span><span style="font-size: 12px; color: #5F6675">Haiku replied in 2.4 s</span></li>
+</ul>
+<div style="display: flex; gap: 10px; padding: 10px 12px; background: #FDF0E2; border-radius: 8px; font-size: 13px; color: #5C2D00">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9A4A00" stroke-width="2" style="flex: 0 0 auto; margin-top: 1px" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16.5v.5"></path></svg>
+<span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">ANTHROPIC_API_KEY</span> is set in your shell. Ontological ignores it, so every call uses your subscription and never bills API credits.</span>
+</div>
+</section>
+
+<section aria-labelledby="src-h" style="background: #FFFFFF; border: 2px solid #3446D4; border-radius: 14px; padding: 22px 22px 20px; display: flex; flex-direction: column; gap: 18px; box-shadow: 0 10px 30px rgba(52,70,212,0.08)">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<h1 id="src-h" style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em">Add your first source</h1>
+<p style="margin: 0; color: #3D4350">Ontological opens sources read-only. It reads table structure first, which costs no Claude usage.</p>
+</div>
+
+<div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 20px; border: 1.5px dashed #A3A9B4; border-radius: 12px; background: #FBFBFC; text-align: center">
+<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#5F6675" stroke-width="1.5" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5"></path><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"></path></svg>
+<span style="font-weight: 500">Drop a database file here</span>
+<span style="font-size: 13px; color: #5F6675">DuckDB, SQLite, Parquet, CSV or JSON</span>
+<button type="button" style="min-height: 36px; padding: 0 14px; border: 1px solid #DCE0E6; background: #FFFFFF; border-radius: 8px; color: #151821; font-weight: 500">Choose file…</button>
+</div>
+
+<div style="display: flex; align-items: center; gap: 12px; color: #5F6675; font-size: 12px"><span style="flex: 1; height: 1px; background: #E6E9EE"></span>or connect to a server<span style="flex: 1; height: 1px; background: #E6E9EE"></span></div>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+<button type="button" style="display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px 14px; border: 1px solid #DCE0E6; background: #FFFFFF; border-radius: 10px; text-align: left; color: #151821">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3D4350" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"></path></svg>
+<span style="display: flex; flex-direction: column"><span style="font-weight: 500">PostgreSQL</span><span style="font-size: 12px; color: #5F6675">Host, database, user</span></span>
+</button>
+<button type="button" style="display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px 14px; border: 1px solid #DCE0E6; background: #FFFFFF; border-radius: 10px; text-align: left; color: #151821">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3D4350" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"></path></svg>
+<span style="display: flex; flex-direction: column"><span style="font-weight: 500">MySQL</span><span style="font-size: 12px; color: #5F6675">Host, database, user</span></span>
+</button>
+</div>
+<span style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #5F6675"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>Passwords go in the macOS Keychain, never in Ontological’s files.</span>
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 14px; background: #F5F6FE; border: 1px solid #C9CFF5; border-radius: 10px">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3446D4" stroke-width="1.8" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v4h4"></path></svg>
+<span style="flex: 1 1 260px; display: flex; flex-direction: column"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px">~/data/pagila.duckdb</span><span style="font-size: 12px; color: #3D4350">22 tables · 1 schema · 46 MB · structure read in 0.8 s</span></span>
+<button type="button" style="min-height: 32px; padding: 0 10px; border: 0; background: transparent; color: #3D4350">Remove</button>
+</div>
+</section>
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+<button type="button" style="min-height: 40px; padding: 0 14px; border: 0; background: transparent; color: #3D4350">Back</button>
+<span style="flex: 1"></span>
+<button type="button" style="min-height: 40px; padding: 0 14px; border: 1px solid #DCE0E6; background: #FFFFFF; border-radius: 8px; color: #3D4350">Add another</button>
+<a href="ask.html" style="display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 16px; background: #3446D4; border-radius: 8px; color: #FFFFFF; font-weight: 500">Continue to scope<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
+</div>
+</div>
+</main>
+</div>
+</body>
+</html>

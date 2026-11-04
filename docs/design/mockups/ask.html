@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ontological: Ask</title>
+<!-- Reference mockup exported from the design canvas. See docs/DESIGN.md. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F7}
+a{color:#3446D4;text-decoration:none}a:hover{color:#2433A8}
+a:focus-visible,button:focus-visible,textarea:focus-visible{outline:2px solid #3446D4;outline-offset:2px}
+.nav a{color:#3D4350}.nav a:hover{background:#E0E3E9;color:#151821}
+button{font:inherit;cursor:pointer}
+</style>
+</head>
+<body>
+<div style="min-height: 980px; display: flex; flex-direction: column; background: #F4F5F7; color: #151821; font-family: Geist, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+<div style="display: flex; flex-wrap: wrap; flex: 1 1 auto">
+
+<nav class="nav" aria-label="Main" style="flex: 1 1 232px; background: #EBEDF1; border-right: 1px solid #DCE0E6; display: flex; flex-direction: column; padding: 0 10px 12px">
+<div style="height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 6px; -webkit-app-region: drag">
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #FF5F57"></span>
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #FEBC2E"></span>
+<span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #28C840"></span>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px">
+<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5L5.5 17.5h13z" fill="none" stroke="#3446D4" stroke-width="1.6"></path><circle cx="12" cy="5.5" r="2.6" fill="#3446D4"></circle><circle cx="5.5" cy="17.5" r="2.6" fill="#3446D4"></circle><circle cx="18.5" cy="17.5" r="2.6" fill="#151821"></circle></svg>
+<span style="font-weight: 600; font-size: 15px; letter-spacing: -0.01em">Ontological</span>
+</div>
+<button type="button" style="display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 10px; margin-bottom: 14px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px; text-align: left; color: #151821">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5F6675" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"></path></svg>
+<span style="flex: 1; display: flex; flex-direction: column; line-height: 1.2"><span style="font-weight: 500">All sources</span><span style="font-size: 12px; color: #5F6675">pagila, wwi, chinook</span></span>
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5F6675" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+</button>
+
+<a href="ask.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px; background: #FFFFFF; color: #151821; font-weight: 500; box-shadow: 0 1px 0 rgba(20,24,33,0.06)">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"></path></svg><span style="flex: 1">Ask</span><span style="font-size: 11px; color: #5F6675">⌘1</span></a>
+<a href="ontology.html" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="9" r="2.5"></circle><circle cx="10" cy="18" r="2.5"></circle><path d="M8.3 7l7.3 1.4M16.6 11l-5.2 5M7 8.4l2.3 7.2"></path></svg><span style="flex: 1">Ontology</span><span style="font-size: 11px; color: #5F6675">⌘2</span></a>
+<a href="#terms" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"></path><path d="M5 17a3 3 0 0 1 3-3h11"></path></svg><span style="flex: 1">Terms</span><span style="font-size: 11px; color: #5F6675">⌘3</span></a>
+<a href="#catalog" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"></path></svg><span style="flex: 1">Catalog</span><span style="font-size: 11px; color: #5F6675">⌘4</span></a>
+<a href="#analyses" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 4h10v16l-5-4-5 4z"></path></svg><span style="flex: 1">Analyses</span><span style="font-size: 11px; color: #5F6675">⌘5</span></a>
+<a href="jobs.html" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span style="flex: 1">Jobs</span><span style="font-size: 11px; font-weight: 500; color: #9A4A00; background: #FDF0E2; padding: 1px 6px; border-radius: 999px">31/48</span></a>
+
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5F6675; padding: 22px 10px 6px">Recent</div>
+<a href="ask.html" style="display: block; padding: 7px 10px; border-radius: 7px; color: #151821; background: #E0E3E9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Top categories by revenue</a>
+<a href="#r2" style="display: block; padding: 7px 10px; border-radius: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Late returns by store, 2022</a>
+<a href="#r3" style="display: block; padding: 7px 10px; border-radius: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Customers with no rentals</a>
+<a href="#r4" style="display: block; padding: 7px 10px; border-radius: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Stock items below reorder level</a>
+<div style="flex: 1"></div>
+<a href="#settings" style="display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: 7px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle></svg><span style="flex: 1">Settings</span><span style="font-size: 11px; color: #5F6675">⌘,</span></a>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 20px; border-bottom: 1px solid #DCE0E6; background: #F4F5F7; -webkit-app-region: drag">
+<div style="display: flex; align-items: baseline; gap: 8px; flex: 1 1 240px; min-width: 0">
+<span style="color: #5F6675">Ask</span><span aria-hidden="true" style="color: #A3A9B4">/</span>
+<h1 style="margin: 0; font-size: 14px; font-weight: 600">Top categories by revenue</h1>
+</div>
+<button type="button" style="-webkit-app-region: no-drag; display: flex; align-items: center; gap: 8px; min-height: 32px; min-width: 240px; padding: 0 10px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px; color: #5F6675">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M20 20l-4.5-4.5"></path></svg>
+<span style="flex: 1; text-align: left">Search terms, tables, analyses</span><span style="font-size: 11px; border: 1px solid #DCE0E6; border-radius: 4px; padding: 0 5px">⌘K</span>
+</button>
+<button type="button" style="-webkit-app-region: no-drag; display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; background: #151821; color: #FFFFFF; border: 0; border-radius: 8px; font-weight: 500">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>New question</button>
+</header>
+
+<div style="display: flex; flex-wrap: wrap; flex: 1 1 auto">
+<section aria-label="Conversation" style="flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 22px; padding: 28px 36px 24px; max-width: 860px">
+
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 12px; color: #5F6675">You · pagila (auto-picked)</span>
+<p style="margin: 0; font-size: 21px; font-weight: 500; letter-spacing: -0.01em; line-height: 1.35">Which five film categories brought in the most rental revenue?</p>
+</div>
+
+<article style="display: flex; flex-direction: column; gap: 16px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 14px; padding: 20px 22px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between">
+<ol aria-label="Verification chain" style="list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; row-gap: 8px">
+<li style="display: flex; align-items: center; gap: 6px; padding: 4px 11px 4px 6px; background: #E3F4EE; border-radius: 999px; font-size: 13px; color: #0A5C48"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#0A7259"></circle><path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="#FFFFFF" stroke-width="2.2"></path></svg><span style="font-weight: 600">Plan</span><span>ranking</span></li>
+<li aria-hidden="true" style="width: 18px; height: 2px; background: #A9D9C8"></li>
+<li style="display: flex; align-items: center; gap: 6px; padding: 4px 11px 4px 6px; background: #E3F4EE; border-radius: 999px; font-size: 13px; color: #0A5C48"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#0A7259"></circle><path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="#FFFFFF" stroke-width="2.2"></path></svg><span style="font-weight: 600">Validate</span><span>1 repair</span></li>
+<li aria-hidden="true" style="width: 18px; height: 2px; background: #A9D9C8"></li>
+<li style="display: flex; align-items: center; gap: 6px; padding: 4px 11px 4px 6px; background: #E3F4EE; border-radius: 999px; font-size: 13px; color: #0A5C48"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#0A7259"></circle><path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="#FFFFFF" stroke-width="2.2"></path></svg><span style="font-weight: 600">Run</span><span>142 ms</span></li>
+<li aria-hidden="true" style="width: 18px; height: 2px; background: #A9D9C8"></li>
+<li style="display: flex; align-items: center; gap: 6px; padding: 4px 11px 4px 6px; background: #E3F4EE; border-radius: 999px; font-size: 13px; color: #0A5C48"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#0A7259"></circle><path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="#FFFFFF" stroke-width="2.2"></path></svg><span style="font-weight: 600">Review</span><span>critic passed</span></li>
+</ol>
+<span style="font-size: 12px; color: #5F6675">Opus 5.5 · medium · 19 s</span>
+</div>
+
+<p style="margin: 0; font-size: 15px; line-height: 1.6; color: #151821"><strong>Sports</strong> brought in the most, $5,314.21, followed by Sci-Fi and Animation. The top five are within 18% of each other, so no single category dominates. Revenue here is the sum of <a href="ontology.html" style="color: #151821; border-bottom: 1.5px dotted #3446D4">Payment</a> amounts, joined through <a href="ontology.html" style="color: #151821; border-bottom: 1.5px dotted #3446D4">Rental</a> and <a href="ontology.html" style="color: #151821; border-bottom: 1.5px dotted #3446D4">Inventory</a> to each film's <a href="ontology.html" style="color: #151821; border-bottom: 1.5px dotted #3446D4">Category</a>.</p>
+
+<div style="border: 1px solid #E6E9EE; border-radius: 10px; overflow: hidden">
+<div role="tablist" aria-label="Result view" style="display: flex; align-items: center; gap: 4px; padding: 6px; background: #F8F9FA; border-bottom: 1px solid #E6E9EE">
+<button type="button" role="tab" aria-selected="true" style="min-height: 30px; padding: 0 12px; border: 1px solid #DCE0E6; background: #FFFFFF; border-radius: 6px; font-weight: 500; color: #151821">Chart</button>
+<button type="button" role="tab" aria-selected="false" style="min-height: 30px; padding: 0 12px; border: 1px solid transparent; background: transparent; border-radius: 6px; color: #3D4350">Rows · 5</button>
+<span style="flex: 1"></span>
+<button type="button" style="display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 0; background: transparent; color: #3D4350"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>CSV</button>
+</div>
+<div role="img" aria-label="Revenue by category: Sports 5,314.21; Sci-Fi 4,756.98; Animation 4,656.30; Drama 4,587.39; Comedy 4,383.58" style="display: flex; flex-direction: column; gap: 10px; padding: 18px 18px 16px">
+<div style="display: grid; grid-template-columns: 88px minmax(0, 1fr) 84px; align-items: center; gap: 12px"><span>Sports</span><span style="height: 20px; background: #3446D4; border-radius: 0 4px 4px 0; width: 100%"></span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; text-align: right">5,314.21</span></div>
+<div style="display: grid; grid-template-columns: 88px minmax(0, 1fr) 84px; align-items: center; gap: 12px"><span>Sci-Fi</span><span style="height: 20px; background: #8A96EA; border-radius: 0 4px 4px 0; width: 89.5%"></span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; text-align: right">4,756.98</span></div>
+<div style="display: grid; grid-template-columns: 88px minmax(0, 1fr) 84px; align-items: center; gap: 12px"><span>Animation</span><span style="height: 20px; background: #8A96EA; border-radius: 0 4px 4px 0; width: 87.6%"></span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; text-align: right">4,656.30</span></div>
+<div style="display: grid; grid-template-columns: 88px minmax(0, 1fr) 84px; align-items: center; gap: 12px"><span>Drama</span><span style="height: 20px; background: #8A96EA; border-radius: 0 4px 4px 0; width: 86.3%"></span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; text-align: right">4,587.39</span></div>
+<div style="display: grid; grid-template-columns: 88px minmax(0, 1fr) 84px; align-items: center; gap: 12px"><span>Comedy</span><span style="height: 20px; background: #8A96EA; border-radius: 0 4px 4px 0; width: 82.5%"></span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; text-align: right">4,383.58</span></div>
+</div>
+</div>
+
+<div style="border: 1px solid #E6E9EE; border-radius: 10px; overflow: hidden">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; background: #F8F9FA; border-bottom: 1px solid #E6E9EE">
+<span style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #0A5C48"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"></path><path d="M8.5 12l2.5 2.5 4.5-5"></path></svg>Validated SQL</span>
+<span style="font-size: 12px; color: #5F6675">DuckDB dialect · read-only · LIMIT applied</span>
+<span style="flex: 1"></span>
+<button type="button" style="display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 0; background: transparent; color: #3D4350"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"></path></svg>Copy</button>
+<button type="button" style="min-height: 30px; padding: 0 10px; border: 0; background: transparent; color: #3D4350">Open in editor</button>
+</div>
+<pre style="margin: 0; padding: 14px 16px; overflow-x: auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 1.65; color: #151821; background: #FFFFFF"><span style="color: #3446D4">SELECT</span> c.name <span style="color: #3446D4">AS</span> category, <span style="color: #3446D4">SUM</span>(p.amount) <span style="color: #3446D4">AS</span> revenue
+<span style="color: #3446D4">FROM</span> payment p
+<span style="color: #3446D4">JOIN</span> rental r        <span style="color: #3446D4">ON</span> r.rental_id = p.rental_id
+<span style="color: #3446D4">JOIN</span> inventory i     <span style="color: #3446D4">ON</span> i.inventory_id = r.inventory_id
+<span style="color: #3446D4">JOIN</span> film_category fc <span style="color: #3446D4">ON</span> fc.film_id = i.film_id
+<span style="color: #3446D4">JOIN</span> category c      <span style="color: #3446D4">ON</span> c.category_id = fc.category_id
+<span style="color: #3446D4">GROUP BY</span> c.name
+<span style="color: #3446D4">ORDER BY</span> revenue <span style="color: #3446D4">DESC</span>
+<span style="color: #3446D4">LIMIT</span> <span style="color: #9A4A00">5</span>;</pre>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; background: #FDF0E2; border-radius: 8px; font-size: 13px; color: #6B3400">
+<span style="font-weight: 600">Assumed</span><span style="flex: 1 1 280px">“Revenue” means payment.amount, not film.rental_rate.</span><a href="#change" style="color: #6B3400; text-decoration: underline">Change</a>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+<button type="button" aria-label="Good answer" style="width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #DCE0E6; background: #FFFFFF; border-radius: 8px; color: #3D4350"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M7 11v9H4v-9zM7 11l4-7c1.5 0 2.5 1 2.5 2.5V10h5a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.3 20H7"></path></svg></button>
+<button type="button" aria-label="Bad answer" style="width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #DCE0E6; background: #FFFFFF; border-radius: 8px; color: #3D4350"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" style="transform: rotate(180deg)" aria-hidden="true"><path d="M7 11v9H4v-9zM7 11l4-7c1.5 0 2.5 1 2.5 2.5V10h5a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.3 20H7"></path></svg></button>
+<button type="button" style="display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border: 1px solid #C9CFF5; background: #E8EBFC; border-radius: 8px; color: #2433A8; font-weight: 500"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 4h10v16l-5-4-5 4z"></path></svg>Save as analysis</button>
+<span style="font-size: 12px; color: #5F6675">Saved analyses become worked examples for future questions.</span>
+</div>
+</article>
+
+<div style="flex: 1"></div>
+<form style="display: flex; flex-direction: column; gap: 8px; background: #FFFFFF; border: 1px solid #C9CFDA; border-radius: 14px; padding: 12px 12px 10px; box-shadow: 0 6px 20px rgba(20,24,33,0.06)">
+<label for="q" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Ask a follow-up</label>
+<textarea id="q" rows="2" placeholder="Ask a follow-up, e.g. “and by store?”" style="border: 0; resize: none; font: inherit; font-size: 15px; color: #151821; padding: 4px 6px; background: transparent"></textarea>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+<button type="button" style="display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 10px; border: 1px solid #DCE0E6; background: #F8F9FA; border-radius: 999px; color: #3D4350; font-size: 13px">Source: auto<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+<button type="button" style="min-height: 32px; padding: 0 10px; border: 1px solid #DCE0E6; background: #F8F9FA; border-radius: 999px; color: #3D4350; font-size: 13px">Check answerable</button>
+<span style="flex: 1"></span>
+<span style="font-size: 12px; color: #5F6675">⌘↵ to send</span>
+<button type="submit" aria-label="Send" style="width: 36px; height: 36px; display: grid; place-items: center; border: 0; background: #3446D4; border-radius: 10px; color: #FFFFFF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button>
+</div>
+</form>
+</section>
+
+<aside aria-label="Provenance" style="flex: 1 1 300px; min-width: 0; border-left: 1px solid #DCE0E6; background: #FBFBFC; padding: 24px 22px; display: flex; flex-direction: column; gap: 24px">
+<div style="display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5F6675">Join path</h2>
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px">payment</span><span style="font-size: 12px; color: #2433A8; background: #E8EBFC; padding: 1px 7px; border-radius: 999px">Payment</span></div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 3px 0 3px 22px"><span aria-hidden="true" style="width: 2px; height: 22px; background: #8A96EA"></span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">rental_id</span></div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px">rental</span><span style="font-size: 12px; color: #2433A8; background: #E8EBFC; padding: 1px 7px; border-radius: 999px">Rental</span></div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 3px 0 3px 22px"><span aria-hidden="true" style="width: 2px; height: 22px; background: #8A96EA"></span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">inventory_id</span></div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px">inventory</span><span style="font-size: 12px; color: #2433A8; background: #E8EBFC; padding: 1px 7px; border-radius: 999px">Inventory</span></div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 3px 0 3px 22px"><span aria-hidden="true" style="width: 2px; height: 22px; background: #8A96EA"></span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">film_id</span></div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; background: #FFFFFF; border: 1px dashed #A3A9B4; border-radius: 8px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px">film_category</span><span style="font-size: 12px; color: #5F6675">junction</span></div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 3px 0 3px 22px"><span aria-hidden="true" style="width: 2px; height: 22px; background: #8A96EA"></span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #5F6675">category_id</span></div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; background: #FFFFFF; border: 1px solid #DCE0E6; border-radius: 8px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px">category</span><span style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: #0A5C48; background: #E3F4EE; padding: 1px 7px; border-radius: 999px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>Category</span></div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5F6675">Gate checks</h2>
+<ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<li style="display: flex; gap: 8px; align-items: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.2" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg><span style="flex: 1">Parse and resolve</span><span style="color: #5F6675">5 tables</span></li>
+<li style="display: flex; gap: 8px; align-items: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.2" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg><span style="flex: 1">Aggregation on many side</span></li>
+<li style="display: flex; gap: 8px; align-items: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.2" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg><span style="flex: 1">Joins match semantic FKs</span><span style="color: #5F6675">4 of 4</span></li>
+<li style="display: flex; gap: 8px; align-items: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.2" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg><span style="flex: 1">Literal values</span><span style="color: #5F6675">none used</span></li>
+<li style="display: flex; gap: 8px; align-items: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0A7259" stroke-width="2.2" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg><span style="flex: 1">Intent review</span><span style="color: #5F6675">Sonnet 5.5</span></li>
+</ul>
+<div style="font-size: 13px; color: #3D4350; background: #FFFFFF; border: 1px solid #E6E9EE; border-radius: 8px; padding: 10px 12px">
+<span style="font-weight: 600">Repair 1.</span> First draft grouped by <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">category_id</span> but projected <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px">name</span>. Fixed in the same session.
+</div>
+</div>
+
+<a href="#timeline" style="display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 0 12px; border: 1px solid #DCE0E6; border-radius: 8px; background: #FFFFFF; color: #151821"><span>Step timeline</span><span style="color: #5F6675; font-size: 13px">9 tool calls</span></a>
+</aside>
+</div>
+</main>
+</div>
+
+<footer style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; min-height: 28px; padding: 4px 14px; border-top: 1px solid #DCE0E6; background: #EBEDF1; font-size: 12px; color: #3D4350">
+<span style="display: flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: #0A7259"></span>Engine running</span>
+<span>Claude Code 2.1.318 · logged in</span>
+<span style="flex: 1"></span>
+<a href="jobs.html" style="color: #9A4A00">Compile wwi slowed to 1 at a time</a>
+<span style="display: flex; align-items: center; gap: 8px">Usage
+<span role="meter" aria-label="Claude usage" aria-valuenow="71" aria-valuemin="0" aria-valuemax="100" style="width: 90px; height: 6px; background: #D6DAE1; border-radius: 3px; overflow: hidden; display: block"><span style="display: block; width: 71%; height: 6px; background: #C26A12"></span></span>71% · resets 4:10 PM</span>
+</footer>
+</div>
+</body>
+</html>

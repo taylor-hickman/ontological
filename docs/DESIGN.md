@@ -2,7 +2,7 @@
 
 This is the UI design for the Electron app described in [ARCHITECTURE.md §9.1](ARCHITECTURE.md#91-electron-ui). It sets the visual tokens, the window and shell, the components, the rules for each screen, and the states every screen has to handle.
 
-The mockups are on a design canvas: <https://claude.ai/artifact/ExT8CdtKgUVKwi9YmquTat> (private to the owner). It has four linked screens: Ask, Ontology, Jobs and Onboarding. Where this file and the canvas disagree, this file wins.
+The mockups are in [design/mockups/](design/mockups/), one standalone HTML file per screen: [Ask](design/mockups/ask.html), [Ontology](design/mockups/ontology.html), [Jobs](design/mockups/jobs.html) and [Onboarding](design/mockups/onboarding.html). Open them in a browser; the sidebar links between them work. They are exported from the design canvas at <https://claude.ai/artifact/ExT8CdtKgUVKwi9YmquTat> (private to the owner), which is where they get edited. Where this file and the mockups disagree, this file wins.
 
 ---
 
