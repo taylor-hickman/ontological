@@ -1,6 +1,6 @@
 # Ontological: Build plan
 
-This file turns [ARCHITECTURE.md §12](../ARCHITECTURE.md#12-build-plan-and-verification) into ordered work. §12 owns the milestone list, each milestone's scope and its "done when" criteria. This file owns the order: spikes, tasks, dependencies, and what each milestone hands to the next. If the two disagree, fix whichever is wrong in the same commit.
+This file turns [ARCHITECTURE.md §12](ARCHITECTURE.md#12-build-plan-and-verification) into ordered work. §12 owns the milestone list, each milestone's scope and its "done when" criteria. This file owns the order: spikes, tasks, dependencies, and what each milestone hands to the next. If the two disagree, fix whichever is wrong in the same commit.
 
 Task IDs (`S3`, `E2`, `M1.4`) are stable, so commits and issues can refer to them. `after:` lists the tasks that must finish first. **TDD** marks work that is written test-first (see [Test-first work](#test-first-work)).
 

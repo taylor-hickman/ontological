@@ -688,6 +688,8 @@ Runs are keyed by conversation and buffered so the UI can re-attach after a relo
 
 ### 9.1 Electron UI
 
+The visual design, components, screen rules and UI states are in [DESIGN.md](DESIGN.md).
+
 Stack:
 - React 19 + Vite + TypeScript, TanStack Query, Tailwind.
 - sigma.js + graphology + d3-force for the ontology graph, as upstream.
@@ -804,7 +806,7 @@ Upstream is Apache-2.0. For vendored and ported files:
 
 ## 12. Build plan and verification
 
-The ordered tasks, spikes and dependencies for these milestones are in [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md). Change a milestone here and there together.
+The ordered tasks, spikes and dependencies for these milestones are in [docs/BUILD_PLAN.md](BUILD_PLAN.md). Change a milestone here and there together.
 
 | Milestone | Scope | Done when |
 |---|---|---|
