@@ -165,7 +165,7 @@ The agent is a LangGraph `StateGraph` used only as control flow. Each node is pl
 **Goals**
 - Answer quality comes first: make it as good as we can, measured on a fixed eval set (§12). Where quality and minimalism conflict, quality wins and the cost gets measured.
 - Runs on one machine. The user installs Claude Code and nothing else: no Docker, and no servers to manage, because the app runs its own Postgres. Source data never leaves the machine except inside prompts sent to Claude.
-- Inference runs only on the user's own Claude Pro/Max subscription, through their own Claude Code login. Ontological has no API-key mode.
+- Inference runs only on the user's own Claude subscription (Pro, Max or Ultra), through their own Claude Code login. Ontological has no API-key mode.
 - The core value matches upstream: generate, certify, answer, and expose over MCP. Answers carry validated SQL and visible provenance.
 - An Electron UI for chat, ontology exploration, curation and settings.
 
@@ -210,7 +210,7 @@ The same page also says this does not prevent "an end user from signing in to th
   - `system/api_retry` events.
   - There is no API for remaining quota.
 - **No embeddings.** Anthropic has no embedding model, so embeddings run locally (§7).
-- **Usage limits.** Pro/Max limits assume "ordinary, individual usage". A full compile of a large warehouse is not ordinary usage, so budgeting and resumability are first-class features (§6.5).
+- **Usage limits.** Subscription limits assume "ordinary, individual usage". A full compile of a large warehouse is not ordinary usage, so budgeting and resumability are first-class features (§6.5).
 
 ---
 
@@ -250,14 +250,14 @@ flowchart LR
 
 | Process | Language | Owns | Notes |
 |---|---|---|---|
-| Electron main | TypeScript | window, menu, file dialogs, engine lifecycle | Never touches Claude credentials. Restarts the engine on crash. |
+| Electron main | TypeScript | window, menu, file dialogs, engine supervision | Never touches Claude credentials. Attaches to a running engine or starts one, and holds a lease (§4.4). Restarts the engine on crash only if it started it. |
 | Renderer | TypeScript / React | UI only | Talks to the engine directly over HTTP + SSE. CSP restricts `connect-src` to `http://127.0.0.1:<port>`. |
 | Engine | Python 3.12 | jobs, answer agent, Claude gateway, embedder, the store connection pool, the Postgres lifecycle | Starts or adopts Postgres before serving requests, and stops it on shutdown (§5.3). |
 | Postgres | bundled PostgreSQL 17 + pgvector | the store | Listens only on a Unix socket inside the app data folder. |
 | Source executor | Python | one read-only source connection | One pre-warmed process per active source. Runs extract, profiling, gate probes and `run_sql`. Cancelling kills it and starts a new one (§5.6). |
 | Parse pool | Python | nothing | `ProcessPoolExecutor` workers that parse query history with sqlglot. They never connect to the store. |
 | `claude` (child) | the user's Claude Code | inference | One per task, spawned by the Agent SDK with `cli_path` pointing at the user's binary. |
-| `ontological-mcp` | Python (same package, other entry point) | nothing | A thin stdio-to-HTTP shim for external agents. If no engine is running, it starts one headless, and that engine starts Postgres. |
+| `ontological-mcp` | Python (same package, other entry point) | nothing | A thin stdio-to-HTTP shim for external agents. It attaches to the running engine, or starts one headless (which starts Postgres), and holds a lease on it (§4.4). |
 
 ### 4.2 Why a Python engine and not an all-TypeScript app
 
@@ -278,6 +278,15 @@ Much of it leans on **sqlglot**, which has no TypeScript equivalent of similar d
 - **Startup.** The engine binds `127.0.0.1` on a random port and generates a 32-byte bearer token. It writes `{pid, port, token, version}` to `<appData>/engine.json` with mode 0600. Electron and the MCP shim both read this file. Every request needs `Authorization: Bearer <token>`, so other local processes can't reach the API.
 - **Postgres.** The server opens no TCP port (`listen_addresses = ''`). Its socket lives in `<appData>/Ontological/pgsocket/` with mode 0700, so only the OS user who runs the app can connect, and `pg_hba.conf` allows local socket connections only. Settings → External access can open `127.0.0.1` TCP with a generated password kept in the OS keychain, for pgAdmin, psql or DBeaver. It is off by default.
 - **Source credentials.** Passwords for Postgres/MySQL sources are stored in the OS keychain through Python `keyring`. The store keeps only a keychain reference. This replaces upstream's plaintext JSONB plus optional Vault.
+
+### 4.4 Engine lifetime
+
+One engine serves every client: the Electron app, each `ontological-mcp` shim and the eval runner. A client that finds a live engine through `engine.json` attaches to it. Only a client that finds none starts one.
+
+- **Leases.** Each client takes a lease from the engine (`POST /leases`) and renews it every 30 s. A lease that misses three renewals expires, which covers a client that crashed.
+- **Idle shutdown.** An engine with no live leases, no requests and no running jobs for 10 minutes writes the quit dump, stops Postgres and exits. A paused job counts as running, so a compile waiting for a usage reset keeps the engine up.
+- **Electron.** Quitting the app releases its lease and does not stop the engine. If MCP clients still hold leases, the engine keeps serving them; otherwise idle shutdown stops it. Electron's supervisor restarts the engine on a crash only if Electron started that engine.
+- **Start-up race.** Two clients starting at once take an exclusive lock on `<appData>/engine.lock` before reading or writing `engine.json`, so only one starts an engine.
 
 ---
 
@@ -318,15 +327,16 @@ Upstream's `frontend` schema (Prisma, Better Auth) is never created. App state l
 - **First launch.** `initdb` with UTF-8 encoding, locale `C`, and `trust` auth for local socket connections only (the 0700 socket directory is the access control). Then both Alembic chains run.
 - **Start.** The engine runs `pg_ctl start` with `listen_addresses=''`, `unix_socket_directories=<pgsocket>`, `shared_buffers=128MB` and `max_connections=30`, then waits for `pg_isready`. After an OS crash, Postgres replays its WAL on start.
 - **Adopt.** If the engine dies, Postgres keeps running. The next engine start reads `pgdata/postmaster.pid`. If that process is alive and is a postgres started from this data directory, the engine connects to it instead of starting a second server. A second engine never starts a second server: it finds the first engine through `engine.json`.
-- **Stop.** `pg_ctl stop -m fast` on engine shutdown, after writing the quit dump. Electron main asks the engine to shut down on quit and kills it after a timeout. The next start then adopts the orphaned server or lets it recover.
+- **Stop.** `pg_ctl stop -m fast` on engine shutdown, after writing the quit dump. The engine shuts down when its last lease ends and it has been idle for 10 minutes (§4.4), or when the OS ends the session. If the engine is killed instead, the next start adopts the orphaned server or lets it recover.
 - **Migrations.** A `pg_dump` runs before any pending revision is applied. A failed migration restores that dump.
-- **Major-version upgrades.** A data directory only works with the major version that created it. Because the app writes a dump at every quit, a release that moves to a new major version detects the old `PG_VERSION`, moves `pgdata/` aside, runs `initdb` with the new version and restores the newest dump. If that dump is older than the last run (the app crashed before quitting), it says so before restoring. The old directory stays until the user deletes it.
+- **Major-version upgrades.** A data directory only works with the major version that created it. Because the app writes a dump at every quit, a release that moves to a new major version detects the old `PG_VERSION`, moves `pgdata/` aside, runs `initdb` with the new version and restores the newest dump. If that dump is older than the last run (the app crashed before quitting), it says so before restoring. The old directory stays until the user deletes it. Deferred until the first major-version move: shipping the previous major's server binaries for one release, so the upgrade can dump the live data and nothing since the last dump is lost.
 - **Disk.** If Postgres stops on a full disk, the engine reports it in the UI and pauses jobs. It never deletes backups on its own.
 
 ### 5.4 Reusing upstream's DAL
 
-- Upstream's DAL and vector store (`dal/`, `catalog/store/`, `vdb/postgres.py`) run as-is through SQLAlchemy and psycopg against the bundled server. Upstream's golden fixtures (`dal/tests/golden/*.json`) and DAL tests are M1's conformance suite.
-- **Ownership.** Rows keep their `owner_id` columns. Ontological writes one fixed local owner id, and the edit-permission checks in `dal/owners.py` and `dal/groups.py` are replaced by a stub that always allows. M1 verifies that no DAL read joins to the Prisma user tables, which don't exist here.
+- Upstream's DAL and vector store (`dal/`, `catalog/store/`, `vdb/postgres.py`) run as-is through SQLAlchemy and psycopg against the bundled server. Upstream's golden fixtures (`dal/tests/golden/*.json`) and DAL tests are M2's conformance suite.
+- **Golden seed.** The fixture graph is built by upstream's `dev_tools/fixtures/seed_graph_fixture.py`, which ingests Pagila as a Postgres source and Chinook as a SQLite file through upstream's own connectors, and writes through `server.sql_attributes.service` and `server.custom_analyses.service`. Seeding through Ontological's DuckDB path would change the catalog's type names and break the byte-for-byte comparison. So those connectors, the two service modules and the seed script are vendored as test-only code (§11), and the suite runs against a separate test cluster on the bundled Postgres binaries. The golden test skips when `POSTGRES_USER` is unset or the fixture is unseeded; CI treats any skip as a failure.
+- **Ownership.** Rows keep their `owner_id` columns. Ontological writes one fixed local owner id, and the edit-permission checks in `dal/owners.py` and `dal/groups.py` are replaced by a stub that always allows. At `2a24f5d`, `dal/groups.py` is the only DAL module that reads the Prisma tables (`frontend."user"`), and no other DAL module imports `groups` or `owners`. DAL reads take `zone_ids=None`, which means the whole catalog.
 - **Vectors.** `PostgresVDB` runs with `vector_size` set to the model's dimension. pgvector can build an HNSW index on plain `vector` up to 2,000 dimensions, so upstream's `halfvec` conversion (needed for Nemotron's 2,048) is skipped. The local embedder implements LangChain's `Embeddings` interface, which `PostgresVDB` expects.
 - **Upstream bugs** listed in §1.3 are fixed in the ported stage code, not in the DAL.
 - Edits to vendored upstream files stay small. Apache-2.0 requires modified files to say so, so each one gets a "modified by" line, and `NOTICE` lists them (§11).
@@ -350,11 +360,22 @@ Port `connectors/base.py::SQLDatabase` as-is, and finish the DuckDB reference co
 
 **Store.** Postgres MVCC and row locks handle concurrent writes from ingest, compile and the API. Upstream's DAL already relies on this, through its `ON CONFLICT` upserts and `SELECT … FOR UPDATE` on conversation append, so there is no single-writer thread.
 
-**Source executors (cancellation).** Native drivers such as psycopg, the Snowflake connector and Databricks block inside C, and a thread can't interrupt a blocked C call. Upstream solves this by running each chat in a subprocess it can kill. Ontological puts every source operation in a source executor: one pre-warmed subprocess per active source, holding that source's read-only connection. It runs extract, profiling queries and their statistics, date-format inference, gate probes and `run_sql`. Cancel or timeout first tries `interrupt()` (DuckDB) or the driver's cancel call. If the query is still running 2 s later, the engine kills the process and starts a new one. DuckDB-backed sources go through executors too, so there is one code path. Results cross a pipe and stay small: at most 1,000 profiling rows or 200 answer rows.
+**Source executors (cancellation).** Native drivers such as psycopg, the Snowflake connector and Databricks block inside C, and a thread can't interrupt a blocked C call. Upstream solves this by running each chat in a subprocess it can kill. Ontological puts every source operation in a source executor: one pre-warmed subprocess per active source, holding that source's read-only connection. It runs extract, profiling queries and their statistics, date-format inference, `run_sql`, and `probe`: one capped, read-only query with a statement timeout, used by the gate's probes, empty-result handling and compile's semantic-FK value-overlap check. Cancel or timeout first tries `interrupt()` (DuckDB) or the driver's cancel call. If the query is still running 2 s later, the engine kills the process and starts a new one. DuckDB-backed sources go through executors too, so there is one code path. Results cross a pipe and stay small: at most 1,000 profiling rows or 200 answer rows.
 
 **Parse pool (keeping chat responsive).** sqlglot parsing of query history is pure Python and holds the GIL, so running it in the engine would make chat and the UI sluggish during a large ingest. A `ProcessPoolExecutor` (spawn context, `min(cores - 1, 4)` workers) does the parsing and AST dedup. Workers never connect to the store. They return parsed structures and the engine writes them. The gate's sqlglot parse stays in the engine: it is one query per call and takes milliseconds.
 
-**Embedder.** ONNX Runtime releases the GIL during inference, so the embedder runs on an engine thread.
+**Embedder.** ONNX Runtime releases the GIL during inference, so the embedder runs on an engine thread. It takes work from a priority queue: query embeds from chat, `plan` and `check_answerable` go ahead of bulk compile batches, and bulk batches are capped in size so a query waits behind at most one of them. The BM25 index (§7.3) rebuilds off the request path and swaps in atomically, so searches never see a half-built index.
+
+**Who does what.** The engine orchestrates every job and is the only process that writes the store.
+
+| Work | Runs in | Reads | Writes |
+|---|---|---|---|
+| Extract, profiling, date formats | source executor | source | returns results to the engine |
+| `probe` (gate, empty-result, semantic-FK overlap), `run_sql` | source executor | source | returns ≤ 200 rows to the engine |
+| Query-history parsing and dedup, SQL-fragment extraction for SQL attributes | parse pool | query text sent by the engine | returns parsed structures to the engine |
+| The gate's single-query sqlglot parse and catalog resolution | engine | store | nothing |
+| Claude calls | engine, through the gateway | prompts built by the engine | `ops.llm_call` |
+| Catalog, ontology, vectors, jobs | engine | store | store |
 
 ### 5.7 History
 
@@ -393,7 +414,7 @@ The costs of Postgres, accepted: a larger app (Postgres binaries are a few hundr
 
 ```python
 class Route(NamedTuple):
-    model: str    # CLI alias: "haiku" | "sonnet" | "opus" | "fable"
+    model: str    # CLI alias ("haiku" | "sonnet" | "opus" | "fable") or a full model ID ("claude-opus-5-5")
     effort: str   # "low" | "medium" | "high" | "xhigh" | "max"
 
 class ClaudeGateway:
@@ -427,7 +448,7 @@ Each call runs `claude_agent_sdk.query()` with these `ClaudeAgentOptions`:
 | `effort` | `routes[task].effort` | thinking depth and token spend per task (§6.3) |
 | `fallback_model` | `sonnet` for `opus` routes; unset otherwise | Opus overloaded or not on the user's plan (§6.3) |
 | `max_turns` | 1–2 for structured, about 16 for agent | bound the spend |
-| `env` | `os.environ` minus `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, always | §3 rule 3 |
+| `env` | `os.environ` minus `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, always; also minus the session variables a Claude Code parent sets (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` and the others spike S1 finds), which an engine started by the MCP shim inherits | §3 rule 3; a spawned `claude` must not behave as a nested session |
 | session persistence | off | no transcripts piling up |
 
 Retries follow upstream:
@@ -454,22 +475,23 @@ Every Claude call names a task, and the route table maps each task to a model an
 | `sql_attribute_judge` | keep or drop query-history fragments, and name them | `sonnet` | `medium` | 1 per batch of terms |
 | `bridge_sql` | write a bridge table's join SQL and pick its owning term | `opus` | `high` | 1 per bridge |
 | `pii_classify` | classify uncertain columns from metadata | `haiku` | `low` | 1 per ~40 columns |
-| `answer_agent` | plan, write and repair the SQL, write the answer and chart | `opus` | `high` | 1 session per question |
+| `answer_agent` | plan, write and repair the SQL, write the answer and chart | `opus` | `medium` | 1 session per question |
 | `answer_review` | critic: does this SQL answer this question? | `sonnet` | `medium` | 1–2 per question |
 | `answerable_extract` | extract entities for `check_answerable` | `haiku` | `low` | 1 per check |
 | `ping` | onboarding round-trip | `haiku` | `low` | once |
 
 Why these choices:
 - **The answer agent gets Opus** because it writes the SQL the user sees. Upstream makes the same split: only `construct_sql_from_candidates` uses its reasoning client, and upstream's default Claude config points that client at Opus 5.5.
+- **The answer agent starts at `medium` effort**, Opus 5.5's own default. Thinking tokens are about half of a question's estimated usage, and the gate catches many of the mistakes extra thinking would. The first tuning round tests `high`, and it becomes the default only if it scores clearly better (docs/BUILD_PLAN.md).
 - **The critic runs on Sonnet, not Haiku.** Its job is catching SQL that is valid but wrong, which is the hard case. A Haiku critic that misses it still costs a spawn. Using a different model from the author also makes the check more independent.
-- **Split puts the bulk stages on Haiku.** Column descriptions are the highest-volume compile call, and they move to Haiku. Split makes several times as many calls as merged, but the estimated quota is only about 1.5–2 times merged's: the two Sonnet calls per table carry the judgment, and the Haiku calls cost about a twentieth as much. M2 measures the real ratio (§12).
+- **Split puts the bulk stages on Haiku.** Column descriptions are the highest-volume compile call, and they move to Haiku. Split makes several times as many calls as merged, but the estimated quota is only about 1.5–2 times merged's: the two Sonnet calls per table carry the judgment, and the Haiku calls cost about a twentieth as much. M3 measures the real ratio (§12).
 - **Fable 5.1 is not a default.** It costs 2.5 times Opus, always thinks, and can run for minutes per turn, which doesn't suit interactive chat. Users can select it for `answer_agent`.
 
 Rules:
-- Every route is a setting (Settings → Models). The eval (§12) tries each route one step cheaper. A route moves down when the cheaper model scores the same, and moves up when it loses accuracy.
+- Every route is a setting (Settings → Models). The eval (§12) tries the answer routes one step cheaper; compile routes one step cheaper are judged by the compile-quality review and the retrieval benchmark, which cost no quota. A route moves down when the cheaper model scores the same, and moves up when it loses accuracy.
 - `opus` routes set `fallback_model="sonnet"`, so an overloaded Opus, or a plan that doesn't offer Opus, still gets an answer. Nothing falls back to Haiku: silently downgrading a judgment call is worse than waiting. Each answer records the model that actually ran.
 - Under quota pressure the gateway lowers concurrency and pauses background jobs (§6.5). It never switches models on its own.
-- **Resolved models.** Aliases follow new releases. The SDK's `init` message reports the concrete model for each session, and the result message reports usage per model. `ops.llm_call` stores both. The cache key uses the alias, so a model release doesn't force a recompile of unchanged tables. Jobs offers "recompile with current models" for when the user wants one.
+- **Resolved models.** Aliases follow new releases. The SDK's `init` message reports the concrete model for each session, and the result message reports usage per model. `ops.llm_call` stores both. The cache key uses the route's model string as written, so with an alias a model release doesn't force a recompile of unchanged tables. Jobs offers "recompile with current models" for when the user wants one. Eval configs pin full model IDs instead, so a release can't land in the middle of a comparison, and the eval report lists the resolved IDs it ran.
 
 ### 6.4 Fewer, bigger calls
 
@@ -485,7 +507,7 @@ Upstream was written for a cheap, fast HTTP endpoint and makes many small calls.
 | Answer: 6–15 separate calls | One Opus agent session plus 1–2 Sonnet review calls (§8.1) |
 
 **Caching.**
-- Every structured call is keyed by `sha256(task, prompt_version, model, system, user, schema)` and logged in `ops.llm_call` with usage. A recompile of unchanged tables costs nothing.
+- Every structured call is keyed by `sha256(task, prompt_version, model, effort, system, user, schema)` and logged in `ops.llm_call` with usage. `model` is the route's alias or pinned ID (§6.3). Effort is in the key because it changes the output. A recompile of unchanged tables costs nothing.
 - Prompt templates carry an explicit `prompt_version`, so editing a prompt invalidates only that task's cache.
 
 **Concurrency.** A global semaphore limits in-flight Claude processes. The default is 3; it is a user setting.
@@ -558,7 +580,7 @@ score = rrf( dense_rank(embedding <=> query_vec),                 # pgvector
          + certified_bonus
 ```
 
-- **BM25 runs in the engine** with `bm25s` (MIT) over at most about 10⁵ short documents. The index is rebuilt after each compile, import and edit. At this size a rebuild should take about a second; M2 measures it.
+- **BM25 runs in the engine** with `bm25s` (MIT) over at most about 10⁵ short documents. The index is rebuilt after each compile, import and edit. At this size a rebuild should take about a second; spike S8 measures it (docs/BUILD_PLAN.md). Rebuilds swap in atomically (§5.6).
 - **Identifier-aware tokens.** Before indexing and querying, identifiers are split on snake_case and camelCase, and glossary acronyms (Settings → Glossary) are expanded. `cust_acct_no` matches "customer account number".
 - **Why not BM25 inside Postgres.** `ts_rank_cd` is not BM25 and has the start-of-token problem. ParadeDB's `pg_search` is BM25 but AGPL-3.0. Timescale's `pg_textsearch` is BM25 under the PostgreSQL license, but it is one more native extension to build, sign and upgrade per platform. Revisit it only if the in-engine index becomes a bottleneck.
 - Fusion runs in Python over the three ranked lists. It keeps upstream's filters (collection, label, database_name) and its `{text, metadata, distance}` result contract, so ported upstream code works unchanged.
@@ -587,7 +609,8 @@ question
   │
   ├─ pre-work (Python, no LLM):
   │    follow-up context (last 5 turns), hybrid retrieval with the raw question over terms /
-  │    attributes / SQL attributes / custom analyses, BFS join paths among the top tables
+  │    attributes / SQL attributes / custom analyses, target database (the caller's scope, or
+  │    the best entity coverage as upstream), BFS join paths among the top tables
   │    →  "grounding pack" (≈ upstream prepare_candidates output)
   │
   └─ ClaudeGateway.agent(task="answer_agent", max_turns≈16, output=AnswerModel, tools=[…]):   # Opus, §6.3
@@ -601,7 +624,7 @@ question
 
 | Tool | Precondition | What it does |
 |---|---|---|
-| `plan(intent, calc_subtype?, entities[], evidence[], anchor_attribute_id?)` | none; must be the first call | Records what upstream's `question_intent` and `question_extraction` produced. The engine runs upstream's per-entity retrieval for those entities, computes BFS join paths from the anchor, and returns the candidates plus the subtype's SQL template. Returns a `plan_id`. |
+| `plan(intent, calc_subtype?, entities[], evidence[], anchor_attribute_id?, database?)` | none; must be the first call | Records what upstream's `question_intent` and `question_extraction` produced, and the target database: the scope if one was given, otherwise the model's choice from the grounding pack's coverage ranking. Later tools work against that database only. The engine runs upstream's per-entity retrieval for those entities, computes BFS join paths from the anchor, and returns the candidates plus the subtype's SQL template. Returns a `plan_id`. |
 | `search_ontology(query, kinds?)` | none | Hybrid search for more candidates |
 | `get_term(id)`, `describe_table(id)` | none | Detail |
 | `join_path(from_table, to_table)` | none | BFS over semantic FKs |
@@ -610,7 +633,9 @@ question
 | `run_sql(validation_id)` | the id passed `validate_sql` | Executes in the source executor and returns columns + ≤ 200 rows. **On an empty result it runs upstream's empty-result handling** (drop LIKE predicates, value-repair probes) and returns the hints with the zero rows. |
 | `review_answer(validation_id, answer_draft)` | the id was executed; critic enabled | Runs upstream's intent-validation prompt as an `answer_review` `structured()` call (Sonnet, §6.3) on (question, plan, SQL, columns, first rows). Returns pass, or issues for the model to fix. At most 2 rounds. Returns a `review_id`. |
 
-**Post-run check.** After the session, the engine reads the tool log and confirms the sequence plan → validate → run → review for the final SQL. If any step is missing or the ids don't match, the answer is shown as "unverified" with the reason; it is never silently accepted.
+**Post-run check.** After the session, the engine reads the tool log and confirms the sequence plan → validate → run → review for the final SQL. If any step is missing or the ids don't match, the answer is shown as "unverified" with the reason; it is never silently accepted. The required sequence depends on the session: `information` answers need only `plan`; with the critic off, review is not required; an answer with `answerable=false` needs a `plan` and no SQL.
+
+**Source scope.** Chat has a source selector that defaults to "auto", which lets pre-work pick the database by coverage. MCP's `ask_question` and the eval runner can pass a scope; the eval passes each question's database. A question is answered from one source; cross-source SQL is out of scope.
 
 **Intents.**
 - `calculation`: the full sequence above.
@@ -686,7 +711,7 @@ Dropped: login, invitations, users, groups, SSO, API tokens, owners, zones (or k
 
 ### 9.2 MCP for external agents
 
-`ontological-mcp` is a stdio server. It is configured in Claude Code with `claude mcp add ontological -- ontological-mcp`, and similarly in Claude Desktop and Cursor. It proxies to the engine API, starting a headless engine (and with it Postgres) if none is running.
+`ontological-mcp` is a stdio server. It is configured in Claude Code with `claude mcp add ontological -- ontological-mcp`, and similarly in Claude Desktop and Cursor. It proxies to the engine API, starting a headless engine (and with it Postgres) if none is running, and holds a lease while the MCP client is connected (§4.4). It answers MCP `initialize` at once and starts the engine in the background, because Postgres start-up and model loading take longer than MCP clients wait for a handshake. Tool calls made before the engine is ready wait for it.
 
 It exposes upstream's curated set (`check_readiness`, `search_terms`, `get_term`, `get_term_columns`, `get_term_sql_attributes`, `get_sql_attribute`, `describe_table`, `check_answerable`, `ask_question`) plus two tools that matter when the caller is itself Claude:
 - **`validate_sql(sql)`** and **`run_validated_sql(validation_id)`**. These let a calling Claude Code session do the reasoning itself against Ontological's gate, without spending a second nested agent session through `ask_question`.
@@ -728,6 +753,9 @@ ontological/
       mcp/                      stdio shim
       jobs/                     runner, staleness check, pause/resume
     tests/
+      upstream_fixtures/        test-only vendored upstream connectors, services and golden seed (§5.4)
+  eval/                         frozen question-set IDs, runner, verifier, control arm (docs/BUILD_PLAN.md)
+  tools/spikes/                 spike scripts kept for re-runs
   plugins/claude-code/          skills + plugin manifest
   docs/
   THIRD_PARTY_NOTICES.md, NOTICE
@@ -753,7 +781,8 @@ Upstream is Apache-2.0. For vendored and ported files:
 | Upstream path | Action |
 |---|---|
 | `dal/*`, `catalog/store/*`, `vdb/postgres.py`, `alembic/` | **Vendor and run as-is** against the bundled Postgres. Stub owners/groups with the local owner; set `vector_size` to the model's dimension |
-| `dal/tests/golden/*.json` and the DAL tests | Run unchanged as M1's conformance suite |
+| `dal/tests/golden/*.json` and the DAL tests | Run unchanged as M2's conformance suite |
+| `dev_tools/fixtures/seed_graph_fixture.py`, `capture_dal_golden.py`, upstream's Postgres and SQLite connectors, `server/sql_attributes/service.py`, `server/custom_analyses/service.py` | **Vendor as test-only code** under `engine/tests/upstream_fixtures/`, used only to seed the golden fixture (§5.4). Never imported by the engine |
 | `connectors/base.py`, `connectors/duckdb.py`, `connectors/sqlite.py` | Port; complete PK/FK/table_type for DuckDB; run inside the source executor |
 | `catalog/extract.py`, `normalize.py`, `diff.py`, `sql_parse.py`, `parsers/*`, `query_stats.py` | Port; fix the month-counter key; query-history parsing runs in the parse pool |
 | `semantic/visit_enter.py` (profiling), `date_format.py` | Port as-is; run inside the source executor |
@@ -775,15 +804,18 @@ Upstream is Apache-2.0. For vendored and ported files:
 
 ## 12. Build plan and verification
 
+The ordered tasks, spikes and dependencies for these milestones are in [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md). Change a milestone here and there together.
+
 | Milestone | Scope | Done when |
 |---|---|---|
-| **M0 Skeleton** | Electron shell, engine supervisor, `engine.json`, bundled Postgres lifecycle (initdb, start, adopt, stop, dump), both Alembic chains, `ClaudeGateway.structured()` | Onboarding detects `claude`, its version and login state; a structured "ping" call round-trips with env sanitization verified (no API key reaches the child); after `kill -9` of the engine, the next start adopts Postgres with no data loss; trimmed Postgres size measured |
-| **M1 Catalog** | Vendored DAL, DuckDB/SQLite/Parquet/Postgres sources in source executors, extract/diff, profiling, query history in the parse pool, catalog UI | Upstream's golden DAL fixtures and DAL tests pass against the bundled Postgres; re-ingest is idempotent; cancelling a long source query kills and restarts its executor; chat stays responsive during a large query-history ingest |
-| **M2 Compile** | per-table stages (split, and merged as an option), semantic FKs, SQL attributes, bridges, PII, embeddings, jobs UI with pause/resume and estimate, retrieval benchmark | Pagila/Chinook compile end-to-end; killing the engine mid-compile resumes without redoing finished tables; a second compile makes ~0 Claude calls (cache). **Compile-quality check** on Pagila and Wide World Importers: a hand-reviewed sample of terms, FKs and descriptions, split vs merged, with quota and time per compile. If merged is no worse, it becomes the default. **Retrieval benchmark** run and the default embedding model chosen; BM25 rebuild time measured |
-| **M3 Answer** | grounding pack, gated agent + tools, validation gate, critic, chat UI, charts | **End-to-end eval** on the fixed question set runs reproducibly. Each quality setting and each model route (§6.3) is measured, and the defaults are set to the best-scoring configuration. No answer is shown as verified without the full plan → validate → run → review sequence |
-| **M4 Curation** | term editing, certification boost, change log, save-as-analysis | Edits re-embed and change retrieval; renaming a term works; undo from `change_log` works |
-| **M5 Interop** | MCP stdio shim, Claude Code plugin, YAML/Ossie import-export | Claude Code can answer via `ask_question` and via `validate_sql` + `run_validated_sql` |
-| **M6 Package** | signed macOS build with bundled Postgres, extensions and model; offline start | Clean-machine install works with only Claude Code installed; a simulated major-version upgrade restores from the quit dump |
+| **M0 Spikes and engine skeleton** | Spikes S1–S9 (docs/BUILD_PLAN.md), headless engine, `engine.json` and leases (§4.4), bundled Postgres lifecycle (initdb, start, adopt, stop, dump), both Alembic chains, `ClaudeGateway.structured()`, the frozen eval set | Every spike has a recorded result; a structured "ping" round-trips with env sanitization verified (no API key or Claude Code session variable reaches the child); after `kill -9` of the engine, the next start adopts Postgres with no data loss; trimmed Postgres size measured; `eval/sets/*.json` frozen and every gold query runs |
+| **M1 Thin vertical slice** | Headless and on Chinook: vendored DAL, one source executor, minimal ingest and split compile, dense retrieval, the gated agent with gate checks 1–3 and the critic, `ontological ask`, the eval runner with the control arm | `ontological ask` answers a Chinook question through plan → validate → run → review; precondition and post-run-check tests pass; `ontological eval smoke` produces a score; per-question usage measured (spike S3) |
+| **M2 Catalog depth and Electron shell** | Golden DAL suite, all v1 sources in executors, extract/diff, full profiling, query history in the parse pool, staleness check, Electron shell, onboarding and catalog screens | Upstream's golden DAL fixtures and DAL tests pass against the bundled Postgres with no skips; re-ingest is idempotent; cancelling a long source query kills and restarts its executor; API requests stay responsive during a large query-history ingest; onboarding detects `claude`, its version and login state; WWI and the four BIRD eval databases ingest |
+| **M3 Compile depth** | Full split stages, merged option, semantic FKs, SQL attributes, bridges, PII, hybrid search, checkpoints and pause/resume, estimate, jobs screen, retrieval benchmark | Every eval database compiles end-to-end; killing the engine mid-compile resumes without redoing finished tables; a second compile makes ~0 Claude calls (cache). **Compile-quality review** on Pagila and WWI: a hand-reviewed sample of terms, FKs and descriptions, split vs merged and compile routes one step cheaper, with quota and time per compile. If merged is no worse, it becomes the default. **Retrieval benchmark** run, the default embedding model chosen and thresholds recalibrated |
+| **M4 Answer depth and tuning** | Gate checks 4–7, probes, empty-result handling, the full tool set, intents, restart, `check_answerable`, SSE, chat screen, charts, the first tuning round | The first tuning round and the held-out run are recorded in docs/BUILD_PLAN.md, and the §6.3 defaults match the winner. No answer is shown as verified without the sequence §8.1's post-run check requires |
+| **M5 Curation** | Term editing, certification boost, change log, save-as-analysis, personal eval cases | Edits re-embed and change retrieval; renaming a term works; undo from `change_log` works; a saved answer runs as a personal eval case |
+| **M6 Interop** | MCP stdio shim, Claude Code plugin, YAML/Ossie import-export | Claude Code can answer via `ask_question` and via `validate_sql` + `run_validated_sql`; with the Electron app closed, the shim's engine shuts down after its idle timeout |
+| **M7 Package** | Signed macOS build with bundled Postgres, extensions and model; offline start | Clean-machine install works with only Claude Code installed; a simulated major-version upgrade restores from the quit dump |
 
 **Tests.**
 - **Gateway contract tests.** Run against the real CLI, behind a flag: `structured_output` present and valid, SDK MCP tool round-trip, rate-limit event parsing, and "not logged in" detection.
@@ -791,9 +823,10 @@ Upstream is Apache-2.0. For vendored and ported files:
 - **Deterministic suites.** Ported from upstream's tests: the DAL tests and golden fixtures, `test_literal_check`, `test_case_dirty_join_check`, `test_jsonb_path_check` (plus a DuckDB variant), and the catalog diff tests.
 - **Agent precondition tests.** Each tool refuses when its precondition is missing, and the post-run check marks an answer "unverified" when the sequence is incomplete.
 - **Retrieval benchmark** (§7.4): recall@k per model and per configuration; runs without quota once a compile exists.
-- **Answer-quality eval.** Use NVIDIA's [ontology-sql-eval](https://github.com/NVIDIA/ontology-sql-eval/) harness, or a BIRD dev subset converted to DuckDB, plus Wide World Importers as in the upstream quickstart.
-  - Track execution accuracy, the share of answers verified by the gate, and spawns, turns and quota used per question.
-  - Measure each quality setting rather than guessing: embedding model, `answer.critic`, `compile.table_calls`, and each model route one step cheaper (§6.3).
+- **Answer-quality eval.** A small set of our own, detailed in docs/BUILD_PLAN.md: about 80 dev questions (all 41 Wide World Importers questions plus about 40 from four BIRD Mini-Dev databases), about 40 held-out and 20 smoke. BIRD `evidence` is included; BIRD's description files are not ingested. The data and BIRD's execution-accuracy rule come from [ontology-sql-eval](https://github.com/NVIDIA/ontology-sql-eval/); its harness, which runs upstream in-process, is not used.
+  - Track execution accuracy, the share of answers verified by the gate, and spawns, turns, tokens and quota used per question.
+  - A schema-only control arm (one call per question, no tools, same model) shows what the ontology adds. It runs once per model.
+  - Usage is a budget. Day-to-day runs use the smoke set with the agent on Sonnet. A tuning round is 3 dev runs (baseline, critic off, agent on Sonnet; the first round adds `high` effort) plus one held-out run for the winner. Compile settings are judged by the compile-quality review and the retrieval benchmark, which cost no quota.
   - No comparison run against upstream. The goal is the best score on this set, not parity with a baseline.
 
 ---
@@ -809,9 +842,10 @@ Upstream is Apache-2.0. For vendored and ported files:
 5. **DuckDB scanner pushdown.** Large remote Postgres/MySQL tables may be slow through scanners. A per-connection native mode is the escape hatch.
 6. **Claude Code CLI drift.** Flags, defaults (e.g. `--bare` becoming the default) and event shapes change. Pin a minimum version, set every relevant option explicitly, and run the contract tests on CLI upgrades.
 7. **Prompt injection from data.** Sample values and descriptions go into prompts. The agent has no built-in tools, only read-only, capped, single-statement SQL tools on read-only connections, so the worst case is a wrong answer, not a side effect.
-8. **Running Postgres inside a desktop app.** Orphaned servers after crashes, a second app instance, a full disk and major-version upgrades. §5.3 handles each one, and the lifecycle tests cover them in M0 and M6.
+8. **Running Postgres inside a desktop app.** Orphaned servers after crashes, a second app instance, a full disk and major-version upgrades. §5.3 handles each one, and the lifecycle tests cover them in M0 and M7.
 9. **Coupling to upstream's DAL.** Vendoring means upstream changes arrive as merges. Local edits stay small and listed, and the golden fixtures catch drift.
+10. **Eval precision.** The eval set is kept small to save quota, so with about 80 dev questions only differences of about 10 points stand out from noise. Close calls go to the cheaper configuration, and personal eval cases from the user's own data (M5) add questions over time.
 
 **Open questions**
 
-None right now. The remaining choices (embedding model, model routes, the critic, split vs merged) are settings that the M2 and M3 measurements decide.
+None right now. The remaining choices (embedding model, model routes, the critic, split vs merged) are settings that the M3 and M4 measurements decide.
