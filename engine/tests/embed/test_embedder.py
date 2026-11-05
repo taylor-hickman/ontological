@@ -42,9 +42,12 @@ def test_documents_come_back_in_input_order_whatever_the_batching(
 ) -> None:
     together = embedder.embed_documents(TEXTS)
     alone = [embedder.embed_documents([t])[0] for t in TEXTS]
-    # int8 activations are quantized per batch, so batch-mates shift a vector slightly (S7).
-    for a, b in zip(together, alone, strict=True):
-        assert cosine(a, b) >= 0.99
+    # int8 activations are quantized per batch, so batch-mates shift a vector slightly: cosine
+    # 0.996 on an M5 Max (S7), 0.98 on CI's Linux x86 and macOS runners. Each still lands nearest
+    # the same text embedded alone.
+    for i, vector in enumerate(together):
+        assert max(range(len(TEXTS)), key=lambda j: cosine(vector, alone[j])) == i
+        assert cosine(vector, alone[i]) >= 0.95
 
 
 def test_queries_are_deterministic_and_carry_the_query_prefix(embedder: LocalEmbedder) -> None:
