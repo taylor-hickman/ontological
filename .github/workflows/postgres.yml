@@ -2,16 +2,19 @@ name: Bundled Postgres
 
 # Builds the PostgreSQL 17 + pgvector binaries the app bundles (ARCHITECTURE.md §10, spike S4):
 # minimal configure, trimmed to the shipped file list, signed with the hardened runtime, then
-# smoke-tested. Runs when the scripts change, or by hand.
+# smoke-tested and run through the store lifecycle cases (§5.3, spike S5). Runs when the scripts
+# change, or by hand.
 on:
   push:
     branches: [main]
     paths:
       - tools/spikes/s4_postgres/**
+      - tools/spikes/s5_pg_lifecycle/**
       - .github/workflows/postgres.yml
   pull_request:
     paths:
       - tools/spikes/s4_postgres/**
+      - tools/spikes/s5_pg_lifecycle/**
       - .github/workflows/postgres.yml
   workflow_dispatch:
 
@@ -44,6 +47,13 @@ jobs:
         run: ./control.sh "$WORK/dist"
       - name: Smoke test (initdb, forks, vector.dylib, pg_trgm, dump and restore)
         run: ./smoke.sh "$WORK/dist"
+      - name: Build PostgreSQL 16 for the major-version case
+        run: VERSIONS_ENV=../s5_pg_lifecycle/pg16.env ./build.sh "$RUNNER_TEMP/pg16"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Store lifecycle (first launch, stop, adopt, stale pid, second engine, migration, 16 to 17)
+        run: python ../s5_pg_lifecycle/run.py "$WORK/dist/bin" "$RUNNER_TEMP/pg16/postgres/bin"
       - name: Package and measure
         run: |
           source versions.env
