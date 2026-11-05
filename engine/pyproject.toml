@@ -39,7 +39,8 @@ module-name = ["ontological", "auto_ontology"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["auto_ontology"]  # vendored upstream code keeps upstream's formatting
+# Vendored upstream code keeps upstream's formatting, the test-only part included.
+extend-exclude = ["auto_ontology", "tests/upstream_fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
@@ -48,16 +49,22 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 include = ["ontological", "tests"]
+exclude = ["tests/upstream_fixtures"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]  # tests/fakes.py
 addopts = ["-ra", "--strict-markers", "--strict-config"]
+# Upstream's suite, vendored as test-only code, runs in a pytest of its own (tests/golden_dal).
+norecursedirs = [".*", "*.egg", "build", "dist", "node_modules", "venv", "upstream_fixtures"]
 xfail_strict = true
 
 [dependency-groups]
 dev = [
+    "psycopg-pool>=3.3.1",
     "pyright[nodejs]>=1.1.414",
     "pytest>=9.2.0",
     "ruff>=0.17.3",
+    "sqlglot==30.17.0",
+    "tqdm>=4.70.0",
 ]
