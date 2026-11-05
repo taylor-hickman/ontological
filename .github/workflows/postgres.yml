@@ -3,8 +3,9 @@ name: Bundled Postgres
 # Builds the PostgreSQL 17 + pgvector binaries the app bundles (ARCHITECTURE.md §10, spike S4):
 # minimal configure, trimmed to the shipped file list, signed with the hardened runtime, then
 # smoke-tested and run through the store lifecycle tests (§5.3 and §12: engine/tests/store, which
-# test engine/ontological/store/pg.py and its Alembic chains), the engine's idle shutdown on the
-# real store (engine/tests/engine/test_engine_pg.py), dense search with the embedding model
+# test engine/ontological/store/pg.py and its Alembic chains, and ops.llm_call through
+# engine/ontological/llm/calls.py), the engine's idle shutdown on the real store
+# (engine/tests/engine/test_engine_pg.py), dense search with the embedding model
 # (engine/tests/store/test_dense_search.py) and the eval cluster's tests
 # (eval/tests/test_cluster.py). Runs when the scripts, the store, the embedder, the vendored
 # chain, the engine's dependencies or the eval cluster change, or by hand.
@@ -17,6 +18,7 @@ on:
       - engine/ontological/store/**
       - engine/ontological/embed/**
       - .github/actions/embedding-model/**
+      - engine/ontological/llm/calls.py
       - engine/auto_ontology/**
       - engine/pyproject.toml
       - engine/uv.lock
@@ -33,6 +35,7 @@ on:
       - engine/ontological/store/**
       - engine/ontological/embed/**
       - .github/actions/embedding-model/**
+      - engine/ontological/llm/calls.py
       - engine/auto_ontology/**
       - engine/pyproject.toml
       - engine/uv.lock
