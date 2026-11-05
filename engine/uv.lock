@@ -435,6 +435,8 @@ dependencies = [
     { name = "alembic" },
     { name = "claude-agent-sdk" },
     { name = "fastapi" },
+    { name = "httpx" },
+    { name = "mcp" },
     { name = "psycopg", extra = ["binary"] },
     { name = "sqlalchemy" },
     { name = "uvicorn" },
@@ -442,7 +444,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pyright", extra = ["nodejs"] },
     { name = "pytest" },
     { name = "ruff" },
@@ -453,6 +454,8 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.19.1" },
     { name = "claude-agent-sdk", specifier = ">=0.2.178" },
     { name = "fastapi", specifier = ">=0.162.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "mcp", specifier = ">=2.3.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
     { name = "sqlalchemy", specifier = ">=2.0.52,<2.1" },
     { name = "uvicorn", specifier = ">=0.54.0" },
@@ -460,7 +463,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pyright", extras = ["nodejs"], specifier = ">=1.1.414" },
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "ruff", specifier = ">=0.17.3" },

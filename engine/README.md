@@ -23,6 +23,14 @@ uv run ontological-engine --pg-bin <tree>/bin --headless   # detached; returns o
 
 Both print one JSON line, `{"pid", "port", "version", "started"}`, where `started` is false if an engine was already running. The engine exits after 10 idle minutes with no leases; `--idle-timeout` and `--lease-renew` (seconds) shorten that.
 
+## The MCP server
+
+`ontological-mcp` is the stdio MCP server for Claude Code, Claude Desktop and Cursor ([ARCHITECTURE.md §9.2](../docs/ARCHITECTURE.md#92-mcp-for-external-agents)). It answers `initialize` at once, then attaches to the running engine, or starts one with `--headless`, and holds a lease on it until the client disconnects. It passes its options to the engine it starts, and logs to stderr.
+
+```sh
+claude mcp add ontological -- "$PWD/.venv/bin/ontological-mcp" --pg-bin <tree>/bin
+```
+
 ## Tests
 
 Contract tests that spawn your logged-in `claude` (and spend a little quota) are skipped unless `ONTOLOGICAL_CONTRACT=1` is set: `ONTOLOGICAL_CONTRACT=1 uv run pytest tests/contract`. `ONTOLOGICAL_CONTRACT_MODEL` picks the model (default `haiku`).
@@ -33,6 +41,6 @@ The store lifecycle tests in `tests/store` drive the bundled Postgres binaries, 
 ONTOLOGICAL_PG_BIN=<tree>/bin ONTOLOGICAL_PG16_BIN=<work>/postgres/bin uv run pytest tests/store
 ```
 
-The engine process tests in `tests/engine` run the real engine with a fake store and need no binaries, except `test_engine_pg.py`, which runs it on the bundled Postgres with `ONTOLOGICAL_PG_BIN` set.
+The engine process tests in `tests/engine`, and the shim's, run the real engine with a fake store and need no binaries, except `test_engine_pg.py`, which runs it on the bundled Postgres with `ONTOLOGICAL_PG_BIN` set.
 
 `ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip; `postgres.yml` sets it. The disk-full tests mount small disk images with `hdiutil`, so they run on macOS only.
