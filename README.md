@@ -2,7 +2,7 @@
 
 A local, single-user desktop app that builds a semantic ontology over your databases and answers natural-language questions against them with validated SQL. It runs on your own Claude subscription through your installed Claude Code, and keeps source data on your machine.
 
-Status: M0, engine skeleton. The engine is in [engine/](engine/) and the Electron shell in [apps/desktop/](apps/desktop/); each README has the dev commands.
+Status: M0, engine skeleton. The engine is in [engine/](engine/), the Electron shell in [apps/desktop/](apps/desktop/) and the eval in [eval/](eval/); each README has the dev commands.
 
 ## Docs
 
