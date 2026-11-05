@@ -1,13 +1,15 @@
 """The engine process (ARCHITECTURE.md §4.3, §4.4).
 
-    python -m ontological.engine [--app-data DIR] [--pg-bin DIR] [--headless]
+    python -m ontological.engine [--app-data DIR] [--pg-bin DIR] [--model-dir DIR] [--headless]
                                  [--idle-timeout S] [--lease-renew S]
 
 Under engine.lock, it looks for a live engine through engine.json. If there is one, it prints
 that engine and exits 0: the caller attaches to it. Otherwise it starts or adopts the store's
-Postgres, applies pending migrations (§5.3), serves the API on 127.0.0.1 at a random port with
-a new bearer token, writes engine.json and releases the lock. It prints one JSON line when it
-serves or attaches, `{"pid", "port", "version", "started"}`, or `{"error"}` and exits 1.
+Postgres, applies pending migrations (§5.3), loads the embedder from `--model-dir` and calibrates
+its bulk batch cap (§7.1; with no model directory it runs without one), serves the API on
+127.0.0.1 at a random port with a new bearer token, writes engine.json and releases the lock. It
+prints one JSON line when it serves or attaches, `{"pid", "port", "version", "started"}`, or
+`{"error"}` and exits 1.
 
 It exits 0 after `--idle-timeout` seconds (600) with no live lease, no request in flight and no
 running job, or on SIGTERM or SIGINT. Either way it removes engine.json, writes the quit dump
@@ -43,6 +45,7 @@ import uvicorn
 
 import ontological
 from ontological.api.app import create_app
+from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
 from ontological.llm.env import sanitize_environ
@@ -54,10 +57,24 @@ HEADLESS_START_TIMEOUT_S = 300  # a first launch or a major-version move can tak
 GRACEFUL_SHUTDOWN_S = 5  # how long an open request (an SSE stream) may hold up a stop
 
 
+def close_inherited_fds() -> None:
+    """Close every descriptor above stdio that the engine inherited. Electron on Linux leaks
+    dozens into its children: Chromium's lock files and IPC sockets, and the pipe to its own
+    parent. The engine outlives Electron (§4.4), so holding them would keep Chromium's locks
+    taken and make whoever reads that pipe wait for the engine to exit. Python's subprocess does
+    the same for its own children. Call it first, before the engine opens anything."""
+    try:
+        limit = os.sysconf("SC_OPEN_MAX")
+    except (ValueError, OSError):
+        limit = -1
+    os.closerange(3, limit if limit > 3 else 65536)
+
+
 @dataclass(frozen=True)
 class Config:
     app_data: Path  # <appData>/Ontological
     pg_bin: Path | None
+    model_dir: Path | None = None  # the embedding model's files (ontological.embed.model)
     idle_timeout_s: float = IDLE_TIMEOUT_S
     renew_every_s: float = RENEW_EVERY_S
 
@@ -96,6 +113,17 @@ def pg_store(config: Config) -> Store:
     return PgStore(pg.Layout(config.app_data, config.pg_bin))
 
 
+def start_embedder(config: Config) -> LocalEmbedder | None:
+    """Load the embedder and set its bulk batch cap from one timed batch (§7.1)."""
+    if config.model_dir is None:
+        log.warning("embedder: no model directory, so no embeddings")
+        return None
+    embedder = LocalEmbedder(config.model_dir)
+    cap = embedder.calibrate()
+    log.info("embedder: %s, bulk batches up to %d padded tokens", embedder.model, cap)
+    return embedder
+
+
 def default_app_data() -> Path:
     if env := os.environ.get("ONTOLOGICAL_APP_DATA"):
         return Path(env)
@@ -109,6 +137,7 @@ def parse_args(argv: Sequence[str]) -> tuple[Config, bool]:
     ap = argparse.ArgumentParser(prog="ontological-engine", description="Ontological's engine")
     ap.add_argument("--app-data", type=Path, default=None, help="<appData>/Ontological")
     ap.add_argument("--pg-bin", type=Path, default=os.environ.get("ONTOLOGICAL_PG_BIN"))
+    ap.add_argument("--model-dir", type=Path, default=os.environ.get("ONTOLOGICAL_MODEL_DIR"))
     ap.add_argument("--headless", action="store_true", help="start detached, print, exit")
     ap.add_argument("--idle-timeout", type=float, default=IDLE_TIMEOUT_S, metavar="S")
     ap.add_argument("--lease-renew", type=float, default=RENEW_EVERY_S, metavar="S")
@@ -116,6 +145,7 @@ def parse_args(argv: Sequence[str]) -> tuple[Config, bool]:
     config = Config(
         app_data=(a.app_data or default_app_data()).absolute(),
         pg_bin=Path(a.pg_bin) if a.pg_bin else None,
+        model_dir=Path(a.model_dir) if a.model_dir else None,
         idle_timeout_s=a.idle_timeout,
         renew_every_s=a.lease_renew,
     )
@@ -123,7 +153,12 @@ def parse_args(argv: Sequence[str]) -> tuple[Config, bool]:
 
 
 def emit(**fields: Any) -> None:
-    print(json.dumps(fields), flush=True)
+    try:
+        print(json.dumps(fields), flush=True)
+    except BrokenPipeError:
+        # The caller read the first line and has gone: Electron quits and leaves its engine
+        # running. Later lines go nowhere, so an error path still stops the store.
+        sys.stdout = open(os.devnull, "w")  # noqa: SIM115 - the engine's stdout from now on
 
 
 def announce(info: discovery.EngineInfo, *, started: bool) -> None:
@@ -137,6 +172,7 @@ def main(
     relaunch: Sequence[str] = (sys.executable, "-m", "ontological.engine"),
 ) -> int:
     """`store` makes the store; `relaunch` is the command `--headless` runs, without arguments."""
+    close_inherited_fds()
     args = list(sys.argv[1:] if argv is None else argv)
     config, headless = parse_args(args)
     if headless:
@@ -211,10 +247,11 @@ def serve(config: Config, make_store: Callable[[Config], Store]) -> int:
         new_store = make_store(config)
         new_store.start()
         store = new_store
+        embedder = start_embedder(config)
         if stop.requested:
             stop.log_once()
         else:
-            asyncio.run(_serve(config, sock, lock, stop))
+            asyncio.run(_serve(config, sock, lock, stop, embedder))
     except Exception as e:
         log.exception("engine failed")
         emit(error=f"{type(e).__name__}: {e}")
@@ -233,7 +270,11 @@ def serve(config: Config, make_store: Callable[[Config], Store]) -> int:
 
 
 async def _serve(
-    config: Config, sock: socket.socket, lock: discovery.EngineLock, stop: _Stop
+    config: Config,
+    sock: socket.socket,
+    lock: discovery.EngineLock,
+    stop: _Stop,
+    embedder: LocalEmbedder | None,
 ) -> None:
     lifetime = Lifetime(idle_timeout_s=config.idle_timeout_s, renew_every_s=config.renew_every_s)
     info = discovery.EngineInfo(
@@ -242,7 +283,13 @@ async def _serve(
         token=discovery.new_token(),
         version=ontological.__version__,
     )
-    app = create_app(token=info.token, lifetime=lifetime, pid=info.pid, version=info.version)
+    app = create_app(
+        token=info.token,
+        lifetime=lifetime,
+        pid=info.pid,
+        version=info.version,
+        embedder=embedder,
+    )
     server = _Server(
         uvicorn.Config(
             app,

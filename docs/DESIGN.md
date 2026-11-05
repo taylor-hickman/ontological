@@ -137,7 +137,7 @@ Use tabular numerals for figures that line up (`font-variant-numeric: tabular-nu
 - **Dock badge.** Shows a dot while a compile is paused for quota.
 - **Closing and quitting.** On macOS, closing the window keeps the app running, as usual. Quitting does not stop the engine (§4.4). If a job is running or paused when the user quits, the quit goes ahead, and the next launch's Jobs screen shows where the job got to. Don't block quit with a dialog.
 
-**Architecture change this needs.** §10 says the preload exposes `{engineUrl, token}` only. Native dialogs, context menus and notifications need a small typed IPC addition: `openFile(filters)`, `saveFile(name)`, `showContextMenu(items)` and `notify(title, body)`. Each handler in main validates its arguments. Update ARCHITECTURE.md §10 when M2.7 lands.
+**Architecture change this needs.** §10 says the preload exposes `{engineUrl, token}` only. Native dialogs, context menus and notifications need a small typed IPC addition: `openFile(filters)`, `saveFile(name)`, `showContextMenu(items)` and `notify(title, body)`. Each handler in main validates its arguments. ARCHITECTURE.md §10 lists both.
 
 ### 3.5 Theme
 

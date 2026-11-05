@@ -154,6 +154,8 @@ Produces: every v1 source type, a correct and idempotent catalog, the golden DAL
 
 M2.7 and M2.8 can run in parallel with M2.1–M2.6 once the engine API from M1 holds steady.
 
+**M2.1 decided (2026-11-05): `dal/model_interchange.py` waits for M6.4.** Porting it means porting `server/model_interchange/*` and the embedding path with it, which is M6.4's work (§11). So the gate deselects `test_model_interchange.py` (`engine/tests/upstream_fixtures/conftest.py` says why) and `dal_surface.json` leaves the module out. M6.4 restores both. The gate runs 781 tests: 758 of upstream's DAL tests (S6's 781, less the 21 interchange tests, its line in `test_dal_surface.py` and the Helm-chart test) and the 23 catalog-store tests. They test vendored engine code against the same seed. Upstream's `vdb/tests/` stay out: `test_vector_index.py` checks the `halfvec` index that M1.1 replaced, and `test_records.py` needs upstream's embedding stack.
+
 ### M3: Compile depth
 
 Produces: the full compile on every eval database, hybrid retrieval, the retrieval benchmark, and the measured answers to split vs merged and the embedding model.
@@ -203,7 +205,7 @@ Produces: editing that changes answers, with history and undo.
 | M6.1 | `ontological-mcp` stdio shim: answers `initialize` at once, attaches to or starts an engine lazily, takes a lease (§9.2) | M0.5 |
 | M6.2 | Upstream's curated MCP tools plus `validate_sql` and `run_validated_sql` | M6.1, M4.3 |
 | M6.3 | Claude Code plugin with the query, manage and setup skills | M6.2 |
-| M6.4 | Native YAML and Ossie import/export with synonyms and certification; import in one transaction, re-embed as a job | M5.1 |
+| M6.4 | Native YAML and Ossie import/export with synonyms and certification; import in one transaction, re-embed as a job. Ports `dal/model_interchange.py`, and restores `test_model_interchange.py` and its `dal_surface.json` entry to the golden DAL suite (M2.1) | M5.1 |
 
 ### M7: Package
 

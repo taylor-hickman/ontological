@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -134,3 +135,61 @@ def test_unauthorised_requests_do_not_keep_the_engine_up(
     client.get("/health")
     clock.now += 100
     assert lifetime.should_exit()
+
+
+# The Electron renderer loads from app://ontological and calls the engine with fetch, so the API
+# answers CORS for that origin, and for the Vite dev server on localhost (ARCHITECTURE.md §4.1).
+
+
+def preflight(client: TestClient, origin: str, method: str = "POST") -> httpx2.Response:
+    return client.options(
+        "/leases",
+        headers={
+            "Authorization": "",
+            "Origin": origin,
+            "Access-Control-Request-Method": method,
+            "Access-Control-Request-Headers": "authorization, content-type",
+        },
+    )
+
+
+@pytest.mark.parametrize("origin", ["app://ontological", "http://localhost:5173"])
+def test_the_app_origin_passes_a_preflight_without_the_token(
+    client: TestClient, origin: str
+) -> None:
+    r = preflight(client, origin)
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == origin
+    allowed = r.headers["access-control-allow-headers"].lower()
+    assert "authorization" in allowed
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://example.com",
+        "app://other",
+        "http://localhost.evil.com:80",
+        "null",
+        "http://127.0.0.1:5173",
+    ],
+)
+def test_other_origins_fail_the_preflight(client: TestClient, origin: str) -> None:
+    r = preflight(client, origin)
+    assert r.status_code == 400
+    assert "access-control-allow-origin" not in r.headers
+
+
+def test_a_preflight_is_not_activity(client: TestClient, lifetime: Lifetime, clock: Clock) -> None:
+    clock.now += 500
+    preflight(client, "app://ontological")
+    clock.now += 100
+    assert lifetime.should_exit()
+
+
+def test_responses_to_the_app_carry_its_origin(client: TestClient) -> None:
+    r = client.get("/health", headers={"Origin": "app://ontological"})
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == "app://ontological"
+    r = client.get("/health", headers={"Origin": "https://example.com"})
+    assert "access-control-allow-origin" not in r.headers

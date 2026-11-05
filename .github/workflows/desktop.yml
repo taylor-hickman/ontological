@@ -1,14 +1,15 @@
 # The Electron app in apps/desktop: typecheck, unit tests, then the built app under Playwright.
 # Runs on Ubuntu under xvfb, which covers everything the specs check; a macOS minute bills at
-# ten times a Linux one.
+# ten times a Linux one. The engine specs run the real engine with its fake store, so the job
+# also syncs engine/'s virtualenv, and engine changes run it too.
 name: desktop
 
 on:
   push:
     branches: [main]
-    paths: [apps/desktop/**, .github/workflows/desktop.yml]
+    paths: [apps/desktop/**, engine/**, .github/workflows/desktop.yml]
   pull_request:
-    paths: [apps/desktop/**, .github/workflows/desktop.yml]
+    paths: [apps/desktop/**, engine/**, .github/workflows/desktop.yml]
   workflow_dispatch:
 
 permissions:
@@ -44,6 +45,13 @@ jobs:
         with:
           path: ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml') }}
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          working-directory: engine
+          enable-cache: true
+      - run: uv sync --locked
+        working-directory: engine
 
       - run: pnpm install --frozen-lockfile
       # Electron needs the system libraries Playwright's browser builds use.
