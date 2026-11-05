@@ -6,7 +6,17 @@
 # probably be dropped (M7).
 #
 #   control.sh <dist>
+#
+# Library validation is only enforced with System Integrity Protection on. GitHub's macOS
+# runners have it off, so there this prints why and exits 0 without checking anything.
 set -euo pipefail
+
+sip="$(csrutil status 2>&1 || true)"
+echo "$sip"
+if [[ "$sip" != *"status: enabled."* ]]; then
+  echo "skip - library validation is not enforced on this machine, so this check needs a Mac with SIP on"
+  exit 0
+fi
 
 here="$(cd "$(dirname "$0")" && pwd)"
 tmp="$(mktemp -d)"

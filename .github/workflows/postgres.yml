@@ -38,7 +38,9 @@ jobs:
         run: ./trim.sh "$WORK/postgres" "$WORK/dist"
       - name: Sign with the hardened runtime (ad-hoc)
         run: ./sign.sh "$WORK/dist" entitlements.plist
-      - name: Show library validation blocks loading without the entitlement
+      # The runner has SIP off, so library validation isn't enforced and control.sh skips.
+      # Run it on a Mac with SIP on to see why entitlements.plist is needed.
+      - name: Show library validation blocks loading without the entitlement (skips with SIP off)
         run: ./control.sh "$WORK/dist"
       - name: Smoke test (initdb, forks, vector.dylib, pg_trgm, dump and restore)
         run: ./smoke.sh "$WORK/dist"

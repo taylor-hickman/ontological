@@ -4,7 +4,12 @@
 # load vector and pg_trgm, fork client backends and a parallel worker, dump and restore.
 #
 #   smoke.sh <dist>
+#
+# Library validation is only enforced with SIP on, so a pass on a SIP-off machine (GitHub's
+# runners) shows the signed tree works but not that the entitlements are enough.
 set -euo pipefail
+
+csrutil status 2>&1 || true
 
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=versions.env

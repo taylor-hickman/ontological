@@ -30,6 +30,8 @@ The tree is relocatable: Postgres finds `share/` and `lib/` relative to its own 
 
 With the hardened runtime, library validation only maps a library signed by Apple or by the process's own Team ID. An ad-hoc signature has no Team ID, so without an entitlement dyld refuses `libpq.5.dylib` in `initdb`, `psql`, `pg_dump` and `pg_restore`, and `postgres` can't `dlopen` `plpgsql`, `dict_snowball` or `vector`. `initdb` therefore fails before it finishes (`control.sh` shows both failures). `entitlements.plist` sets `com.apple.security.cs.disable-library-validation` on the executables, and with it everything in `smoke.sh` passes.
 
+Library validation is only enforced with System Integrity Protection on, and GitHub's macOS runners have it off. So in CI the signed tree passes `smoke.sh` with or without the entitlement, and `control.sh` skips. The entitlement finding comes from a Mac with SIP on: run `control.sh` and `smoke.sh` locally after changing how the tree is built or signed.
+
 Forking needs nothing: on macOS `postgres` forks its backends and background workers without `exec`, and there is no JIT to need `allow-jit`.
 
 With a Developer ID every file carries the same Team ID, so library validation should pass without the entitlement. M7 can check that by running `control.sh` with `CODESIGN_IDENTITY` set: if it starts failing (the libraries load), drop the entitlement.
