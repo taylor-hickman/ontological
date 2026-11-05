@@ -34,6 +34,14 @@ uv run ontological-engine --pg-bin <tree>/bin --model-dir ~/.cache/ontological/m
 
 At start the engine times one batch and caps bulk batches at what takes about 100 ms, up to 1,024 padded tokens. Without a model directory it runs with no embedder.
 
+## The MCP server
+
+`ontological-mcp` is the stdio MCP server for Claude Code, Claude Desktop and Cursor ([ARCHITECTURE.md §9.2](../docs/ARCHITECTURE.md#92-mcp-for-external-agents)). It answers `initialize` at once, then attaches to the running engine, or starts one with `--headless`, and holds a lease on it until the client disconnects. It passes its options to the engine it starts, and logs to stderr.
+
+```sh
+claude mcp add ontological -- "$PWD/.venv/bin/ontological-mcp" --pg-bin <tree>/bin
+```
+
 ## Tests
 
 Contract tests that spawn your logged-in `claude` (and spend a little quota) are skipped unless `ONTOLOGICAL_CONTRACT=1` is set: `ONTOLOGICAL_CONTRACT=1 uv run pytest tests/contract`. `ONTOLOGICAL_CONTRACT_MODEL` picks the model (default `haiku`).
@@ -46,7 +54,9 @@ The store lifecycle tests in `tests/store` drive the bundled Postgres binaries, 
 ONTOLOGICAL_PG_BIN=<tree>/bin ONTOLOGICAL_PG16_BIN=<work>/postgres/bin uv run pytest tests/store
 ```
 
-The engine process tests in `tests/engine` run the real engine with a fake store and need no binaries, except `test_engine_pg.py`, which runs it on the bundled Postgres with `ONTOLOGICAL_PG_BIN` set.
+The engine process tests in `tests/engine`, and the shim's, run the real engine with a fake store and need no binaries, except `test_engine_pg.py`, which runs it on the bundled Postgres with `ONTOLOGICAL_PG_BIN` set.
+
+The source executor tests in `tests/sources` run real executor processes on SQLite files they write. DuckDB downloads its `sqlite_scanner` extension the first time it attaches one; bundling the extensions with autoinstall off is M7.2.
 
 `ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip; `postgres.yml` sets it.
 

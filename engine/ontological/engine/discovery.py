@@ -140,7 +140,7 @@ def remove_engine_json(app_data: Path, *, pid: int) -> None:
         (app_data / ENGINE_JSON).unlink(missing_ok=True)
 
 
-def _pid_alive(pid: int) -> bool:
+def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -169,6 +169,6 @@ def find_engine(app_data: Path) -> EngineInfo | None:
     """The live engine engine.json names, or None. Call under engine_lock to decide whether to
     start one."""
     info = read_engine_json(app_data)
-    if info is None or not _pid_alive(info.pid):
+    if info is None or not pid_alive(info.pid):
         return None
     return info if answers(info) else None
