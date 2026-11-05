@@ -3,7 +3,8 @@ name: Bundled Postgres
 # Builds the PostgreSQL 17 + pgvector binaries the app bundles (ARCHITECTURE.md §10, spike S4):
 # minimal configure, trimmed to the shipped file list, signed with the hardened runtime, then
 # smoke-tested and run through the store lifecycle tests (§5.3 and §12: engine/tests/store, which
-# test engine/ontological/store/pg.py and its Alembic chains) and the eval cluster's tests
+# test engine/ontological/store/pg.py and its Alembic chains), the engine's idle shutdown on the
+# real store (engine/tests/engine/test_engine_pg.py) and the eval cluster's tests
 # (eval/tests/test_cluster.py). Runs when the scripts, the store, the vendored chain, the
 # engine's dependencies or the eval cluster change, or by hand.
 on:
@@ -17,6 +18,7 @@ on:
       - engine/pyproject.toml
       - engine/uv.lock
       - engine/tests/store/**
+      - engine/tests/engine/test_engine_pg.py
       - eval/ontological_eval/cluster.py
       - eval/ontological_eval/home.py
       - eval/tests/test_cluster.py
@@ -30,6 +32,7 @@ on:
       - engine/pyproject.toml
       - engine/uv.lock
       - engine/tests/store/**
+      - engine/tests/engine/test_engine_pg.py
       - eval/ontological_eval/cluster.py
       - eval/ontological_eval/home.py
       - eval/tests/test_cluster.py
@@ -71,7 +74,7 @@ jobs:
         with:
           working-directory: engine
           enable-cache: true
-      - name: Store lifecycle tests (first launch, stop, adopt, stale pid, second engine, restore, 16 to 17, disk full)
+      - name: Store lifecycle tests (first launch, stop, adopt, stale pid, second engine, restore, 16 to 17, disk full), and the engine idling out on the store
         working-directory: engine
         env:
           ONTOLOGICAL_PG_BIN: ${{ env.WORK }}/dist/bin
@@ -79,7 +82,7 @@ jobs:
           ONTOLOGICAL_PG_REQUIRED: "1"
         run: |
           uv sync --locked
-          uv run pytest tests/store -ra
+          uv run pytest tests/store tests/engine/test_engine_pg.py -ra
       - name: Eval cluster tests (WWI-shaped load, adopt, failed load, row-count check)
         working-directory: eval
         env:
