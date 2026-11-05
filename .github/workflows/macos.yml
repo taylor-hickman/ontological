@@ -5,9 +5,9 @@
 # Paths that trigger it:
 #   - engine dependencies and Python version, which pick the native wheels (uv.lock is universal,
 #     but a macOS wheel can still break where the Linux one works)
-#   - packaging, signing and native builds: the bundled Postgres + pgvector build (spike S4, M7.2),
-#     the engine runtime build and the Electron packaging config (M7). Put that work under these
-#     paths, and add its steps here, when it lands.
+#   - packaging and signing: the engine runtime build and the Electron packaging config (M7).
+#     Put that work under these paths, and add its steps here, when it lands.
+#   The bundled Postgres + pgvector build has its own workflow, gated the same way (spike S4).
 #   - this file
 name: macOS
 
