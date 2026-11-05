@@ -580,7 +580,7 @@ score = rrf( dense_rank(embedding <=> query_vec),                 # pgvector
          + certified_bonus
 ```
 
-- **BM25 runs in the engine** with `bm25s` (MIT) over at most about 10⁵ short documents. The index is rebuilt after each compile, import and edit. At this size a rebuild should take about a second; spike S8 measures it (docs/BUILD_PLAN.md). Rebuilds swap in atomically (§5.6).
+- **BM25 runs in the engine** with `bm25s` (MIT) over at most about 10⁵ short documents. The index is rebuilt after each compile, import and edit. At 10⁵ documents a full rebuild takes 1.5–1.7 s and a query under a millisecond (spike S8, docs/BUILD_PLAN.md). Rebuilds swap in atomically (§5.6). At most one runs at a time: a change during a rebuild queues one more, so a burst of writes costs two rebuilds. Each document's tokens are cached by `content_hash`, so a rebuild tokenizes only changed documents.
 - **Identifier-aware tokens.** Before indexing and querying, identifiers are split on snake_case and camelCase, and glossary acronyms (Settings → Glossary) are expanded. `cust_acct_no` matches "customer account number".
 - **Why not BM25 inside Postgres.** `ts_rank_cd` is not BM25 and has the start-of-token problem. ParadeDB's `pg_search` is BM25 but AGPL-3.0. Timescale's `pg_textsearch` is BM25 under the PostgreSQL license, but it is one more native extension to build, sign and upgrade per platform. Revisit it only if the in-engine index becomes a bottleneck.
 - Fusion runs in Python over the three ranked lists. It keeps upstream's filters (collection, label, database_name) and its `{text, metadata, distance}` result contract, so ported upstream code works unchanged.

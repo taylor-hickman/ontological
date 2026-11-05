@@ -255,3 +255,27 @@ The first call on each model was not much slower. Spawn took 0.35 s on the first
 **Decision: no warm pool.** The rule asks whether a spawn takes more than 1.5 s at p50. It takes 0.53 s, spawn and close together. The whole `query()` is above 1.5 s at p50 (2.09 s), but that is the model's time, and a warm pool can't remove it. A pre-spawned client would save the 0.17 s spawn. The 0.34 s close could also be saved without a pool, by not waiting for the process to exit. Neither is worth the pool's complexity in M1.
 
 **ARCHITECTURE.md changed.** §6.5's estimate said each call costs "a few seconds of process startup" and that split might add 20–30 minutes. It now gives 0.53 s of overhead per call, about 1.5–2 minutes of overhead for split's extra calls on a 200-table database. §3's per-call cost note now says the same.
+
+### S8: How long does a `bm25s` rebuild take at 10⁵ documents? (2026-11-04)
+
+**What ran.** `tools/spikes/s8_bm25s_rebuild.py` with `bm25s` 0.3.16, numpy 2.5.4 and Python 3.12.13, on an Apple M5 Max. It ran twice with the defaults: 10⁵ synthetic table and column documents over 10 databases, 5 repeats, and 1,000 queries at k=50. Each document is name + synonyms + description, as §7.3 indexes them. Identifiers come in snake_case, camelCase, PascalCase and UPPER_SNAKE, with glossary abbreviations and acronyms in them, and descriptions run one to three sentences with a long tail of made-up words. That gives 1.84 M tokens, 18 tokens per document at p50 (29 at p95), a 22,128-token vocabulary and a 14 MB index.
+
+The tokenizer is the §7.3 one: split on snake_case and camelCase, lowercase, expand glossary acronyms, drop stopwords, with the same function on queries. Planted documents check it: `cust_acct_no` ranks first for "customer account number" and for `cust_acct_no`, `ZorblaxInvoiceLineID` for "zorblax invoice line id", and `QUUXTREL_SKU_QTY` for "quuxtrel SKU qty" and "quuxtrel stock keeping unit quantity".
+
+| Step | Run 1 p50 / max | Run 2 p50 / max |
+|---|---|---|
+| tokenize 10⁵ texts | 0.80 / 0.87 s | 0.82 / 0.96 s |
+| `BM25.index` on the tokens | 0.89 / 0.93 s | 0.76 / 1.24 s |
+| **full rebuild** (tokenize + index) | **1.73 / 1.75 s** | **1.49 / 2.38 s** |
+| one database's rebuild (~10⁴ docs) | 0.16 / 0.22 s | 0.17 / 0.31 s |
+| query, k=50 | 0.40 / 1.19 ms | 0.36 / 0.83 ms |
+| query while a full rebuild runs on a thread | 0.57 ms p50, 24 ms p95, 111 ms max | 0.76 ms p50, 18 ms p95, 83 ms max |
+
+Run 2's maxima came while other sessions were busy on the same machine. Searches slow down during a rebuild because they share the GIL with it. They stay correct, because the new index replaces the old one by a single reference assignment. In both runs, every search during the rebuild used the old index and none saw a partly built one.
+
+**Decision: rebuild on every change and swap atomically.** A full rebuild takes 1.5–1.7 s at p50 and at most 2.4 s, under the rule's 3 s. Per-database indexes and debounced edits aren't needed. Searches cost under a millisecond, and up to about 0.1 s while a rebuild is running, which is small next to a tool call's turn. For M3.6:
+- Run at most one rebuild at a time. A change that arrives during a rebuild marks the index stale, and one more rebuild runs after the current one, so a burst of compile writes costs two rebuilds, not one per write.
+- Cache each document's tokens by `content_hash`, so a rebuild tokenizes only changed documents. That removes about half of a rebuild (the tokenize row).
+- The numbers come from one fast machine. A slower Mac is the main risk to the 3 s margin. If a full rebuild there goes past about 3 s even with cached tokens, fall back to the per-database indexes measured above.
+
+**ARCHITECTURE.md changed.** §7.3 said a rebuild "should take about a second". It now gives the measured 1.5–1.7 s and the policy above.
