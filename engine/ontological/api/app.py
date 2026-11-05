@@ -8,6 +8,11 @@ up). Unauthorised ones don't.
 Leases: `POST /leases` takes one, `PUT /leases/{id}` renews it, `DELETE /leases/{id}` releases
 it. A renewal of an expired lease is 404, and the client takes a new one. A closing engine
 refuses new leases with 503, and the client starts a new engine.
+
+CORS: the Electron renderer loads from app://ontological and calls the API with fetch, so the API
+allows that origin, and the Vite dev server on localhost in development. A preflight carries no
+token and is answered before the token check. Other origins still can't read engine.json, so the
+token stays the API's protection; CORS only lets the app's own page through.
 """
 
 from __future__ import annotations
@@ -17,11 +22,15 @@ import logging
 
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
+from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ontological.engine.lifetime import Closing, Lease, Lifetime
 
 log = logging.getLogger(__name__)
+
+APP_ORIGIN = "app://ontological"
+DEV_ORIGIN_REGEX = r"http://localhost:\d+"
 
 
 class LeaseRequest(BaseModel):
@@ -119,4 +128,12 @@ def create_app(*, token: str, lifetime: Lifetime, pid: int, version: str) -> Fas
         return Response(status_code=204)
 
     app.add_middleware(BearerAuth, token=token, lifetime=lifetime)
+    # Added last, so it runs first: a preflight is answered before BearerAuth sees it.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[APP_ORIGIN],
+        allow_origin_regex=DEV_ORIGIN_REGEX,
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["authorization", "content-type"],
+    )
     return app
