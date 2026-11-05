@@ -1,13 +1,14 @@
 """A stand-in engine for the lifecycle tests: runs ontological.store.pg the way the engine will,
 as a process the tests can kill -9.
 
-    engine_stub.py <appData> <bin> [--prepare-sql SQL] [--restore DUMP] [--die-at STEP]
+    engine_stub.py <appData> <bin> [--chains] [--prepare-sql SQL] [--restore DUMP] [--die-at STEP]
 
 ensure_running(), then one JSON line: {"postmaster_pid", "action", "notes", "seconds"}. Then it
 waits; SIGTERM or SIGINT stops the server with a quit dump and prints {"quit_dump": name}. An
 error prints {"error", "type"} and exits 1.
 
---prepare-sql runs SQL in the store during first launch (where the Alembic chains will run).
+--chains runs both Alembic chains during first launch, as the engine does; without it the store
+is left unmigrated. --prepare-sql runs SQL in the store during first launch, after the chains.
 --restore restores DUMP once the server is up, then exits. --die-at exits with code 9, as kill -9
 would, at one step:
 
@@ -74,6 +75,7 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("app_data", type=Path)
     ap.add_argument("bin", type=Path)
+    ap.add_argument("--chains", action="store_true")
     ap.add_argument("--prepare-sql")
     ap.add_argument("--restore", type=Path)
     ap.add_argument("--die-at")
@@ -85,6 +87,8 @@ def main(argv: list[str]) -> int:
     def prepare(lay: pg.Layout) -> None:
         if args.die_at == "prepare-store":
             os._exit(9)
+        if args.chains:
+            pg.migrate_new_store(lay)
         if args.prepare_sql:
             pg.psql(lay, args.prepare_sql)
 

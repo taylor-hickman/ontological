@@ -3,7 +3,8 @@ name: Bundled Postgres
 # Builds the PostgreSQL 17 + pgvector binaries the app bundles (ARCHITECTURE.md §10, spike S4):
 # minimal configure, trimmed to the shipped file list, signed with the hardened runtime, then
 # smoke-tested and run through the store lifecycle tests (§5.3 and §12: engine/tests/store, which
-# test engine/ontological/store/pg.py). Runs when the scripts or the store change, or by hand.
+# test engine/ontological/store/pg.py and its Alembic chains). Runs when the scripts, the store,
+# the vendored chain or the engine's dependencies change, or by hand.
 on:
   push:
     branches: [main]
@@ -11,6 +12,9 @@ on:
       - tools/spikes/s4_postgres/**
       - tools/spikes/s5_pg_lifecycle/**
       - engine/ontological/store/**
+      - engine/auto_ontology/**
+      - engine/pyproject.toml
+      - engine/uv.lock
       - engine/tests/store/**
       - .github/workflows/postgres.yml
   pull_request:
@@ -18,6 +22,9 @@ on:
       - tools/spikes/s4_postgres/**
       - tools/spikes/s5_pg_lifecycle/**
       - engine/ontological/store/**
+      - engine/auto_ontology/**
+      - engine/pyproject.toml
+      - engine/uv.lock
       - engine/tests/store/**
       - .github/workflows/postgres.yml
   workflow_dispatch:

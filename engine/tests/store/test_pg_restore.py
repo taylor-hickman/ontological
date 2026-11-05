@@ -1,16 +1,13 @@
-"""Migrations, dumps and restore (ARCHITECTURE.md §5.3, Dumps and Migrations; §12, "failed
-migration then restore"). The Alembic chains arrive in M0.4; here each revision is plain SQL in
-its own transaction, as Alembic's transaction_per_migration runs them."""
+"""Dumps and restore (ARCHITECTURE.md §5.3, Dumps and Migrations). The store's state here is
+plain SQL, so each case shows whether a restore touched it; test_pg_migrate.py runs the real
+Alembic chains through `migrate` and its restore."""
 
 from __future__ import annotations
 
-import subprocess
-import time
-from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
-from conftest import Apps, Engine, count, nearest, run_stub, seed, sql
+from conftest import Apps, Engine, count, run_stub, seed, sql
 
 from ontological.store import pg
 
@@ -22,7 +19,6 @@ REV2 = (
     "CREATE TABLE app.conversation (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), title text);"
     "UPDATE ops.version SET rev = 2"
 )
-REV3 = "ALTER TABLE app.setting ADD COLUMN updated timestamptz; SELECT 1 / 0"
 OPS = (
     "CREATE SCHEMA ops; CREATE TABLE ops.version (rev int NOT NULL);"
     "INSERT INTO ops.version VALUES (0)"
@@ -52,84 +48,6 @@ def has_conversation(lay: pg.Layout) -> bool:
 
 def databases(lay: pg.Layout) -> list[str]:
     return sql(lay, "SELECT datname FROM pg_database ORDER BY datname", db="postgres").split()
-
-
-def upgrade_to(revisions: list[str]) -> Callable[[pg.Layout], None]:
-    def upgrade(lay: pg.Layout) -> None:
-        for r in revisions[int(rev(lay)) :]:
-            apply(lay, r)
-
-    return upgrade
-
-
-def pending(revisions: list[str]) -> Callable[[pg.Layout], bool]:
-    return lambda lay: int(rev(lay)) < len(revisions)
-
-
-def test_failed_migration_then_restore(apps: Apps) -> None:
-    lay, e = at_revision_1(apps, "migrate")
-    before = nearest(lay)
-    # The engine's pool holds connections while migrations run.
-    held = subprocess.Popen(
-        [lay.tool("psql"), "-X", "-h", str(lay.pgsocket), "-p", str(pg.PORT), "-U", pg.USER,
-         "-d", pg.DATABASE, "-c", "SELECT pg_sleep(60)"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )  # fmt: skip
-    time.sleep(0.3)
-
-    revisions = [REV1, REV2, REV3]
-    with pytest.raises(pg.MigrationFailed, match="division by zero") as failed:
-        pg.migrate(lay, pending=pending(revisions), upgrade=upgrade_to(revisions))
-    dump = failed.value.restored_from
-    assert dump.name.endswith("-premigrate.dump") and dump.is_file()
-    held.wait(10)
-    assert held.returncode != 0, "restore ends the pool's connections"
-    assert rev(lay) == "1", "revision 2 had committed; the restore undid it"
-    assert not has_conversation(lay)
-    cols = sql(
-        lay,
-        "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) "
-        "FROM information_schema.columns WHERE table_schema='app' AND table_name='setting'",
-    )
-    assert cols == "key,value"
-    assert count(lay) == 500
-    assert sql(lay, "SELECT value FROM app.setting") == '"dark"'
-    assert nearest(lay) == before, "the HNSW index is back"
-    assert pg.RESTORE_DATABASE not in databases(lay)
-    e.term()
-
-
-def test_a_migration_dumps_first_and_nothing_pending_does_nothing(apps: Apps) -> None:
-    lay, e = at_revision_1(apps, "migrate-ok")
-    revisions = [REV1, REV2]
-    dump = pg.migrate(lay, pending=pending(revisions), upgrade=upgrade_to(revisions))
-    assert dump is not None and dump.name.endswith("-premigrate.dump")
-    assert rev(lay) == "2" and has_conversation(lay)
-    assert pg.migrate(lay, pending=pending(revisions), upgrade=upgrade_to(revisions)) is None
-    assert sorted(lay.backups.glob("*.dump")) == [dump]
-    e.term()
-
-
-def test_a_migration_whose_restore_fails_too_says_so(
-    apps: Apps, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    lay, e = at_revision_1(apps, "migrate-both")
-    real_run = pg.run
-
-    def run(cmd: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        if Path(cmd[0]).name == "pg_restore":
-            raise pg.PgError("pg_restore failed (1): simulated")
-        return real_run(cmd, check=check)
-
-    monkeypatch.setattr(pg, "run", run)
-    revisions = [REV1, REV2, REV3]
-    with pytest.raises(pg.PgError, match="so did restoring") as failed:
-        pg.migrate(lay, pending=pending(revisions), upgrade=upgrade_to(revisions))
-    assert not isinstance(failed.value, pg.MigrationFailed), "no restore happened"
-    assert "as the failed migration left it" in str(failed.value)
-    assert rev(lay) == "2" and has_conversation(lay)
-    monkeypatch.undo()
-    e.term()
 
 
 def _ahead_of_dump(apps: Apps, name: str) -> tuple[pg.Layout, Engine, Path]:
