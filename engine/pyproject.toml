@@ -1,0 +1,38 @@
+[project]
+name = "ontological"
+version = "0.0.0"
+description = "Ontological's engine: catalog, compile, retrieval, answer agent and Claude gateway."
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["ontological", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+xfail_strict = true
+
+[dependency-groups]
+dev = [
+    "pyright[nodejs]>=1.1.414",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
