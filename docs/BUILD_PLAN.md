@@ -26,7 +26,7 @@ The review of ARCHITECTURE.md at `0269407` changed these. ARCHITECTURE.md now ca
 | One shared engine with leases and an idle shutdown, for Electron, MCP shims and the eval runner | §4.4 |
 | The golden DAL suite keeps upstream's seed, with upstream's connectors and two service modules vendored as test-only code | §5.4, §11 |
 | A question's source database comes from a scope or from entity coverage, and `plan` records it | §8.1 |
-| Source executors gain a generic capped `probe` op; the embedder gets a priority queue; BM25 rebuilds swap atomically | §5.6 |
+| Source executors gain a generic capped `probe` op; query embeds run concurrently with token-capped bulk batches (S7); BM25 rebuilds swap atomically | §5.6 |
 | The spawned `claude` gets a sanitized environment that also drops inherited Claude Code session variables | §6.2 |
 
 Settled by reading upstream at `2a24f5d`, so no spike is needed:
@@ -127,7 +127,7 @@ Produces: `ontological ask "<question>" --source chinook` and `ontological eval 
 | M1.2 | Source executor process for DuckDB-attached SQLite: extract, `run_sql`, `probe`, cancel by `interrupt()` then kill after 2 s (§5.6) | M0.5 |
 | M1.3 | Minimal ingest: extract and write Chinook's catalog through the DAL (no diff, no query history) | M1.1, M1.2 |
 | M1.4 | Minimal split compile: profiling, then `table_keys`, `column_descriptions` and `table_terms` with upstream's prompts, sequential, no packing; semantic FKs from declared FKs only | M0.6, M1.3 |
-| M1.5 | Embedder on the S7 loader behind LangChain's `Embeddings` interface; dense search only | S7, M1.1 |
+| M1.5 | Embedder on the S7 loader (direct `onnxruntime` + `tokenizers`, int8) behind LangChain's `Embeddings` interface, with the start-up cap calibration; dense search only | S7, M1.1 |
 | M1.6 | Grounding pack: dense retrieval over terms and attributes, BFS join paths (`find_join_path`) | M1.4, M1.5 |
 | M1.7 | **TDD** Gated agent: `ClaudeGateway.agent()`, the tools `plan`, `search_ontology`, `describe_table`, `validate_sql` (gate checks 1–3 only), `run_sql` and `review_answer`, their preconditions, and the post-run check with its intent, critic-off and `answerable=false` variants. Precondition tests written first | S1, M1.6 |
 | M1.8 | `ontological ask` CLI against the engine API, printing steps, SQL and rows | M1.7 |
@@ -165,7 +165,7 @@ Produces: the full compile on every eval database, hybrid retrieval, the retriev
 | M3.3 | Merged `TableSemantics` option (§6.4) | M3.2 |
 | M3.4 | Semantic FK resolution in batches of about 25, with the value-overlap probe running through the executor's `probe` op | M3.2, M2.2 |
 | M3.5 | SQL attribute judge with `_usage_score` fixed; bridge SQL on Opus; PII rules and the batched fallback | M3.2, M2.4 |
-| M3.6 | Hybrid search: BM25 with identifier-aware tokens (S8's rebuild policy), trigram, RRF with the certified bonus; embedder priority queue (S7) | S7, S8, M1.5 |
+| M3.6 | Hybrid search: BM25 with identifier-aware tokens (S8's rebuild policy), trigram, RRF with the certified bonus; concurrent query embeds beside token-capped bulk batches (S7) | S7, S8, M1.5 |
 | M3.7 | Pre-compile estimate showing split and merged (§6.5), using S2's spawn time | M3.3 |
 | M3.8 | Jobs screen: progress, pause and resume, call log, cache hits | M3.1, M2.7 |
 | M3.9 | Retrieval benchmark (§7.4) on dev questions: recall@k per configuration and per candidate model; choose the embedding model and recalibrate thresholds | M3.6, M2.9 |
@@ -334,6 +334,108 @@ Library validation is only enforced with System Integrity Protection on. GitHub'
 For M0.3: `pg.py`'s structure carries over (`Layout`, `inspect_pid_file`, `ensure_running`, `stop`, `migrate`, `restore`, `upgrade_major`, `resume_upgrade`), and so does `run.py`'s case list, as the §12 lifecycle tests. Three things the spike left out: real Alembic chains in place of the SQL-string revisions, the disk-full pause, and the 103-byte socket path limit. Under `/Users/<name>/Library/Application Support`, that limit allows a home folder name of up to 33 bytes. `pg.py` refuses a longer path and says why.
 
 **ARCHITECTURE.md changed.** §5.3 adds Lock, Stale lock files, Second engine and Dumps, and rewrites First launch, Start, Adopt, Migrations and Major-version upgrades. §5.1 adds `pg.lock` and the dump kinds.
+
+
+### S6: Do upstream's golden fixtures and DAL tests run against a bare Postgres outside Docker? (2026-11-04)
+
+**What ran.** `tools/spikes/s6_golden_dal/run.sh` on macOS arm64, with S4's trimmed and ad-hoc-signed tree (PostgreSQL 17.11, pgvector 0.8.7) and upstream at `2a24f5d`, unmodified. It follows upstream's own CI job with the `pgvector/pgvector:pg17` container swapped for a cluster from `initdb -E UTF8 --locale=C`, listening on `127.0.0.1` with a password. Upstream's `seed_fixtures` loads Pagila into a `pagila` database and builds Chinook as a SQLite file. Then come `alembic upgrade head`, `seed_graph_fixture --reset` (CONNECTION_STRINGS naming both, through upstream's connectors), `alembic check`, and `pytest auto_ontology/dal/tests` with `POSTGRES_*` set. A whole run takes about 30 s.
+
+**Result: 781 passed, 0 failed, 0 skipped.** The seed wrote 2 databases, 37 tables, 209 columns, 5 terms, 4 SQL attributes, 2 custom analyses, 1 PQL analysis and 3 zones, and `alembic check` found no drift. The goldens were recorded against the Docker image, whose default locale is `en_US.utf8`, and all 122 recorded reads still match on locale `C`.
+
+| Test file | Passed | | Test file | Passed |
+|---|---:|---|---|---:|
+| `test_analyses.py` | 27 | | `test_reset.py` | 14 |
+| `test_attributes.py` | 60 | | `test_rules.py` | 35 |
+| `test_candidates.py` | 16 | | `test_schema_version.py` | 9 |
+| `test_close_store.py` | 2 | | `test_search.py` | 69 |
+| `test_column_properties.py` | 9 | | `test_session.py` | 10 |
+| `test_dal_surface.py` | 25 | | `test_sql_attributes.py` | 35 |
+| `test_datasources_semantic.py` | 37 | | `test_sql_fragments.py` | 12 |
+| `test_exploration.py` | 33 | | `test_tags.py` | 143 |
+| `test_golden.py` | 128 | | `test_terms.py` | 52 |
+| `test_groups.py` | 7 | | `test_users.py` | 12 |
+| `test_metadata_batch.py` | 8 | | `test_zones.py` | 15 |
+| `test_migration_revision.py` | 2 | | **all** | **781** |
+| `test_model_interchange.py` | 21 | | | |
+
+Two control runs show how quietly the suite turns itself off:
+
+- With `POSTGRES_*` unset, 741 of the 781 skip and pytest exits 0.
+- Over the Unix socket only, as §5.3 has the engine connect (`POSTGRES_HOST` set to the socket directory), 734 skip, `test_groups.py` errors 7 times and 40 pass. Upstream's `infra/postgres.py` builds `postgresql://user:password@{host}:{port}/{db}`, which can't name a socket directory, raw or percent-encoded. psycopg falls back to `/tmp/.s.PGSQL.5432`, and each test module's "schema unavailable" guard skips.
+
+**Vendored files that need edits.** Nothing needed an edit to run against a bare Postgres. The edits come from vendoring a subset. §11's set (79 files: `dal/`, `catalog/store/`, `vdb/postgres.py` and `alembic/` for the engine; the seed, capture, Postgres and SQLite connectors, two service modules and the DAL tests as test-only code) imports 54 more upstream modules at module level. The seed and tests loaded 58 outside modules. Through `connectors/__init__.py`, `server/sql_utils.py` and `utils/__init__.py`, those bring in all ten connectors and their drivers (Databricks, Snowflake, Trino, PyHive, HeavyDB, MySQL, DuckDB), `hvac`, `python-dotenv`, and the OpenAI and NVIDIA LangChain clients. `imports.py` lists them, and the edits below cut them. With the engine edits applied, the engine's part imports only 18 more upstream modules, about 1,600 lines of constants, catalog models, `normalize`, `diff`, `query_stats`, zone helpers and `sample_values`, and needs nothing beyond numpy and pandas.
+
+Engine (M1.1):
+
+| File | Why | Edit |
+|---|---|---|
+| `dal/connections.py` | Imports `connectors.vault` (`hvac`), which also runs `connectors/__init__.py` and loads every connector | Read the keyring reference instead (§3) |
+| `dal/custom_analyses.py`, `dal/sql_attributes.py` | Import only `SqlParseError` from `server/sql_utils.py`, which imports every connector, the sqlglot parsers and `retrieval/` | Take `SqlParseError` from a one-class module |
+| `dal/custom_analyses.py`, `dal/pql_analyses.py` | Embed lazily through `utils.embedding` (OpenAI client to NIM) | Embed through the local embedder (§5.4, §7.1) |
+| `dal/model_interchange.py` | Imports the embedding stack (`server/model_interchange/embed.py`, `semantic/embed.py`) and `server/sql_utils.py` at module level | Not vendored: §11 already ports it with `server/model_interchange/*` |
+| `dal/schema_version.py` | Finds `alembic/` two levels above itself, as in upstream's checkout | Point it at the vendored chain |
+| `alembic/env.py` | Imports `auto_ontology.env` to load `.env` with python-dotenv | Drop the import; the engine sets the URL |
+| `infra/postgres.py` (vendored for `dal/session.py`, `dal/groups.py`, `vdb/__init__.py`) | Its URL can't name a socket directory, so every test skips over the socket | Build `postgresql://user@/db?host=<socket dir>`, no password |
+| `utils/__init__.py` | `dal/datasources.py`, `candidates.py`, `exploration.py` and `terms.py` import `utils.sample_values`, which runs `utils/__init__.py`, which imports `utils.embedding` | Vendor `utils/sample_values.py` with an empty `__init__.py` |
+| `catalog/store/db.py`, `queries.py`, `schemas.py` | Import `catalog.diff`, `normalize`, `query_stats` and `model` at module level, which §11 ports with fixes | Import the ported modules, or vendor upstream's copies beside the store |
+
+Test-only (M2.1):
+
+| File | Why | Edit |
+|---|---|---|
+| `seed_graph_fixture.py` | Ingests through `catalog.ingest_catalog`, so it needs upstream's ingest (`catalog/ingest.py`, `extract.py`, `write.py`, `table_filter.py`, `parsers/`, `services/schema.py`), not just the connectors | None to the file. Vendor that chain unchanged as test-only code, since the goldens are byte-for-byte against its output |
+| `connectors/__init__.py`, `connectors/registry.py` | Import all ten connectors at module level; the seed calls `registry.create_connector` | Keep only Postgres and SQLite |
+| `server/sql_attributes/service.py` | Imports `description_suggester` (an LLM call through `utils.llm_invoke`) and `utils.embedding` at module level, though the seed replaces the embed calls | Drop both imports |
+| `server/custom_analyses/service.py`, `server/sql_utils.py` | `sql_utils` validates SQL through `catalog/sql_parse.py` and `retrieval/data_access/graph_schemas.py`, and reads dialects through `connectors.get_connectors()` | Vendor `sql_utils` and those two modules; it gets the trimmed connectors |
+| `capture_dal_golden.py` | Finds the goldens at `parents[2]/auto_ontology/dal/tests/golden` | Point it at the vendored goldens |
+| `dal/tests/test_migration_revision.py` | `test_the_chart_pins_the_head_revision` reads upstream's Helm `values.yaml`; both tests find `alembic/` three levels up | Drop the Helm test; point the other at the vendored chain |
+| `dal/tests/test_model_interchange.py` (21 tests) | Tests `dal/model_interchange.py`, which is ported, not vendored | Runs against the port |
+| `dal/tests/test_dal_surface.py` | Snapshots every module in `auto_ontology.dal`, and `test_no_module_disappeared` fails if `model_interchange` leaves the package | Keep the port at `dal/model_interchange.py` with upstream's signatures, or take it out of `dal_surface.json` |
+
+The package name touches more files than all of that. 72 of the 79 files import upstream by absolute `auto_ontology.` paths, with no relative imports, and `test_dal_surface.py` imports `auto_ontology.dal.<module>` by name. §10's layout puts the code under `ontological/upstream/`, which means rewriting all 72.
+
+**Decision.**
+- §5.4's plan holds on the bundled binaries. M2.1's test cluster is an `initdb`'d S4 tree with the steps `run.sh` takes, and no Docker.
+- M2.1's gate fails on any skip, as `report.py` does. Pytest's exit status isn't enough: a missing or wrong connection skips about 95% of the suite.
+- M1.1 makes the engine edits above. `infra/postgres.py` gets a socket form, because the engine has no TCP port or password (§5.3).
+- Recommended for M1.1: keep the vendored package's name, `auto_ontology`, as a second top-level package in the engine's distribution. Then the 72 files keep their imports and each vendored file diffs cleanly against upstream. This changes §10's layout, and M1.1 decides.
+- Counting the Helm test that gets dropped, M2.1's conformance suite is 780 tests, 21 of them against the ported interchange module.
+
+**ARCHITECTURE.md changed.** §5.4 now says what S6 ran and that the seed also needs upstream's catalog ingest. §11's rows for `dal/*` and the test-only code list the edits and the extra files.
+
+### S7: embedder loader and speed (2026-11-04)
+
+Ran `uv run tools/spikes/s7_embedder.py` on an Apple M5 Max (18 cores, 64 GB, macOS 26.5.2) with onnxruntime 1.31.1, against `snowflake-arctic-embed-m-v1.5` at `e58a8f7`, file `onnx/model_int8.onnx` (110.1 MB). The raw numbers are in `tools/spikes/s7_results.json`.
+
+**Loading.** Both loaders load the file offline from a local directory. fastembed 0.9.1 has no v1.5 entry, so it loads only as a custom model (`add_custom_model`, CLS pooling, `output_name="token_embeddings"`). On the same batches the two give the same vectors (min cosine 0.9999998 over 256 passages and 8 queries). Load takes 0.11 s direct and 0.18 s through fastembed, plus about 2 s for fastembed's imports on a cold start.
+
+**int8 vectors depend on the batch.** The graph quantizes activations per batch (`DynamicQuantizeLinear`), so a passage's vector shifts with its batch-mates and their padding: min cosine 0.996 against the same text embedded alone. The engine embeds each query alone, so query vectors are deterministic.
+
+**Batch cost is linear in padded tokens.** Past about 256 tokens a batch runs at 10.6–12 tokens/ms at every shape from 16×64 to 512×4, so larger batches buy no throughput. The slowest rate, 10.6 tokens/ms, puts 100 ms at 1,057 padded tokens.
+
+| Bulk run, 10⁵ synthetic catalog texts (p50 51 tokens, max 125) | Time | Texts/s |
+|---|---|---|
+| Direct, sorted by length, batches capped at 1,057 padded tokens | 430 s | 232 |
+| Direct, input order, 8 texts per batch | 678 s | 148 |
+| fastembed, input order, `batch_size=8` | 651 s | 154 |
+
+| Query latency (ms), 200 queries at random times | p50 | p95 | max |
+|---|---|---|---|
+| Idle, direct / fastembed | 3.3 / 3.3 | 3.8 / 4.3 | 5.7 / 6.0 |
+| Priority worker, bulk batches at the cap (≈91 ms each) | 50 | 88 | 136 |
+| Priority worker, bulk batches at 4× the cap (≈350 ms) | 266 | 335 | 353 |
+| Concurrent `run` on the same session, batches at the cap | 6.7 | 7.6 | 8.7 |
+| Concurrent `run` on the same session, batches at 4× the cap | 5.7 | 7.4 | 10.3 |
+
+A one-off check (not in the script) of other files and providers on a 16×64 batch: int8 on CPU 12.6 tokens/ms, fp32 11.1, fp16 7.3; the CoreML provider 2.5–2.8 for every file, because it can't compile the graph's dynamic shapes and splits it.
+
+**Decision.**
+- Loader: direct `onnxruntime` + `tokenizers`, int8 on the CPU provider. fastembed works but only as a custom model, adds 15 MB and 8 packages to the bundle (126 → 141 MB of site-packages), and batches by count in input order behind a session it hides. The engine needs length-sorted, token-capped batches (+57% throughput) and concurrent calls into one session.
+- Queries don't queue behind bulk work: they call the session concurrently and wait about 7 ms whatever the batch size. The priority queue in §5.6 is dropped.
+- Bulk batch cap: 1,024 padded tokens (batch size × longest text after sorting), about 95 ms here. It keeps cancellation and progress fine-grained, and bounds a query to one batch if a queue is ever needed. Smaller Macs do fewer tokens per ms, so M1.5 calibrates the cap at engine start from one timed batch, targeting 100 ms.
+- A full 10⁵-text embed takes about 7 minutes on this machine and longer on smaller ones. It runs as a background job.
+
+Changed ARCHITECTURE.md §5.6 (Embedder) and §7.1. Not measured: a smaller Mac, and int8 recall against fp32 (the retrieval benchmark, §7.4, covers quality).
 
 ### S8: How long does a `bm25s` rebuild take at 10⁵ documents? (2026-11-04)
 
