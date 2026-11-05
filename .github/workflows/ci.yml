@@ -33,7 +33,13 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pyright
+      # The runner ships MySQL 8 stopped, with root's password set to root. The source executor
+      # tests read it through DuckDB's mysql_scanner (engine/tests/sources/test_scanners.py).
+      - run: sudo systemctl start mysql.service
       - run: uv run pytest
+        env:
+          ONTOLOGICAL_MYSQL_URL: mysql://root:root@127.0.0.1:3306
+          ONTOLOGICAL_MYSQL_REQUIRED: "1"
 
   eval:
     name: eval (Linux)

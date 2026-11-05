@@ -8,21 +8,54 @@ is still running `KILL_AFTER_S` later, the executor kills the child, starts a ne
 Results cross the pipe small: at most `MAX_PROFILE_ROWS` rows from a probe, and `MAX_ANSWER_ROWS`
 from `run_sql`.
 
-This module covers a SQLite file attached through DuckDB. The child is `worker.py`.
+Every v1 source goes through DuckDB: a DuckDB file, Parquet, CSV and JSON files, a SQLite file,
+and Postgres and MySQL through DuckDB's scanners (`spec.py`). A server source's password is read
+from the keychain each time a child starts, and handed to it over the spawn pipe. The child is
+`worker.py`.
 """
 
 from __future__ import annotations
 
+import contextlib
 import multiprocessing
 import threading
 import time
 from dataclasses import dataclass
 from multiprocessing.connection import Connection, wait
 from multiprocessing.process import BaseProcess
-from pathlib import Path
 from typing import Any, Literal
 
 from ontological.sources import worker
+from ontological.sources.keychain import CredentialError, read_password
+from ontological.sources.spec import (
+    DuckDBSource,
+    FileSource,
+    FileTable,
+    MySQLSource,
+    PostgresSource,
+    Source,
+    SqliteSource,
+)
+
+__all__ = [
+    "MAX_ANSWER_ROWS",
+    "MAX_PROFILE_ROWS",
+    "Cancelled",
+    "Catalog",
+    "DuckDBSource",
+    "ExecutorDied",
+    "FileSource",
+    "FileTable",
+    "MySQLSource",
+    "PostgresSource",
+    "Rows",
+    "Source",
+    "SourceError",
+    "SourceExecutor",
+    "SourceQueryError",
+    "SqliteSource",
+    "StatementTimeout",
+]
 
 MAX_ANSWER_ROWS = 200
 MAX_PROFILE_ROWS = 1000
@@ -56,11 +89,6 @@ class ExecutorDied(SourceError):
 
 
 @dataclass(frozen=True)
-class SqliteSource:
-    path: Path
-
-
-@dataclass(frozen=True)
 class Rows:
     columns: list[str]
     types: list[str]  # DuckDB's type names, one per column
@@ -74,7 +102,8 @@ class Catalog:
     (`connectors/base.py::SQLDatabase`), so ingest can build its DataFrames from them."""
 
     database_name: str
-    tables: list[Record]  # table_schema, table_name, table_type ("base table" | "view")
+    tables: list[Record]  # table_schema, table_name, table_type: "base table", "view" or
+    # "materialized view"
     columns: list[Record]  # table_schema, table_name, column_name, data_type, is_nullable,
     # ordinal_position
     views: list[Record]  # table_schema, table_name, view_definition
@@ -85,7 +114,7 @@ class Catalog:
 
 
 class SourceExecutor:
-    def __init__(self, source: SqliteSource, *, kill_after_s: float = KILL_AFTER_S) -> None:
+    def __init__(self, source: Source, *, kill_after_s: float = KILL_AFTER_S) -> None:
         self.source = source
         self.kill_after_s = kill_after_s
         self._ctx = multiprocessing.get_context("spawn")
@@ -97,7 +126,8 @@ class SourceExecutor:
         self._proc: BaseProcess | None = None
         self._conn: Connection | None = None
         self._ready = False
-        self._start()
+        with contextlib.suppress(CredentialError):  # the first operation reports it
+            self._start()
 
     def __enter__(self) -> SourceExecutor:
         return self
@@ -153,11 +183,16 @@ class SourceExecutor:
     # The child
 
     def _start(self) -> None:
+        """Start a child. The spawn pipe carries its arguments, so the password never reaches
+        argv or the disk."""
+        password = None
+        if isinstance(self.source, PostgresSource | MySQLSource) and self.source.password:
+            password = read_password(self.source.password)
         parent, child = self._ctx.Pipe()
         proc = self._ctx.Process(
             target=worker.serve,
-            args=(child, str(self.source.path)),
-            name=f"source-executor:{self.source.path.name}",
+            args=(child, self.source, password),
+            name=f"source-executor:{self.source.database_name}",
             daemon=True,
         )
         proc.start()
@@ -188,7 +223,10 @@ class SourceExecutor:
         if self._proc is not None and not self._proc.is_alive():
             self._stop(kill=True)  # it died between operations: start a new one
         if self._proc is None:
-            self._start()
+            try:
+                self._start()
+            except CredentialError as e:
+                raise SourceError(f"{self.source.label}: {e}") from e
         if self._ready:
             return
         assert self._proc is not None and self._conn is not None
@@ -201,7 +239,7 @@ class SourceExecutor:
             kind, detail = "failed", "the source executor exited while it started"
         if kind != "ready":
             self._stop(kill=True)  # the next operation tries again with a new child
-            raise SourceError(f"{self.source.path}: {detail}")
+            raise SourceError(f"{self.source.label}: {detail}")
         self._ready = True
 
     def _call(self, op: str, args: tuple[Any, ...], timeout_s: float | None) -> Any:
@@ -258,7 +296,7 @@ class SourceExecutor:
     def _died(self) -> ExecutorDied:
         """The child has gone mid-operation: start a new one, and the error to raise."""
         self._restart()
-        return ExecutorDied(f"the source executor for {self.source.path} exited")
+        return ExecutorDied(f"the source executor for {self.source.label} exited")
 
     @staticmethod
     def _stopped(why: Literal["cancel", "timeout"], timeout_s: float | None) -> SourceError:
