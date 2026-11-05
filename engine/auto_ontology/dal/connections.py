@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by Ontological: read_secret comes from infra/keychain.py (the OS keychain), not Vault.
 
 """UI-managed database connections.
 
@@ -19,9 +20,9 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
-from auto_ontology.connectors.vault import read_secret
 from auto_ontology.dal import schema as s
 from auto_ontology.dal.session import store
+from auto_ontology.infra.keychain import read_secret
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 def list_connections() -> list[dict[str, Any]]:
     """Every catalog database's resolved connection.
 
-    Vault wins when it holds a secret for the database name; otherwise the
+    The keychain wins when it holds a secret for the database name; otherwise the
     stored value is used. Databases with neither are skipped, which is what
     makes this "connections" rather than "databases" — an ingested catalog with
     no UI connection has nothing to return.

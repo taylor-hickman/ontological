@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by Ontological: a vector_size within pgvector's HNSW limit for vector is indexed
+# as vector, with no halfvec conversion.
 
 """Postgres + pgvector vector store for the data and semantic layers.
 
@@ -26,6 +28,9 @@ from langchain_core.embeddings import Embeddings
 from langchain_postgres import Column, PGEngine, PGVectorStore
 
 logger = logging.getLogger(__name__)
+
+#: pgvector builds HNSW on ``vector`` up to this many dimensions; past it, ``halfvec``.
+_HNSW_MAX_VECTOR_DIMS = 2000
 
 _DATABASE_METADATA_COLUMN = "database_name"
 _LABEL_METADATA_COLUMN = "label"
@@ -309,6 +314,16 @@ class PostgresVDB:
         try:
             with psycopg.connect(self.connection_string) as conn:
                 with conn.cursor() as cur:
+                    if self.vector_size <= _HNSW_MAX_VECTOR_DIMS:
+                        # Ontological: the column stays vector, at full precision.
+                        cur.execute(
+                            sql.SQL(
+                                "CREATE INDEX IF NOT EXISTS {name} ON {table} "
+                                "USING hnsw (embedding vector_cosine_ops)"
+                            ).format(name=index_name, table=qualified)
+                        )
+                        conn.commit()
+                        return
                     cur.execute(
                         sql.SQL(
                             "ALTER TABLE {table} "

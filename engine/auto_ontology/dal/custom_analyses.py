@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by Ontological: SqlParseError comes from server/sql_errors.py, and
+# embed_custom_analyses embeds through a LangChain Embeddings, not utils.embedding.
 
 """``CustomAnalysis`` reads and writes.
 
@@ -24,10 +26,11 @@ from auto_ontology.dal import schema as s
 from auto_ontology.dal.session import store, write_transaction
 from auto_ontology.dal.sql_fragments import column_description_expr, name_contains
 from auto_ontology.dal.users import resolve_accessible_catalog_ids
-from auto_ontology.server.sql_utils import SqlParseError
+from auto_ontology.server.sql_errors import SqlParseError
 
 if TYPE_CHECKING:
-    from auto_ontology.utils.embedding import EmbedParams
+    from langchain_core.embeddings import Embeddings
+
     from auto_ontology.vdb.postgres import PostgresVDB
 
 logger = logging.getLogger(__name__)
@@ -524,13 +527,13 @@ def _custom_analysis_docs(analysis_id: str | None) -> list[dict[str, Any]]:
 
 
 def embed_custom_analyses(
-    embed_params: "EmbedParams",
+    embeddings: "Embeddings",
     vdb: "PostgresVDB",
     analysis_id: str | None = None,
     database_name: str | None = None,
 ) -> None:
     """Embed CustomAnalysis docs and append them to *vdb*."""
-    from auto_ontology.utils.embedding import embed_rows_into_vdb
+    from auto_ontology.vdb.records import embed_rows_into_vdb
 
     docs = _custom_analysis_docs(analysis_id)
     if not docs:
@@ -568,7 +571,7 @@ def embed_custom_analyses(
                 },
             }
         )
-    embed_rows_into_vdb(rows, embed_params, vdb, what="CustomAnalysis")
+    embed_rows_into_vdb(rows, embeddings, vdb, what="CustomAnalysis")
 
 
 def fetch_database_name_for_analysis(analysis_id: str) -> str | None:

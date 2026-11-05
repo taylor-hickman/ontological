@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by Ontological: adds embed_rows_into_vdb, upstream's utils.embedding helper on a
+# LangChain Embeddings in place of the NIM client.
 
 """Turn embedded rows into the records :meth:`PostgresVDB.run` writes.
 
@@ -17,15 +19,20 @@ indistinguishable in the store.
 
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Iterable
 
 if TYPE_CHECKING:
     import pandas as pd
+    from langchain_core.embeddings import Embeddings
 
     from auto_ontology.vdb.postgres import PostgresVDB
 
-__all__ = ["to_vdb_records", "write_embedded_rows"]
+__all__ = ["embed_rows_into_vdb", "to_vdb_records", "write_embedded_rows"]
+
+logger = logging.getLogger(__name__)
 
 
 def _text(row: dict[str, Any], metadata: dict[str, Any]) -> str:
@@ -107,3 +114,48 @@ def write_embedded_rows(
     """Write the embedded *rows* to *vdb*; returns the number of rows written."""
     records = to_vdb_records(rows)
     return vdb.run(records) if records else 0
+
+
+def embed_rows_into_vdb(
+    rows: list[dict[str, Any]],
+    embeddings: "Embeddings",
+    vdb: "PostgresVDB",
+    *,
+    what: str,
+) -> int:
+    """Embed already-built rows as passages, all or nothing, and append them to *vdb*.
+
+    For the small, interactive writes -- one analysis, one attribute -- where a
+    failure should reach the caller. Raises ``RuntimeError`` when the embedder
+    fails or returns no embeddings; *what* names the rows in that message.
+    Returns the number of rows written.
+    """
+    if not rows:
+        return 0
+    before = time.time()
+    try:
+        vectors = embeddings.embed_documents([row.get("text") or "" for row in rows])
+    except Exception as exc:
+        raise RuntimeError(
+            f"Embedding {len(rows)} {what} row(s) via {type(embeddings).__name__} "
+            f"failed: {exc}"
+        ) from exc
+    embedded = [
+        {**row, "metadata": {**(row.get("metadata") or {}), "embedding": vector}}
+        for row, vector in zip(rows, vectors)
+        if vector
+    ]
+    if not embedded:
+        raise RuntimeError(
+            f"Embedding step produced 0/{len(rows)} {what} rows with embeddings."
+        )
+    written = write_embedded_rows(vdb, embedded)
+    logger.info(
+        "Embedded and appended %d/%d %s row(s) via %s in %.2fs.",
+        len(embedded),
+        len(rows),
+        what,
+        type(vdb).__name__,
+        time.time() - before,
+    )
+    return written
