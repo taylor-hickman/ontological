@@ -13,7 +13,7 @@ import stat
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -25,7 +25,12 @@ from claude_agent_sdk import (
     SystemMessage,
     TextBlock,
 )
-from claude_agent_sdk.types import AssistantMessageError, RateLimitStatus, RateLimitType
+from claude_agent_sdk.types import (
+    AssistantMessageError,
+    ModelUsage,
+    RateLimitStatus,
+    RateLimitType,
+)
 
 from ontological.llm.calls import LlmCall
 
@@ -71,6 +76,11 @@ def said(
     return AssistantMessage(content=[TextBlock(text)], model=model, error=error)
 
 
+def usage(inputs: int, outputs: int, cost: float) -> ModelUsage:
+    """A model_usage entry, with the fields the gateway's tests read."""
+    return cast(ModelUsage, {"inputTokens": inputs, "outputTokens": outputs, "costUSD": cost})
+
+
 def result(
     *,
     structured: Any = None,
@@ -90,7 +100,7 @@ def result(
         total_cost_usd=0.0004,
         result=text,
         structured_output=structured,
-        model_usage={model: {"inputTokens": 120, "outputTokens": 30, "costUSD": 0.0004}},
+        model_usage={model: usage(120, 30, 0.0004)},
         api_error_status=api_error_status,
     )
 

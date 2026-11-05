@@ -399,6 +399,7 @@ dependencies = [
     { name = "claude-agent-sdk" },
     { name = "fastapi" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
     { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
@@ -409,6 +410,7 @@ requires-dist = [
     { name = "claude-agent-sdk", specifier = ">=0.2.178" },
     { name = "fastapi", specifier = ">=0.162.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+    { name = "pydantic", specifier = ">=2.14.2" },
     { name = "sqlalchemy", specifier = ">=2.0.52,<2.1" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]

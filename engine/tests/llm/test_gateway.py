@@ -1,10 +1,11 @@
-"""ClaudeGateway.structured() and text() (ARCHITECTURE.md §6.1–§6.5), against a scripted
+"""ClaudeGateway.structured() and text() (ARCHITECTURE.md §6.1 to §6.5), against a scripted
 `query()`, so no `claude` is spawned and no quota is spent. tests/contract checks the same
 behaviour against the real binary."""
 
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,8 +28,10 @@ from sdk_fakes import (
     limit,
     result,
     said,
+    usage,
 )
 
+from ontological.llm import gateway as gateway_module
 from ontological.llm.calls import LlmCall, cache_key
 from ontological.llm.env import call_env
 from ontological.llm.gateway import ClaudeGateway, GatewayStatus
@@ -221,7 +224,7 @@ def test_the_answering_model_ignores_claude_codes_side_calls_in_model_usage(
 ) -> None:
     done = result(structured={"pk": ["id"]}, model=OPUS)
     assert done.model_usage is not None
-    done.model_usage[HAIKU] = {"inputTokens": 50, "outputTokens": 5, "costUSD": 0.00001}
+    done.model_usage[HAIKU] = usage(50, 5, 0.00001)
     h = Harness(tmp_path, [[init(OPUS), said(model=OPUS), done]])
     h.structured("bridge_sql")
     assert h.rows[0].answered_model == OPUS
@@ -321,7 +324,7 @@ def test_a_rejected_rate_limit_makes_the_gateway_limited_until_it_resets(tmp_pat
 def test_a_failed_login_returns_none_and_needs_login(tmp_path: Path) -> None:
     script = [
         init(),
-        said("Not logged in · Please run /login", model="<synthetic>", error="authentication_failed"),
+        said("Not logged in", model="<synthetic>", error="authentication_failed"),
         result(is_error=True, text="Not logged in · Please run /login"),
         ResultError("Not logged in", {"subtype": "success", "is_error": True}),
     ]
@@ -421,3 +424,19 @@ def test_check_reports_a_failed_login(tmp_path: Path) -> None:
     h = Harness(tmp_path, [script])
     status = asyncio.run(h.gateway.check())
     assert status.installed and status.logged_in is False and status.state == "needs_login"
+
+
+def test_check_gives_up_on_a_claude_that_does_not_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hung = tmp_path / "hung" / "claude"
+    hung.parent.mkdir()
+    hung.write_text(f"#!/bin/sh\necho $$ > {tmp_path / 'pid'}\nexec sleep 30\n")
+    hung.chmod(0o755)
+    monkeypatch.setattr(gateway_module, "VERSION_TIMEOUT_S", 0.5)
+    h = Harness(tmp_path, [], cli_path=hung)
+    status = asyncio.run(h.gateway.check())
+    assert status.state == "not_installed" and h.query.spawns == []
+    pid = int((tmp_path / "pid").read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)

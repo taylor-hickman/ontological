@@ -57,6 +57,6 @@ def test_every_part_changes_the_key(field: str, value: Any) -> None:
 
 
 def test_parts_cannot_run_into_each_other() -> None:
-    a = cache_key(**(BASE | {"system": "ab", "user": "c"}))
-    b = cache_key(**(BASE | {"system": "a", "user": "bc"}))
-    assert a != b
+    ab_c: dict[str, Any] = {"system": "ab", "user": "c"}
+    a_bc: dict[str, Any] = {"system": "a", "user": "bc"}
+    assert cache_key(**(BASE | ab_c)) != cache_key(**(BASE | a_bc))
