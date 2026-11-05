@@ -131,7 +131,12 @@ def parse_args(argv: Sequence[str]) -> tuple[Config, bool]:
 
 
 def emit(**fields: Any) -> None:
-    print(json.dumps(fields), flush=True)
+    try:
+        print(json.dumps(fields), flush=True)
+    except BrokenPipeError:
+        # The caller read the first line and has gone: Electron quits and leaves its engine
+        # running. Later lines go nowhere, so an error path still stops the store.
+        sys.stdout = open(os.devnull, "w")  # noqa: SIM115 - the engine's stdout from now on
 
 
 def announce(info: discovery.EngineInfo, *, started: bool) -> None:

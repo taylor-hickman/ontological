@@ -1,6 +1,7 @@
 // The typed bridge the preload exposes as `window.ontological` (DESIGN.md §3.4).
 // Main validates every argument it receives, so these types are a contract, not a guarantee.
 
+import type { EngineState } from './engine'
 import type { ScreenId, ThemeSource } from './shell'
 
 /** A native file-dialog filter, as Electron takes it: `{ name: 'DuckDB', extensions: ['duckdb'] }`. */
@@ -43,6 +44,10 @@ export interface OntologicalApi {
   showContextMenu(items: ContextMenuItem[]): Promise<string | null>
   /** A system notification, sent only while the window is not focused. Resolves to whether it was shown. */
   notify(title: string, body: string): Promise<boolean>
+  /** The engine's state; while it runs, `engineUrl` and `token` reach its API (ARCHITECTURE.md §4.4). */
+  engine(): Promise<EngineState>
+  /** Subscribes to engine state changes; returns the unsubscribe function. */
+  onEngine(listener: (state: EngineState) => void): () => void
 }
 
 export const IPC = {
@@ -52,7 +57,9 @@ export const IPC = {
   openFile: 'dialog:open-file',
   saveFile: 'dialog:save-file',
   showContextMenu: 'menu:context',
-  notify: 'notify'
+  notify: 'notify',
+  engine: 'engine:get',
+  engineState: 'engine:state'
 } as const
 
 /** The argv prefix main uses to hand the preload its initial state. */

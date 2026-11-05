@@ -49,6 +49,12 @@ interface Lease {
   renew_every_s: number
 }
 
+interface Found {
+  info: EngineInfo
+  /** The engine process, when this app started it; null when it attached. */
+  owned: Spawned | null
+}
+
 interface Held {
   info: EngineInfo
   lease: string
@@ -111,7 +117,7 @@ export class EngineSupervisor {
       if (attempt > 0) await this.io.sleep(RETRY_MS)
       if (this.quitting || generation !== this.generation) return
 
-      let found = skipLive ? null : await this.findLive()
+      let found: Found | null = skipLive ? null : await this.findLive()
       if (!found) {
         try {
           found = await this.startEngine()
@@ -138,7 +144,7 @@ export class EngineSupervisor {
     this.set({ status: 'failed', error: 'The engine didn’t give this app a lease; see logs/engine.log' })
   }
 
-  private async findLive(): Promise<{ info: EngineInfo; owned: null } | null> {
+  private async findLive(): Promise<Found | null> {
     const info = this.io.readEngineJson()
     if (!info || !this.io.pidAlive(info.pid)) return null
     return (await this.answers(info)) ? { info, owned: null } : null
@@ -154,7 +160,7 @@ export class EngineSupervisor {
     }
   }
 
-  private async startEngine(): Promise<{ info: EngineInfo; owned: Spawned | null }> {
+  private async startEngine(): Promise<Found> {
     let child: Spawned
     try {
       child = this.io.spawn()

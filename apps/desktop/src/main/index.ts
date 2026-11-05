@@ -8,6 +8,8 @@ import {
   dialog,
   ipcMain,
   nativeTheme,
+  net,
+  protocol,
   screen,
   session,
   shell,
@@ -15,8 +17,14 @@ import {
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions
 } from 'electron'
+import type { EngineState } from '@shared/engine'
 import { INITIAL_STATE_ARG, IPC, type InitialShellState, type ShellCommand } from '@shared/ipc'
 import { WINDOW_BACKGROUND, isScreenId, isThemeSource, type ThemeSource } from '@shared/shell'
+import { APP_ORIGIN, APP_SCHEME, appProtocolHandler } from './app-protocol'
+import { contentSecurityPolicy } from './csp'
+import { engineCommand } from './engine/command'
+import { nodeEngineIo } from './engine/io'
+import { EngineSupervisor } from './engine/supervisor'
 import { buildMenuTemplate } from './menu'
 import { parseContextMenuItems, parseFileFilters, parseFileName, parseNotification } from './validate'
 import { MIN_SIZE, StateFile, fitBounds, type ShellState } from './window-state'
@@ -26,6 +34,11 @@ const isDev = !app.isPackaged && Boolean(process.env.ELECTRON_RENDERER_URL)
 
 // Tests point this at a temporary folder, so each run starts from a clean state.
 if (process.env.ONTOLOGICAL_USER_DATA) app.setPath('userData', process.env.ONTOLOGICAL_USER_DATA)
+
+// The renderer loads from app://ontological/ (app-protocol.ts). Privileges must be set before ready.
+protocol.registerSchemesAsPrivileged([
+  { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }
+])
 
 /**
  * Centres the traffic lights on the 52 px top bar (DESIGN.md §3.1). Measured on macOS 26, where
@@ -38,6 +51,16 @@ const stateFile = new StateFile(join(app.getPath('userData'), 'shell-state.json'
 let state: ShellState = stateFile.load()
 let mainWindow: BrowserWindow | null = null
 let saveTimer: NodeJS.Timeout | undefined
+
+/** How long a document waits for the engine before it loads without it, and reloads once it serves. */
+const ENGINE_WAIT_MS = 2000
+
+let supervisor: EngineSupervisor | null = null
+let engineState: EngineState = { status: 'starting' }
+const engineWaiters = new Set<() => void>()
+/** The engine port in the CSP of the window's document: undefined while none has been served. */
+let documentPort: number | null | undefined
+let leaseReleased = false
 
 function saveState(): void {
   clearTimeout(saveTimer)
@@ -52,6 +75,81 @@ function saveState(): void {
 function saveStateSoon(): void {
   clearTimeout(saveTimer)
   saveTimer = setTimeout(saveState, 400)
+}
+
+function enginePort(state: EngineState): number | null {
+  return state.status === 'running' ? Number(new URL(state.engineUrl).port) : null
+}
+
+function isWaiting(state: EngineState): boolean {
+  return state.status === 'starting' || state.status === 'restarting'
+}
+
+function onEngineState(state: EngineState): void {
+  engineState = state
+  if (!isWaiting(state)) {
+    for (const wake of engineWaiters) wake()
+  }
+  const win = mainWindow
+  if (!win) return
+  win.webContents.send(IPC.engineState, state)
+  // A document's CSP is fixed when it loads, so an engine on a new port needs a new document.
+  const port = enginePort(state)
+  if (port !== null && documentPort !== undefined && port !== documentPort) win.webContents.reload()
+}
+
+/** The CSP for a document loading now. It waits a little for the engine, so a warm start loads once. */
+async function documentPolicy(): Promise<string> {
+  documentPort = undefined
+  if (isWaiting(engineState)) {
+    await new Promise<void>((resolve) => {
+      const wake = (): void => {
+        clearTimeout(timer)
+        engineWaiters.delete(wake)
+        resolve()
+      }
+      const timer = setTimeout(wake, ENGINE_WAIT_MS)
+      engineWaiters.add(wake)
+    })
+  }
+  documentPort = enginePort(engineState)
+  return contentSecurityPolicy(documentPort)
+}
+
+function startEngineSupervisor(): void {
+  let command: string[]
+  try {
+    command = engineCommand({ env: process.env, isPackaged: app.isPackaged, appPath: app.getAppPath() })
+  } catch (err) {
+    onEngineState({ status: 'failed', error: (err as Error).message })
+    return
+  }
+  supervisor = new EngineSupervisor(nodeEngineIo({ appData: app.getPath('userData'), command }), onEngineState)
+  void supervisor.start()
+}
+
+function serveRenderer(): void {
+  protocol.handle(
+    APP_SCHEME,
+    appProtocolHandler({
+      root: join(import.meta.dirname, '../renderer'),
+      fetchFile: (url) => net.fetch(url),
+      policy: documentPolicy
+    })
+  )
+  // In development Vite serves the renderer; its pages get the same CSP header.
+  const devUrl = isDev ? process.env.ELECTRON_RENDERER_URL : undefined
+  if (devUrl) {
+    session.defaultSession.webRequest.onHeadersReceived({ urls: [`${new URL(devUrl).origin}/*`] }, (details, callback) => {
+      if (details.resourceType !== 'mainFrame') {
+        callback({})
+        return
+      }
+      void documentPolicy().then((csp) =>
+        callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [csp] } })
+      )
+    })
+  }
 }
 
 function currentBackground(): string {
@@ -152,7 +250,7 @@ function createWindow(): void {
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    void win.loadFile(join(import.meta.dirname, '../renderer/index.html'))
+    void win.loadURL(`${APP_ORIGIN}/index.html`)
   }
 }
 
@@ -209,6 +307,11 @@ function registerIpc(): void {
     })
   })
 
+  ipcMain.handle(IPC.engine, (event) => {
+    fromMainWindow(event)
+    return engineState
+  })
+
   ipcMain.handle(IPC.notify, (event, title: unknown, body: unknown) => {
     const win = fromMainWindow(event)
     const n = parseNotification(title, body)
@@ -228,6 +331,8 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler(() => false)
 
   registerIpc()
+  serveRenderer()
+  startEngineSupervisor()
   installMenu()
   createWindow()
 
@@ -241,4 +346,12 @@ app.on('window-all-closed', () => {
   if (!isMac) app.quit()
 })
 
-app.on('before-quit', saveState)
+// Quitting releases the lease and leaves the engine running (§4.4). The release waits at most a
+// second for an engine that doesn't answer.
+app.on('before-quit', (event) => {
+  saveState()
+  if (leaseReleased || !supervisor) return
+  leaseReleased = true
+  event.preventDefault()
+  void supervisor.quit().finally(() => app.quit())
+})

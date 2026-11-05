@@ -2,6 +2,7 @@
 // functions and nothing else: no ipcRenderer, no Node.
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import type { EngineState } from '@shared/engine'
 import { INITIAL_STATE_ARG, IPC, type InitialShellState, type OntologicalApi, type ShellCommand } from '@shared/ipc'
 
 function readInitialState(): InitialShellState {
@@ -28,7 +29,13 @@ const api: OntologicalApi = {
   openFile: (filters) => ipcRenderer.invoke(IPC.openFile, filters),
   saveFile: (name) => ipcRenderer.invoke(IPC.saveFile, name),
   showContextMenu: (items) => ipcRenderer.invoke(IPC.showContextMenu, items),
-  notify: (title, body) => ipcRenderer.invoke(IPC.notify, title, body)
+  notify: (title, body) => ipcRenderer.invoke(IPC.notify, title, body),
+  engine: () => ipcRenderer.invoke(IPC.engine),
+  onEngine: (listener) => {
+    const handler = (_event: IpcRendererEvent, state: EngineState): void => listener(state)
+    ipcRenderer.on(IPC.engineState, handler)
+    return () => ipcRenderer.removeListener(IPC.engineState, handler)
+  }
 }
 
 contextBridge.exposeInMainWorld('ontological', api)

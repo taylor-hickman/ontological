@@ -1,7 +1,7 @@
 // The supervisor's I/O on a real machine: engine.json, pids, HTTP to 127.0.0.1, and the engine
 // process (ARCHITECTURE.md §4.3, §4.4).
 
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { join } from 'node:path'
@@ -115,7 +115,7 @@ function spawnEngine(appData: string, command: string[], env: NodeJS.ProcessEnv)
   const logs = join(appData, 'logs')
   mkdirSync(logs, { recursive: true })
   const log = openSync(join(logs, 'engine.log'), 'a')
-  let child
+  let child: ChildProcess
   try {
     child = spawn(file, [...args, '--app-data', appData], {
       detached: true,
@@ -126,6 +126,9 @@ function spawnEngine(appData: string, command: string[], env: NodeJS.ProcessEnv)
     closeSync(log)
   }
 
+  const stdout = child.stdout
+  if (!stdout) throw new Error('the engine has no stdout')
+
   const exit = new Promise<number | null>((resolve) => {
     child.once('exit', (code) => resolve(code))
     // A command that can't run emits 'error' and never 'exit'.
@@ -133,12 +136,13 @@ function spawnEngine(appData: string, command: string[], env: NodeJS.ProcessEnv)
   })
   const line = new Promise<EngineLine | null>((resolve) => {
     child.once('error', (err) => resolve({ error: `Couldn’t run ${file}: ${err.message}` }))
-    const lines = createInterface({ input: child.stdout })
+    const lines = createInterface({ input: stdout })
     lines.once('line', (text) => {
+      // Before close(), which emits 'close' at once.
+      resolve(parseLine(text))
       lines.close()
       // Keep draining, so nothing the engine prints later can fill the pipe.
-      child.stdout.resume()
-      resolve(parseLine(text))
+      stdout.resume()
     })
     lines.once('close', () => resolve(null))
   })
