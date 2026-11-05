@@ -5,8 +5,11 @@ description = "Ontological's engine: catalog, compile, retrieval, answer agent a
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
+    "alembic>=1.19.1",
     "claude-agent-sdk>=0.2.178",
     "fastapi>=0.162.0",
+    "psycopg[binary]>=3.3.4",
+    "sqlalchemy>=2.0.52,<2.1",
     "uvicorn>=0.54.0",
 ]
 
@@ -19,10 +22,14 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+# auto_ontology is upstream's package, vendored under its own name so each file diffs cleanly
+# against upstream (auto_ontology/UPSTREAM.md).
+module-name = ["ontological", "auto_ontology"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["auto_ontology"]  # vendored upstream code keeps upstream's formatting
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]

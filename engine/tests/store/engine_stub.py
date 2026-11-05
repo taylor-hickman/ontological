@@ -1,15 +1,18 @@
 """A stand-in engine for the lifecycle tests: runs ontological.store.pg the way the engine will,
 as a process the tests can kill -9.
 
-    engine_stub.py <appData> <bin> [--prepare-sql SQL] [--restore DUMP] [--die-at STEP]
+    engine_stub.py <appData> <bin> [--chains] [--prepare-sql SQL] [--restore DUMP | --migrate]
+                   [--die-at STEP]
 
 ensure_running(), then one JSON line: {"postmaster_pid", "action", "notes", "seconds"}. Then it
 waits; SIGTERM or SIGINT stops the server with a quit dump and prints {"quit_dump": name}. An
 error prints {"error", "type"} and exits 1.
 
---prepare-sql runs SQL in the store during first launch (where the Alembic chains will run).
---restore restores DUMP once the server is up, then exits. --die-at exits with code 9, as kill -9
-would, at one step:
+--chains runs both Alembic chains during first launch, as the engine does; without it the store
+is left unmigrated. --prepare-sql runs SQL in the store during first launch, after the chains.
+--restore restores DUMP once the server is up, then exits. --migrate runs `migrate` once the
+server is up, prints {"migrated": <the premigrate dump's name, or null>} and exits. --die-at exits
+with code 9, as kill -9 would, at one step:
 
     prepare-store   while first launch prepares the store in pgdata.initdb/
     rename-initdb   right after pgdata.initdb/ becomes pgdata/
@@ -74,8 +77,10 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("app_data", type=Path)
     ap.add_argument("bin", type=Path)
+    ap.add_argument("--chains", action="store_true")
     ap.add_argument("--prepare-sql")
     ap.add_argument("--restore", type=Path)
+    ap.add_argument("--migrate", action="store_true")
     ap.add_argument("--die-at")
     args = ap.parse_args(argv)
     layout = pg.Layout(args.app_data, args.bin)
@@ -85,6 +90,8 @@ def main(argv: list[str]) -> int:
     def prepare(lay: pg.Layout) -> None:
         if args.die_at == "prepare-store":
             os._exit(9)
+        if args.chains:
+            pg.migrate_new_store(lay)
         if args.prepare_sql:
             pg.psql(lay, args.prepare_sql)
 
@@ -93,6 +100,10 @@ def main(argv: list[str]) -> int:
         server = pg.ensure_running(layout, prepare_store=prepare)
         if args.restore:
             pg.restore(layout, args.restore)
+            return 0
+        if args.migrate:
+            dump = pg.migrate(layout)
+            print(json.dumps({"migrated": dump.name if dump else None}), flush=True)
             return 0
     except pg.PgError as e:
         print(json.dumps({"error": str(e), "type": type(e).__name__}), flush=True)

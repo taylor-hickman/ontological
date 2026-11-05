@@ -111,7 +111,7 @@ Produces: a headless engine that starts and adopts its own Postgres, migrates bo
 | M0.1 | Repo skeleton per §10: `engine/` (uv, Python 3.12), `apps/desktop/` placeholder, `eval/`, `tools/spikes/`, CI running ruff, pyright and pytest on macOS arm64 | |
 | M0.2 | Spikes S1, S2, S4, S5, S6, S7, S8, S9 | M0.1 |
 | M0.3 | **TDD** `store/pg.py`: initdb, start, adopt, stop, quit dump, restore, the disk-full pause. The lifecycle test list in §12 written first, against the S4 binaries | S4, S5 |
-| M0.4 | Vendor upstream's Alembic chain into `upstream/`; Ontological's chain for `app` and `ops` with its version table in `ops` (§5.2); pre-migration dump and restore on failure | M0.3 |
+| M0.4 | Vendor upstream's Alembic chain into the top-level package `auto_ontology` (`engine/auto_ontology/`); Ontological's chain for `app` and `ops` with its version table in `ops` (§5.2); pre-migration dump and restore on failure | M0.3 |
 | M0.5 | **TDD** Engine process: FastAPI on `127.0.0.1` with a random port, bearer token, `engine.json` at mode 0600, leases with idle shutdown (§4.4), headless mode | M0.3 |
 | M0.6 | **TDD** `ClaudeGateway.structured()` and `text()`: route table accepting aliases and full IDs, env sanitization (§6.2, with S1's strip list), cache keyed per §6.4 including effort, `ops.llm_call` logging, the retry rule, `GatewayStatus` from `claude --version` and a `ping`. Gateway contract tests behind a flag | S1, S2, M0.4 |
 | M0.7 | Eval data: download scripts for BIRD Mini-Dev and WWI; a separate eval Postgres cluster on the bundled binaries that holds WWI | M0.3 |
@@ -123,7 +123,7 @@ Produces: `ontological ask "<question>" --source chinook` and `ontological eval 
 
 | Task | Work | after |
 |---|---|---|
-| M1.1 | Vendor upstream's DAL, `catalog/store/` and `vdb/postgres.py` with the owner and group stub (§5.4); `zone_ids=None` everywhere | M0.4 |
+| M1.1 | Vendor upstream's DAL, `catalog/store/` and `vdb/postgres.py` into `engine/auto_ontology/` with the owner and group stub (§5.4); `zone_ids=None` everywhere | M0.4 |
 | M1.2 | Source executor process for DuckDB-attached SQLite: extract, `run_sql`, `probe`, cancel by `interrupt()` then kill after 2 s (§5.6) | M0.5 |
 | M1.3 | Minimal ingest: extract and write Chinook's catalog through the DAL (no diff, no query history) | M1.1, M1.2 |
 | M1.4 | Minimal split compile: profiling, then `table_keys`, `column_descriptions` and `table_terms` with upstream's prompts, sequential, no packing; semantic FKs from declared FKs only | M0.6, M1.3 |
@@ -399,7 +399,7 @@ The package name touches more files than all of that. 72 of the 79 files import 
 - §5.4's plan holds on the bundled binaries. M2.1's test cluster is an `initdb`'d S4 tree with the steps `run.sh` takes, and no Docker.
 - M2.1's gate fails on any skip, as `report.py` does. Pytest's exit status isn't enough: a missing or wrong connection skips about 95% of the suite.
 - M1.1 makes the engine edits above. `infra/postgres.py` gets a socket form, because the engine has no TCP port or password (§5.3).
-- Recommended for M1.1: keep the vendored package's name, `auto_ontology`, as a second top-level package in the engine's distribution. Then the 72 files keep their imports and each vendored file diffs cleanly against upstream. This changes §10's layout, and M1.1 decides.
+- Recommended for M1.1: keep the vendored package's name, `auto_ontology`, as a second top-level package in the engine's distribution. Then the 72 files keep their imports and each vendored file diffs cleanly against upstream. This changes §10's layout, and M1.1 decides. (M0.4 decided it, since it vendored first: `auto_ontology` is a top-level package, and §10 now says so.)
 - Counting the Helm test that gets dropped, M2.1's conformance suite is 780 tests, 21 of them against the ported interchange module.
 
 **ARCHITECTURE.md changed.** §5.4 now says what S6 ran and that the seed also needs upstream's catalog ingest. §11's rows for `dal/*` and the test-only code list the edits and the extra files.
