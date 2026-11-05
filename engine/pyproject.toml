@@ -8,6 +8,11 @@ dependencies = [
     "alembic>=1.19.1",
     "claude-agent-sdk>=0.2.178",
     "fastapi>=0.162.0",
+    "keyring>=25",
+    "langchain-core>=1.6.1",
+    "langchain-postgres>=0.0.17",
+    "numpy>=2.5.2",
+    "pandas>=2.3.3,<3",
     "psycopg[binary]>=3.3.4",
     "pydantic>=2.14.2",
     "sqlalchemy>=2.0.52,<2.1",
@@ -42,6 +47,7 @@ include = ["ontological", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]  # tests/fakes.py
 addopts = ["-ra", "--strict-markers", "--strict-config"]
 xfail_strict = true
 

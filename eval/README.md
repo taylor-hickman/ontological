@@ -2,7 +2,7 @@
 
 The frozen question-set IDs (`sets/{dev,heldout,smoke}.json`), the runner, the verifier and the control arm. The sets are frozen in M0.8 and the runner arrives in M1.9. See [BUILD_PLAN.md, Eval set](../docs/BUILD_PLAN.md#eval-set).
 
-So far it holds the eval's data: a download script, and a Postgres cluster of its own that holds Wide World Importers (M0.7). It's a uv project on Python 3.12 that uses the engine's `ontological.store.pg` for the cluster. From this directory:
+So far it holds the eval's data: a download script, a Postgres cluster of its own that holds Wide World Importers (M0.7), and the frozen question sets (M0.8). It's a uv project on Python 3.12 that uses the engine's `ontological.store.pg` for the cluster. From this directory:
 
 ```sh
 uv sync
@@ -11,6 +11,7 @@ uv run python -m ontological_eval cluster up      # start or adopt the cluster; 
 uv run python -m ontological_eval cluster check   # each WWI table's row count against its CSV
 uv run python -m ontological_eval cluster status  # running or not, and the psql line to connect
 uv run python -m ontological_eval cluster down
+uv run python -m ontological_eval sets check      # every set's gold SQL runs and returns rows
 ```
 
 ## The data
@@ -46,6 +47,24 @@ Then connect with the line `cluster status` prints:
 psql -h "<home>/cluster/pgsocket" -p 5432 -U ontological -d wideworldimporters
 ```
 
+## The sets
+
+`sets/{dev,heldout,smoke}.json` hold question IDs only, by source: `{"wwi": [...], "bird": [...]}`. WWI's IDs are `question_id` in `evaluation.json` and BIRD's are `question_id` in `mini_dev_sqlite.jsonl`. [`ontological_eval/sets.py`](ontological_eval/sets.py) chose them with a fixed seed (`sets freeze`):
+
+| Set | WWI | BIRD |
+|---|---|---|
+| dev | 36 | 40: 10 from each of the four databases |
+| heldout | 0 | 40 more: 12 each from `financial`, `california_schools` and `formula_1`, and the 4 `debit_card_specializing` questions dev didn't take (it has 14) |
+| smoke | 10 from dev | 10 from dev: 3, 3, 2 and 2 |
+
+Each BIRD draw follows Mini-Dev's own difficulty mix over all 500 questions (8 simple, 32 moderate, 460 challenging), so dev and held-out each get 1 simple, 2 moderate and 37 challenging.
+
+[`ontological_eval/questions.py`](ontological_eval/questions.py) loads the questions and their gold SQL. It fixes two WWI gold queries that don't run as published (27 lost its newlines; 4 selects a column it doesn't group by) and lists five that every set leaves out, because their gold SQL returns no rows on the data: 1 asks about 2024, and WWI's orders end in 2016; 7, 24, 36 and 41 join special deals on a stock item that both deals leave NULL.
+
+`sets check` runs each set's gold SQL natively, BIRD's with `sqlite3` on the read-only `.sqlite` file and WWI's on the eval cluster, and fails if any query errors, returns no rows, or returns only NULLs. It needs the data and `cluster up`.
+
+The sets are frozen: `sets freeze` won't overwrite them without `--force`, and after M0 nothing in `sets/` changes unless a question turns out to be broken, and then as a commit of its own that says why.
+
 ## Tests
 
 ```sh
@@ -53,4 +72,4 @@ uv run ruff check . && uv run ruff format --check . && uv run pyright
 ONTOLOGICAL_PG_BIN=<tree>/bin uv run pytest
 ```
 
-`tests/test_fetch.py` runs `fetch` against a local HTTP server that answers range requests. `tests/test_cluster.py` drives the bundled binaries on a small WWI-shaped dataset, and skips without `ONTOLOGICAL_PG_BIN` unless `ONTOLOGICAL_PG_REQUIRED=1`, which `postgres.yml` sets.
+`tests/test_sets.py` chooses sets from synthetic questions shaped like Mini-Dev and checks gold SQL on a small SQLite file. `tests/test_fetch.py` runs `fetch` against a local HTTP server that answers range requests. `tests/test_cluster.py` drives the bundled binaries on a small WWI-shaped dataset, and skips without `ONTOLOGICAL_PG_BIN` unless `ONTOLOGICAL_PG_REQUIRED=1`, which `postgres.yml` sets.
