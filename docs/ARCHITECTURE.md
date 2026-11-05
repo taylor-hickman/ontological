@@ -735,7 +735,7 @@ Port upstream's three skills as one Claude Code plugin (`plugins/claude-code/`):
 ontological/
   apps/desktop/                 Electron (electron-vite)
     src/main/                   window, engine supervisor, engine.json reader, menus
-    src/preload/                exposes {engineUrl, token} only
+    src/preload/                typed bridge: native dialogs, context menus, notifications, theme (DESIGN.md §3.4); {engineUrl, token} with the engine supervisor
     src/renderer/               React app (§9.1)
   engine/                       Python package `ontological` (uv-managed)
     ontological/
