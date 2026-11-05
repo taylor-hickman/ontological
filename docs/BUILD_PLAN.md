@@ -307,6 +307,34 @@ Library validation is only enforced with System Integrity Protection on. GitHub'
 
 **ARCHITECTURE.md changed.** §10 gives the measured size, the configure choices, the `@rpath` relink and the entitlement.
 
+### S5: Does the lifecycle in §5.3 work? (2026-11-04)
+
+**What ran.** `tools/spikes/s5_pg_lifecycle/run.py`, on an Apple M5 Max with macOS 26.5 and SIP on, against the signed S4 tree (PostgreSQL 17.11, pgvector 0.8.7) and a PostgreSQL 16.15 build with the same pgvector. `pg.py` beside it is the prototype `store/pg.py`. It uses only the standard library and drives `pg_ctl`, `psql`, `pg_dump` and `pg_restore`. Each engine is `pg.py` run as a subprocess in its own session, so the script can `kill -9` it the way a crash would. Every `<appData>` has a space in its path, as `Application Support` does. `postgres.yml` builds PostgreSQL 16 and runs the same script after `smoke.sh`.
+
+**Result: all 8 cases pass, 83 checks, in about 15 s.** Three full runs gave the same result.
+
+| Case | What it checks | Result |
+|---|---|---|
+| First launch | `initdb` and start take 0.43 s. UTF-8, locale `C`, no TCP, 128 MB, 30 connections, a 0700 socket directory, `vector` and `pg_trgm`, every `host` line in `pg_hba` set to `reject` | pass |
+| Normal stop | SIGTERM writes the quit dump and runs a fast stop, which removes `postmaster.pid`. The next start takes 0.12 s and needs no recovery | pass |
+| `kill -9` then adopt | Killing the engine's whole process group leaves the postmaster running, because `pg_ctl` puts it in its own session. The next engine adopts the same pid in 10 ms, with no restart and no lost rows | pass |
+| Crash | `kill -9` of the engine and then the postmaster. The next start replays WAL, and committed rows survive | pass |
+| Stale `postmaster.pid` | The pid now belongs to `sleep`, and then to another cluster's postmaster. `pg_ctl status` reports "server is running", and a plain `pg_ctl start` refuses. With `postmaster.pid` deleted, the start still refuses, because `.s.PGSQL.5432.lock` holds the same pid. `pg.py` sees that neither pid is our server, clears both lock files and starts. Postgres replays WAL, and the other cluster keeps running | pass, changed §5.3 |
+| Second engine | A second engine adopts the first engine's server, and killing it leaves the server up. When three engines first-launch at once, one runs `initdb` and two adopt, all on one postmaster. Without `pg.lock`, all three fail inside `initdb`, in some runs with a PANIC | pass, changed §5.3 |
+| Failed migration | Revision 2 commits and revision 3 fails. The engine restores the pre-migration dump while a pooled connection is open. The version, schema, rows and HNSW results all match the state before migrating. `pg_restore --clean` fails instead (`cannot drop schema app`) and leaves revision 2's table behind | pass, changed §5.3 |
+| 16 → 17 | `pg.py` on the 16 binaries makes a store, and `pg.py` on 17 moves it in 0.5 s, with rows, `vector`, the HNSW index and `ops.version` intact. Three variants: a clean quit dump; a crash after more writes, where the engine reports the stale dump and restores the 500 rows it holds, not 600; and a 16 server still running, which the engine dumps live with `pg_dump` 17 and stops with `SIGINT`, keeping all 600 rows | pass, changed §5.3 |
+
+**Decision.** The lifecycle works with the binaries S4 ships. It needed these changes, and §5.3 now says each one:
+- Adopting checks that the process is named `postgres` and that `SHOW data_directory` through the advertised socket gives this data directory. A live pid alone is not enough. If the server isn't ours, the engine deletes `postmaster.pid` and the socket's lock file, which carries the same pid.
+- An `flock` on `<appData>/pg.lock` covers initdb, start, adopt and stop.
+- `initdb` uses `--auth-local=trust --auth-host=reject`, not `-A trust`, and writes into a temporary directory that is renamed when it finishes.
+- A restore drops and recreates the database instead of using `pg_restore --clean`, and the engine's connection pool reconnects afterwards.
+- Dumps are written under a temporary name and carry their kind in the file name. A dump counts as current for a major-version move only if it is a quit dump, newer than the old server's last start, and the old server stopped cleanly. If the old server is still running, the engine dumps it live.
+
+For M0.3: `pg.py`'s structure carries over (`Layout`, `inspect_pid_file`, `ensure_running`, `stop`, `migrate`, `restore`, `upgrade_major`), and so does `run.py`'s case list, as the §12 lifecycle tests. Three things the spike left out: real Alembic chains in place of the SQL-string revisions, the disk-full pause, and the 103-byte socket path limit. Under `/Users/<name>/Library/Application Support`, that limit allows a home folder name of up to 33 bytes. `pg.py` refuses a longer path and says why.
+
+**ARCHITECTURE.md changed.** §5.3 adds Lock, Stale lock files, Second engine and Dumps, and rewrites First launch, Start, Adopt, Migrations and Major-version upgrades. §5.1 adds `pg.lock` and the dump kinds.
+
 ### S8: How long does a `bm25s` rebuild take at 10⁵ documents? (2026-11-04)
 
 **What ran.** `tools/spikes/s8_bm25s_rebuild.py` with `bm25s` 0.3.16, numpy 2.5.4 and Python 3.12.13, on an Apple M5 Max. It ran twice with the defaults: 10⁵ synthetic table and column documents over 10 databases, 5 repeats, and 1,000 queries at k=50. Each document is name + synonyms + description, as §7.3 indexes them. Identifiers come in snake_case, camelCase, PascalCase and UPPER_SNAKE, with glossary abbreviations and acronyms in them, and descriptions run one to three sentences with a long tail of made-up words. That gives 1.84 M tokens, 18 tokens per document at p50 (29 at p95), a 22,128-token vocabulary and a 14 MB index.
