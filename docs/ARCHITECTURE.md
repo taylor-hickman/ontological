@@ -448,7 +448,7 @@ Each call runs `claude_agent_sdk.query()` with these `ClaudeAgentOptions`:
 | `effort` | `routes[task].effort` | thinking depth and token spend per task (§6.3) |
 | `fallback_model` | `sonnet` for `opus` routes; unset otherwise | Opus overloaded or not on the user's plan (§6.3) |
 | `max_turns` | 1–2 for structured, about 16 for agent | bound the spend |
-| `env` | `os.environ` minus `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, always; also minus the session variables a Claude Code parent sets (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` and the others spike S1 finds), which an engine started by the MCP shim inherits | §3 rule 3; a spawned `claude` must not behave as a nested session |
+| `env` | `os.environ` minus `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, always; also minus the session variables a Claude Code parent sets, which an engine started by the MCP shim inherits: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_AUTO_CONNECT_IDE`, `CLAUDE_CODE_ENABLE_TODO_TOOLS`, `CLAUDE_PID`, `CLAUDE_EFFORT` (the list spike S1 found in Claude Code 2.1.318). The SDK merges `options.env` over `os.environ` and can't remove a key, so the engine deletes these from its own `os.environ` at startup, and every call also sets the four auth variables to `""` in `options.env`, which `claude` treats as unset (S1) | §3 rule 3; a spawned `claude` must not behave as a nested session |
 | session persistence | off | no transcripts piling up |
 
 Retries follow upstream:
@@ -489,7 +489,7 @@ Why these choices:
 
 Rules:
 - Every route is a setting (Settings → Models). The eval (§12) tries the answer routes one step cheaper; compile routes one step cheaper are judged by the compile-quality review and the retrieval benchmark, which cost no quota. A route moves down when the cheaper model scores the same, and moves up when it loses accuracy.
-- `opus` routes set `fallback_model="sonnet"`, so an overloaded Opus, or a plan that doesn't offer Opus, still gets an answer. Nothing falls back to Haiku: silently downgrading a judgment call is worse than waiting. Each answer records the model that actually ran.
+- `opus` routes set `fallback_model="sonnet"`, so an overloaded Opus, or a plan that doesn't offer Opus, still gets an answer. Nothing falls back to Haiku: silently downgrading a judgment call is worse than waiting. Each answer records the model that actually ran: the `AssistantMessage.model`, which after a fallback is the fallback model, announced by a `system`/`model_fallback` message. `ResultMessage.model_usage` can also list Claude Code's own side calls on Haiku, so it is not the record of which model answered (S1).
 - Under quota pressure the gateway lowers concurrency and pauses background jobs (§6.5). It never switches models on its own.
 - **Resolved models.** Aliases follow new releases. The SDK's `init` message reports the concrete model for each session, and the result message reports usage per model. `ops.llm_call` stores both. The cache key uses the route's model string as written, so with an alias a model release doesn't force a recompile of unchanged tables. Jobs offers "recompile with current models" for when the user wants one. Eval configs pin full model IDs instead, so a release can't land in the middle of a comparison, and the eval report lists the resolved IDs it ran.
 
@@ -515,7 +515,7 @@ Upstream was written for a cheap, fast HTTP endpoint and makes many small calls.
 ### 6.5 Quota, errors and resumability
 
 **Quota.**
-- The gateway tracks the latest `RateLimitEvent` (status, utilization, `resets_at`) and shows it in the UI as a usage meter.
+- The gateway tracks the latest `RateLimitEvent` (status, utilization, `resets_at`) and shows it in the UI as a usage meter. Claude Code 2.1.318 leaves the SDK's `utilization` field empty; the value is per window in `rate_limit_info.raw["unifiedWindows"][<window>]["utilization"]` (S1).
 - `allowed_warning`: compile jobs drop to concurrency 1. Interactive chat keeps priority over background compile.
 - `rejected` / `rate_limit`: the job runner **pauses** background jobs until `resets_at` and resumes on its own. Chat shows "usage limit reached, resets at …".
 

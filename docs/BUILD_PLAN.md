@@ -230,3 +230,33 @@ Prompt content, retrieval tuning and UI are built against the eval and the retri
 ## Spike results
 
 Each spike appends its result here: the date, what ran, the numbers, the decision, and the ARCHITECTURE.md section it changed.
+
+### S1: Agent SDK features (2026-11-04)
+
+**Ran:** `python3 tools/spikes/s1_agent_sdk.py` with `claude-agent-sdk` 0.2.178 and Claude Code 2.1.318, on `haiku` at `low` effort. It runs the contract tests in `engine/tests/contract/test_agent_sdk.py` (behind `ONTOLOGICAL_CONTRACT=1`) twice. The first run uses a fresh login-shell environment. The second uses the environment inherited inside a Claude Code session, which had `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` and ten other session variables set. Each run makes 5 spawns and costs about $0.003 at API prices.
+
+**Result:** all 12 checks pass in both environments, and the two runs' init messages, tool logs and results are the same.
+
+| Behaviour | Result |
+|---|---|
+| SDK MCP `@tool` error | A tool returning `is_error` reaches the model as a readable error. In a `plan`/`run` miniature of §8.1, `run` refused an unknown `plan_id`; the model called `plan` and retried with the id it got. Haiku recovered only when the system prompt said tools may refuse and name the missing step. Without that line it gave up (one run) |
+| `output_format` with tools | Works in the same session. Claude Code implements it as a `StructuredOutput` tool, which shows in the init `tools` list, and the validated object arrives in `ResultMessage.structured_output` |
+| init `model` | The alias resolves to the concrete ID (`haiku` → `claude-haiku-5-5`) |
+| `ResultMessage.model_usage` | Keyed by concrete model ID, with tokens, thinking tokens and `costUSD`. It can list more than the session's model: an `opus` probe also had a `claude-haiku-5-5` entry from Claude Code's own side call |
+| `RateLimitEvent` | Arrives at the start of every session and parses. `utilization` is `None`, because the CLI sends it per window under `raw["unifiedWindows"]`. `rate_limit_type` was `seven_day` |
+| `permission_mode="dontAsk"` + `allowed_tools` | An SDK tool outside `allowed_tools` is denied without prompting, and its handler never runs. The denial shows as a `system`/`permission_denied` message and in `ResultMessage.permission_denials`. The model is told and carries on |
+| `setting_sources=[]` | The user's plugins, MCP servers and hooks don't load. Claude Code's four built-in plugins (`cc-plugin-*@builtin`) and its bundled skills still appear in the init message. With `tools=[]` there is no `Skill` tool to invoke them |
+| `tools=[]` | No built-in tools. Only our MCP tools and `StructuredOutput` are in the init `tools` list |
+| `fallback_model` | With an unknown model, the session answers on the fallback and emits `system`/`model_fallback` with `trigger: "model_not_found"`. The overload trigger couldn't be provoked |
+
+**Also found:**
+- `options.env` is merged over `os.environ`. It can override a key but can't remove one. An inherited bogus `ANTHROPIC_API_KEY` was used (`apiKeySource: "ANTHROPIC_API_KEY"`, auth failed); with `env={"ANTHROPIC_API_KEY": ""}` the run used the subscription login (`apiKeySource: "none"`).
+- The SDK already drops `CLAUDECODE` and sets `CLAUDE_CODE_ENTRYPOINT=sdk-py` for its child. The other inherited session variables (`CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_AUTO_CONNECT_IDE`, `CLAUDE_CODE_ENABLE_TODO_TOOLS`, `CLAUDE_PID`, `CLAUDE_EFFORT`) all reach it, and the `claude` binary reads every one. None changed anything the tests can see.
+- `query()` raises `ResultError` after yielding an error `ResultMessage` (for example, a failed login). The gateway has to catch it to return `None`.
+
+**Decision:**
+- Everything works, so §8.1 stays as written: `output_format` carries `AnswerModel`, and there is no `submit_answer` tool.
+- No nested run misbehaved. §6.2 still names the full list of session variables found, so M0.6 strips a known set rather than "the others S1 finds". It also says how to strip them, since `options.env` can't remove a key: the engine deletes them from its own `os.environ` at startup, and each call also blanks the four auth variables in `options.env`.
+- §6.3 now says to record the answering model from `AssistantMessage.model` (and the `model_fallback` message), not from `model_usage`.
+- §6.5 now says to read utilization from `raw["unifiedWindows"]`.
+- For M1.7: the answer agent's system prompt says that tools can refuse and name the missing step.
