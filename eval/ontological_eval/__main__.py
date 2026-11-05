@@ -5,6 +5,8 @@
     cluster check     compare each WWI table's row count with its CSV
     cluster status    whether it's running, and how to connect
     cluster down      stop it
+    sets freeze [--force]   choose eval/sets/{dev,heldout,smoke}.json with the fixed seed
+    sets check        run every set's gold SQL: each must run and return rows (needs `cluster up`)
 
 The data and the cluster live under ONTOLOGICAL_EVAL_HOME (default ~/Library/Application
 Support/Ontological Eval). The cluster runs the bundled Postgres binaries in ONTOLOGICAL_PG_BIN
@@ -16,11 +18,12 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 
 from ontological.store import pg
 
-from . import cluster, fetch
+from . import cluster, fetch, questions, sets
 from .home import eval_home, wwi_dir
 
 
@@ -41,6 +44,9 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("cluster", help="the eval Postgres cluster that holds WWI")
     c.add_argument("action", choices=["up", "check", "status", "down"])
     c.add_argument("--pg-bin", help="the bundled Postgres's bin/ (default: $ONTOLOGICAL_PG_BIN)")
+    s = sub.add_parser("sets", help="the frozen question sets in eval/sets/")
+    s.add_argument("action", choices=["freeze", "check"])
+    s.add_argument("--force", action="store_true", help="freeze: rewrite existing set files")
     args = parser.parse_args(argv)
     home = eval_home()
 
@@ -50,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
             written = fetch.fetch(home, args.groups or list(sources), sources=sources)
             print(f"{len(written)} file(s) downloaded; the data is current in {home}")
             return 0
+        if args.command == "sets":
+            return _sets(args.action, home, force=args.force)
 
         pg_bin = _pg_bin(args.pg_bin)
         lay = cluster.layout(home, pg_bin)
@@ -70,9 +78,31 @@ def main(argv: list[str] | None = None) -> int:
             cluster.down(home, pg_bin)
             print("eval cluster stopped")
         return 0
-    except (fetch.FetchError, pg.PgError, OSError) as e:
+    except (fetch.FetchError, pg.PgError, sets.SetsError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+
+
+def _sets(action: str, home: Path, *, force: bool) -> int:
+    if action == "freeze":
+        chosen = sets.freeze(home, force=force)
+        for name in sets.NAMES:
+            n = Counter(source for source, _ in chosen[name])
+            print(f"{name}: {n['wwi']} WWI, {n['bird']} BIRD -> {sets.SETS_DIR / name}.json")
+        return 0
+    frozen = sets.read()
+    runner = sets.GoldRunner(home)
+    try:
+        problems = sets.check(frozen, questions.load(home), runner)
+    finally:
+        runner.close()
+    for p in problems:
+        print(p)
+    if problems:
+        return 1
+    n = len({k for name in sets.NAMES for k in frozen[name]})
+    print(f"all {n} gold queries in dev, heldout and smoke run and return rows")
+    return 0
 
 
 def _connect(lay: pg.Layout) -> str:

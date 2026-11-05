@@ -27,6 +27,8 @@ Both print one JSON line, `{"pid", "port", "version", "started"}`, where `starte
 
 Contract tests that spawn your logged-in `claude` (and spend a little quota) are skipped unless `ONTOLOGICAL_CONTRACT=1` is set: `ONTOLOGICAL_CONTRACT=1 uv run pytest tests/contract`. `ONTOLOGICAL_CONTRACT_MODEL` picks the model (default `haiku`).
 
+The gateway's tests in `tests/llm` run against a scripted `query()` and spawn nothing; its contract tests are in `tests/contract` with S1's.
+
 The store lifecycle tests in `tests/store` drive the bundled Postgres binaries, and skip without them. Point them at the bin/ of a signed S4 tree (`tools/spikes/s4_postgres`) and, for the major-version tests, a PostgreSQL 16 build (`VERSIONS_ENV=tools/spikes/s5_pg_lifecycle/pg16.env tools/spikes/s4_postgres/build.sh <work>`):
 
 ```sh

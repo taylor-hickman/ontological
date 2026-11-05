@@ -33,7 +33,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable, MutableMapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
@@ -45,23 +45,13 @@ import ontological
 from ontological.api.app import create_app
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
-from ontological.store import pg
+from ontological.llm.env import sanitize_environ
+from ontological.store import dal, pg
 
 log = logging.getLogger("ontological.engine")
 
 HEADLESS_START_TIMEOUT_S = 300  # a first launch or a major-version move can take a while
 GRACEFUL_SHUTDOWN_S = 5  # how long an open request (an SSE stream) may hold up a stop
-
-# The Claude Code session variables §6.2 lists, which an engine started by the MCP shim inherits
-# from a Claude Code parent. `options.env` can't remove a key (spike S1), so the engine deletes
-# them from its own environment at startup, before anything spawns `claude`. M0.6 fills in the
-# list, with its test.
-SESSION_VARIABLES: tuple[str, ...] = ()
-
-
-def sanitize_environ(environ: MutableMapping[str, str] = os.environ) -> None:
-    for name in SESSION_VARIABLES:
-        environ.pop(name, None)
 
 
 @dataclass(frozen=True)
@@ -92,8 +82,10 @@ class PgStore:
             log.info("store: %s", note)
         if (dump := pg.migrate(self.layout)) is not None:
             log.info("store: migrated, after dumping %s", dump.name)
+        dal.connect(self.layout)
 
     def stop(self) -> None:
+        dal.close()
         dump = pg.stop(self.layout)
         log.info("store stopped; quit dump %s", dump.name if dump else "not needed")
 
@@ -185,6 +177,8 @@ class _Server(uvicorn.Server):
 
 
 def serve(config: Config, make_store: Callable[[Config], Store]) -> int:
+    # Before anything spawns `claude`: the Claude Code session variables an engine started by
+    # the MCP shim inherits (§6.2).
     sanitize_environ()
     stop = _Stop()
     signal.signal(signal.SIGTERM, stop)
