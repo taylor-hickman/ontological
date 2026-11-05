@@ -286,6 +286,27 @@ The first call on each model was not much slower. Spawn took 0.35 s on the first
 
 **ARCHITECTURE.md changed.** §6.5's estimate said each call costs "a few seconds of process startup" and that split might add 20–30 minutes. It now gives 0.53 s of overhead per call, about 1.5–2 minutes of overhead for split's extra calls on a 200-table database. §3's per-call cost note now says the same.
 
+### S4: How big are trimmed Postgres 17 + pgvector binaries, and can CI build and sign them? (2026-11-04)
+
+**What ran.** `tools/spikes/s4_postgres/`, run locally and by `.github/workflows/postgres.yml` on `macos-15`. It builds PostgreSQL 17.11 with `--without-icu --with-libedit-preferred --disable-nls`, plus `pg_trgm` and pgvector 0.8.7 (`OPTFLAGS=""`), for macOS 13 and later. It trims the install to §10's file list and relinks libpq as `@rpath/libpq.5.dylib`. Then it signs every file ad-hoc with the hardened runtime and smoke-tests a copy under a path with spaces: `initdb` (UTF-8, locale `C`), a start on a Unix socket only, `CREATE EXTENSION vector` and `pg_trgm`, an HNSW query, a parallel worker, 8 concurrent client backends, and `pg_dump -Fc` and `pg_restore`. The build takes under a minute on an M-series Mac. Every file links only to libraries inside the tree or macOS's own (`libSystem`, `libz`, `libedit`). Upstream's Alembic chain creates only `vector` and `pg_trgm`, so no other contrib module is built.
+
+| Part | Files | Size |
+|---|---:|---:|
+| `bin/` (7 executables) | 7 | 11.1 MB |
+| `lib/` (libpq and the server's modules) | 31 | 4.9 MB |
+| `share/` | 701 | 1.9 MB |
+| **Total, unpacked** | 739 | **17.9 MB** |
+| As `.tar.xz` | | 3.9 MB |
+| `@embedded-postgres/darwin-arm64`, unpacked | | 337 MB |
+
+**Signing.** With the hardened runtime and an ad-hoc signature, library validation refuses every library of ours: an ad-hoc signature has no Team ID, so it never matches the process's. dyld won't load `libpq.5.dylib` into `initdb`, `psql`, `pg_dump` or `pg_restore`, and `postgres` can't `dlopen` `plpgsql`, `dict_snowball` or `vector` ("mapping process and mapped file (non-platform) have different Team IDs"). `initdb` fails before it finishes. Adding `com.apple.security.cs.disable-library-validation` to the executables fixes all of it. `control.sh` checks that the failure happens without the entitlement.
+
+Library validation is only enforced with System Integrity Protection on. GitHub's macOS runners have SIP off: without the entitlement, `initdb` loaded libpq there. So the CI job shows that the trimmed, signed tree works, but not that the entitlement is enough, and `control.sh` skips there. The library-validation results come from a local run on a Mac with SIP on (macOS 26), where `control.sh` and `smoke.sh` both pass. M7.4's clean-machine test covers it again for the notarized build. Forking needed nothing. JIT is not built, so `allow-jit` isn't needed either.
+
+**Decision.** Ship the trimmed tree from this CI job (M7.2), with `entitlements.plist` on the executables. After a change to how the tree is built or signed, run `control.sh` and `smoke.sh` on a Mac with SIP on, since CI can't check library validation. In M7, once the Developer ID exists, run `control.sh` with `CODESIGN_IDENTITY` set. If the libraries then load without the entitlement, drop it. Keeping it is also fine for notarization.
+
+**ARCHITECTURE.md changed.** §10 gives the measured size, the configure choices, the `@rpath` relink and the entitlement.
+
 ### S8: How long does a `bm25s` rebuild take at 10⁵ documents? (2026-11-04)
 
 **What ran.** `tools/spikes/s8_bm25s_rebuild.py` with `bm25s` 0.3.16, numpy 2.5.4 and Python 3.12.13, on an Apple M5 Max. It ran twice with the defaults: 10⁵ synthetic table and column documents over 10 databases, 5 repeats, and 1,000 queries at k=50. Each document is name + synonyms + description, as §7.3 indexes them. Identifiers come in snake_case, camelCase, PascalCase and UPPER_SNAKE, with glossary abbreviations and acronyms in them, and descriptions run one to three sentences with a long tail of made-up words. That gives 1.84 M tokens, 18 tokens per document at p50 (29 at p95), a 22,128-token vocabulary and a 14 MB index.
