@@ -26,7 +26,7 @@ The review of ARCHITECTURE.md at `0269407` changed these. ARCHITECTURE.md now ca
 | One shared engine with leases and an idle shutdown, for Electron, MCP shims and the eval runner | §4.4 |
 | The golden DAL suite keeps upstream's seed, with upstream's connectors and two service modules vendored as test-only code | §5.4, §11 |
 | A question's source database comes from a scope or from entity coverage, and `plan` records it | §8.1 |
-| Source executors gain a generic capped `probe` op; the embedder gets a priority queue; BM25 rebuilds swap atomically | §5.6 |
+| Source executors gain a generic capped `probe` op; query embeds run concurrently with token-capped bulk batches (S7); BM25 rebuilds swap atomically | §5.6 |
 | The spawned `claude` gets a sanitized environment that also drops inherited Claude Code session variables | §6.2 |
 
 Settled by reading upstream at `2a24f5d`, so no spike is needed:
@@ -127,7 +127,7 @@ Produces: `ontological ask "<question>" --source chinook` and `ontological eval 
 | M1.2 | Source executor process for DuckDB-attached SQLite: extract, `run_sql`, `probe`, cancel by `interrupt()` then kill after 2 s (§5.6) | M0.5 |
 | M1.3 | Minimal ingest: extract and write Chinook's catalog through the DAL (no diff, no query history) | M1.1, M1.2 |
 | M1.4 | Minimal split compile: profiling, then `table_keys`, `column_descriptions` and `table_terms` with upstream's prompts, sequential, no packing; semantic FKs from declared FKs only | M0.6, M1.3 |
-| M1.5 | Embedder on the S7 loader behind LangChain's `Embeddings` interface; dense search only | S7, M1.1 |
+| M1.5 | Embedder on the S7 loader (direct `onnxruntime` + `tokenizers`, int8) behind LangChain's `Embeddings` interface, with the start-up cap calibration; dense search only | S7, M1.1 |
 | M1.6 | Grounding pack: dense retrieval over terms and attributes, BFS join paths (`find_join_path`) | M1.4, M1.5 |
 | M1.7 | **TDD** Gated agent: `ClaudeGateway.agent()`, the tools `plan`, `search_ontology`, `describe_table`, `validate_sql` (gate checks 1–3 only), `run_sql` and `review_answer`, their preconditions, and the post-run check with its intent, critic-off and `answerable=false` variants. Precondition tests written first | S1, M1.6 |
 | M1.8 | `ontological ask` CLI against the engine API, printing steps, SQL and rows | M1.7 |
@@ -165,7 +165,7 @@ Produces: the full compile on every eval database, hybrid retrieval, the retriev
 | M3.3 | Merged `TableSemantics` option (§6.4) | M3.2 |
 | M3.4 | Semantic FK resolution in batches of about 25, with the value-overlap probe running through the executor's `probe` op | M3.2, M2.2 |
 | M3.5 | SQL attribute judge with `_usage_score` fixed; bridge SQL on Opus; PII rules and the batched fallback | M3.2, M2.4 |
-| M3.6 | Hybrid search: BM25 with identifier-aware tokens (S8's rebuild policy), trigram, RRF with the certified bonus; embedder priority queue (S7) | S7, S8, M1.5 |
+| M3.6 | Hybrid search: BM25 with identifier-aware tokens (S8's rebuild policy), trigram, RRF with the certified bonus; concurrent query embeds beside token-capped bulk batches (S7) | S7, S8, M1.5 |
 | M3.7 | Pre-compile estimate showing split and merged (§6.5), using S2's spawn time | M3.3 |
 | M3.8 | Jobs screen: progress, pause and resume, call log, cache hits | M3.1, M2.7 |
 | M3.9 | Retrieval benchmark (§7.4) on dev questions: recall@k per configuration and per candidate model; choose the embedding model and recalibrate thresholds | M3.6, M2.9 |
@@ -373,6 +373,40 @@ The package name touches more files than all of that. 72 of the 79 files import 
 - Counting the Helm test that gets dropped, M2.1's conformance suite is 780 tests, 21 of them against the ported interchange module.
 
 **ARCHITECTURE.md changed.** §5.4 now says what S6 ran and that the seed also needs upstream's catalog ingest. §11's rows for `dal/*` and the test-only code list the edits and the extra files.
+
+### S7: embedder loader and speed (2026-11-04)
+
+Ran `uv run tools/spikes/s7_embedder.py` on an Apple M5 Max (18 cores, 64 GB, macOS 26.5.2) with onnxruntime 1.31.1, against `snowflake-arctic-embed-m-v1.5` at `e58a8f7`, file `onnx/model_int8.onnx` (110.1 MB). The raw numbers are in `tools/spikes/s7_results.json`.
+
+**Loading.** Both loaders load the file offline from a local directory. fastembed 0.9.1 has no v1.5 entry, so it loads only as a custom model (`add_custom_model`, CLS pooling, `output_name="token_embeddings"`). On the same batches the two give the same vectors (min cosine 0.9999998 over 256 passages and 8 queries). Load takes 0.11 s direct and 0.18 s through fastembed, plus about 2 s for fastembed's imports on a cold start.
+
+**int8 vectors depend on the batch.** The graph quantizes activations per batch (`DynamicQuantizeLinear`), so a passage's vector shifts with its batch-mates and their padding: min cosine 0.996 against the same text embedded alone. The engine embeds each query alone, so query vectors are deterministic.
+
+**Batch cost is linear in padded tokens.** Past about 256 tokens a batch runs at 10.6–12 tokens/ms at every shape from 16×64 to 512×4, so larger batches buy no throughput. The slowest rate, 10.6 tokens/ms, puts 100 ms at 1,057 padded tokens.
+
+| Bulk run, 10⁵ synthetic catalog texts (p50 51 tokens, max 125) | Time | Texts/s |
+|---|---|---|
+| Direct, sorted by length, batches capped at 1,057 padded tokens | 430 s | 232 |
+| Direct, input order, 8 texts per batch | 678 s | 148 |
+| fastembed, input order, `batch_size=8` | 651 s | 154 |
+
+| Query latency (ms), 200 queries at random times | p50 | p95 | max |
+|---|---|---|---|
+| Idle, direct / fastembed | 3.3 / 3.3 | 3.8 / 4.3 | 5.7 / 6.0 |
+| Priority worker, bulk batches at the cap (≈91 ms each) | 50 | 88 | 136 |
+| Priority worker, bulk batches at 4× the cap (≈350 ms) | 266 | 335 | 353 |
+| Concurrent `run` on the same session, batches at the cap | 6.7 | 7.6 | 8.7 |
+| Concurrent `run` on the same session, batches at 4× the cap | 5.7 | 7.4 | 10.3 |
+
+A one-off check (not in the script) of other files and providers on a 16×64 batch: int8 on CPU 12.6 tokens/ms, fp32 11.1, fp16 7.3; the CoreML provider 2.5–2.8 for every file, because it can't compile the graph's dynamic shapes and splits it.
+
+**Decision.**
+- Loader: direct `onnxruntime` + `tokenizers`, int8 on the CPU provider. fastembed works but only as a custom model, adds 15 MB and 8 packages to the bundle (126 → 141 MB of site-packages), and batches by count in input order behind a session it hides. The engine needs length-sorted, token-capped batches (+57% throughput) and concurrent calls into one session.
+- Queries don't queue behind bulk work: they call the session concurrently and wait about 7 ms whatever the batch size. The priority queue in §5.6 is dropped.
+- Bulk batch cap: 1,024 padded tokens (batch size × longest text after sorting), about 95 ms here. It keeps cancellation and progress fine-grained, and bounds a query to one batch if a queue is ever needed. Smaller Macs do fewer tokens per ms, so M1.5 calibrates the cap at engine start from one timed batch, targeting 100 ms.
+- A full 10⁵-text embed takes about 7 minutes on this machine and longer on smaller ones. It runs as a background job.
+
+Changed ARCHITECTURE.md §5.6 (Embedder) and §7.1. Not measured: a smaller Mac, and int8 recall against fp32 (the retrieval benchmark, §7.4, covers quality).
 
 ### S8: How long does a `bm25s` rebuild take at 10⁵ documents? (2026-11-04)
 

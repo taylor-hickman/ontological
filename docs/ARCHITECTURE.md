@@ -271,7 +271,7 @@ The upstream logic worth keeping is Python:
 - catalog-resolution validation
 - every prompt and Pydantic schema
 
-Much of it leans on **sqlglot**, which has no TypeScript equivalent of similar depth. The Agent SDK has a Python package, DuckDB's Python bindings are first-class for reading sources, and local ONNX embedding (fastembed) is mature in Python. The cost is bundling a Python runtime into the Electron build (§10). An all-TS stack would mean rewriting the DAL and the validation layer, and the validation layer is the part that makes answers trustworthy.
+Much of it leans on **sqlglot**, which has no TypeScript equivalent of similar depth. The Agent SDK has a Python package, DuckDB's Python bindings are first-class for reading sources, and local ONNX embedding (ONNX Runtime, tokenizers) is mature in Python. The cost is bundling a Python runtime into the Electron build (§10). An all-TS stack would mean rewriting the DAL and the validation layer, and the validation layer is the part that makes answers trustworthy.
 
 ### 4.3 Engine discovery and local security
 
@@ -364,7 +364,7 @@ Port `connectors/base.py::SQLDatabase` as-is, and finish the DuckDB reference co
 
 **Parse pool (keeping chat responsive).** sqlglot parsing of query history is pure Python and holds the GIL, so running it in the engine would make chat and the UI sluggish during a large ingest. A `ProcessPoolExecutor` (spawn context, `min(cores - 1, 4)` workers) does the parsing and AST dedup. Workers never connect to the store. They return parsed structures and the engine writes them. The gate's sqlglot parse stays in the engine: it is one query per call and takes milliseconds.
 
-**Embedder.** ONNX Runtime releases the GIL during inference, so the embedder runs on an engine thread. It takes work from a priority queue: query embeds from chat, `plan` and `check_answerable` go ahead of bulk compile batches, and bulk batches are capped in size so a query waits behind at most one of them. The BM25 index (§7.3) rebuilds off the request path and swaps in atomically, so searches never see a half-built index.
+**Embedder.** ONNX Runtime releases the GIL during inference and accepts concurrent `run` calls on one session, so the embedder needs no queue. Bulk compile batches run on an engine thread, and query embeds from chat, `plan` and `check_answerable` call the same session from their own threads. Spike S7 measured a query at about 7 ms with a bulk batch in flight (3 ms idle), whatever the batch size; behind a queue it would wait for the running batch. Bulk batches are still capped at about 100 ms of work (§7.1), so cancellation and progress stay fine-grained. The BM25 index (§7.3) rebuilds off the request path and swaps in atomically, so searches never see a half-built index.
 
 **Who does what.** The engine orchestrates every job and is the only process that writes the store.
 
@@ -541,7 +541,10 @@ Upstream was written for a cheap, fast HTTP endpoint and makes many small calls.
 
 Anthropic has no embedding model, so the embedder runs on the user's machine. It ships inside the app and loads on its own: no first-run download, no configuration, and the app works offline from install. Docker would add setup instead of removing it.
 
-The runtime is **fastembed** (Apache-2.0) on ONNX Runtime (the macOS arm64 wheel is 20.9 MB). If fastembed doesn't support the chosen model, the engine loads the ONNX file with `onnxruntime` and `tokenizers` directly, which is about 50 lines of code.
+The runtime is ONNX Runtime (the macOS arm64 wheel is 20.9 MB) on the CPU provider, with the int8 ONNX file loaded directly through `onnxruntime` and `tokenizers`. The loader is about 40 lines that tokenize, run the graph, take the CLS vector and L2-normalize it. fastembed also loads the model, but only as a custom model, and it adds 15 MB of packages and batches by count behind a session it hides (spike S7, docs/BUILD_PLAN.md). The CoreML provider is about 4× slower than the CPU for this model.
+
+- **Bulk batches are capped by padded tokens**, not by count: texts are sorted by length and a batch holds at most 1,024 padded tokens (batch size × longest text). Cost is linear in padded tokens, so the cap costs no throughput, and sorting cuts padding (232 against 148 texts/s). On an M5 Max that is about 95 ms per batch and 7 minutes for 10⁵ texts. The engine calibrates the cap at start from one timed batch, targeting 100 ms, because smaller Macs do fewer tokens per ms.
+- The int8 file quantizes activations per batch, so a passage's vector shifts slightly with its batch-mates (cosine ≥ 0.996 against the same text embedded alone). The engine embeds each query alone, so query vectors are deterministic. `content_hash`, not vector equality, decides whether a text needs re-embedding.
 
 - Upstream embeds asymmetrically (`input_type=query|passage`). Use the model's query/passage prefixes where it defines them.
 - Every vector's metadata stores `model` and `content_hash`. Changing the embedding model triggers a re-embed job; vectors from different models are never compared.
