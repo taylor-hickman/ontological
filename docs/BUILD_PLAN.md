@@ -255,3 +255,18 @@ The first call on each model was not much slower. Spawn took 0.35 s on the first
 **Decision: no warm pool.** The rule asks whether a spawn takes more than 1.5 s at p50. It takes 0.53 s, spawn and close together. The whole `query()` is above 1.5 s at p50 (2.09 s), but that is the model's time, and a warm pool can't remove it. A pre-spawned client would save the 0.17 s spawn. The 0.34 s close could also be saved without a pool, by not waiting for the process to exit. Neither is worth the pool's complexity in M1.
 
 **ARCHITECTURE.md changed.** §6.5's estimate said each call costs "a few seconds of process startup" and that split might add 20–30 minutes. It now gives 0.53 s of overhead per call, about 1.5–2 minutes of overhead for split's extra calls on a 200-table database. §3's per-call cost note now says the same.
+
+### S9: Can a Pro plan use Opus in Claude Code? (2026-11-04)
+
+**What ran.** A read of Anthropic's plan docs on 2026-11-04.
+
+**Answer: yes, Opus is part of the Pro plan in Claude Code.** Two pages say so:
+
+- [Claude Code model configuration](https://code.claude.com/docs/en/model-config), "`default` model setting": "**Pro, Max, Ultra, Team, Enterprise, and Anthropic API**: defaults to Opus 5.5".
+- [claude.com/pricing](https://claude.com/pricing), plan comparison: the Opus row reads No / Yes / Yes / Yes for Free / Pro / Max / Ultra, and Claude Code is included from Pro up.
+
+One exception: the same model configuration page, under "Extended context", says Pro needs usage credits for Opus 4.6 with 1M context. Ontological doesn't route to `[1m]` variants. The [Pro plan article](https://support.claude.com/en/articles/8325606-what-is-the-pro-plan) and [Using Claude Code with your Pro or Max plan](https://support.claude.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan) don't mention Opus. They say Pro's five-hour and weekly limits apply across all models. Some third-party posts from earlier in 2026 say Pro needs extra usage for Opus. Anthropic's current docs don't say that.
+
+**Decision: no change.** Ontological is for the author's own use on an Ultra plan, so Pro access doesn't affect the build. `fallback_model="sonnet"` stays on `opus` routes for overloaded Opus (§6.3).
+
+**ARCHITECTURE.md changed.** Nothing.
