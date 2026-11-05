@@ -203,7 +203,7 @@ The same page also says this does not prevent "an end user from signing in to th
 - **Structured output.** `claude -p --output-format json --json-schema '<schema>'` returns the result in `structured_output`. The field is absent if validation fails, so always check for it. The Agent SDK equivalent is `output_format={"type":"json_schema", ...}`.
 - **In-process tools.** The Python `claude-agent-sdk` provides `@tool` and `create_sdk_mcp_server`, which turn Python functions into in-process MCP tools that the model can call. Because the tools are Ontological's own Python, a tool can refuse to run and return an error the model reads. §8.1 builds on this.
 - **Locked-down runs.** Built-in tools are disabled with `tools=[]` / `--tools ""`. User and project settings are skipped with `setting_sources=[]`. Since v2.1.302, `-p` defaults to a manual permission mode, so set `permission_mode` explicitly and deny everything Ontological doesn't provide.
-- **Per-call cost.** Every `query()` spawns a `claude` process, which takes seconds of startup. Upstream's pattern of many small calls is expensive here in both time and quota.
+- **Per-call cost.** Every `query()` spawns a `claude` process. Starting and closing it adds about half a second to each call (spike S2), on top of the model's own time. Upstream's pattern of many small calls is expensive here in both time and quota.
 - **Limits are signalled in the stream.**
   - `RateLimitEvent.rate_limit_info`: `status` (allowed / allowed_warning / rejected), `resets_at`, `utilization`.
   - `AssistantMessage.error`: `authentication_failed`, `rate_limit`, `billing_error`, …
@@ -527,7 +527,7 @@ Upstream was written for a cheap, fast HTTP endpoint and makes many small calls.
 - Compile is checkpointed per table in `ops.job_step`. A paused or crashed compile resumes where it stopped.
 - **A pre-compile estimate** is shown before starting: calls ≈ ⌈tables / packing⌉ + ⌈unresolved FK columns / 25⌉ + …, so the user can scope to schemas or tables first.
 - The estimate shows both `split` and `merged`, with calls, estimated quota and estimated time, so the user can pick `merged` for a very large run.
-- A rough guide, unverified until measured: a 200-table database needs about 600–900 compile calls with `split` (the same order as upstream) and about 120–220 with `merged`. Split's quota is estimated at about 1.5–2 times merged's, because most of its extra calls run on Haiku. Each call costs a few seconds of process startup, so at the default concurrency of 3, split may add 20–30 minutes of wall-clock time. Compile runs in the background, and results are cached, so only new or changed tables pay again.
+- A rough guide, unverified until measured: a 200-table database needs about 600–900 compile calls with `split` (the same order as upstream) and about 120–220 with `merged`. Split's quota is estimated at about 1.5–2 times merged's, because most of its extra calls run on Haiku. Starting and closing the `claude` process adds 0.53 s to each call at p50 (spike S2, the same on every model), so at the default concurrency of 3, split's 480–680 extra calls add about 1.5–2 minutes of process overhead. The model's own time per call, which grows with the prompt, is most of the difference. Compile runs in the background, and results are cached, so only new or changed tables pay again.
 
 **Version drift.**
 - On startup the engine runs `claude --version` and checks for a minimum version.
