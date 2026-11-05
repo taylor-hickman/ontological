@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ontological.embed.embedder import LocalEmbedder
 from ontological.engine.lifetime import Closing, Lease, Lifetime
 
 log = logging.getLogger(__name__)
@@ -81,7 +82,14 @@ class BearerAuth:
             self.lifetime.request_finished()
 
 
-def create_app(*, token: str, lifetime: Lifetime, pid: int, version: str) -> FastAPI:
+def create_app(
+    *,
+    token: str,
+    lifetime: Lifetime,
+    pid: int,
+    version: str,
+    embedder: LocalEmbedder | None = None,
+) -> FastAPI:
     app = FastAPI(
         title="Ontological engine",
         version=version,
@@ -89,6 +97,8 @@ def create_app(*, token: str, lifetime: Lifetime, pid: int, version: str) -> Fas
         redoc_url=None,
         openapi_url=None,
     )
+    # The one embedder, calibrated at start. Routes call it concurrently, with no queue (§5.6).
+    app.state.embedder = embedder
 
     @app.get("/health")
     async def health() -> Health:  # pyright: ignore[reportUnusedFunction]
