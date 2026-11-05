@@ -3,11 +3,14 @@
 # into <work>/stage. trim.sh then copies the shipped subset out of it.
 #
 #   build.sh <work-dir>
+#
+# VERSIONS_ENV=<file> builds the versions pinned there instead of versions.env (spike S5 builds
+# PostgreSQL 16 this way).
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=versions.env
-source "$here/versions.env"
+source "${VERSIONS_ENV:-$here/versions.env}"
 export MACOSX_DEPLOYMENT_TARGET
 
 work="$(mkdir -p "$1" && cd "$1" && pwd)"
