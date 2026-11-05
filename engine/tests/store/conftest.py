@@ -30,7 +30,7 @@ from typing import Any, cast
 
 import pytest
 
-from ontological.store import pg
+from ontological.store import dal, pg
 
 STUB = Path(__file__).with_name("engine_stub.py")
 REQUIRED = os.environ.get("ONTOLOGICAL_PG_REQUIRED") == "1"
@@ -284,3 +284,19 @@ def forge_pid(lay: pg.Layout, pid: int) -> None:
         lines = f.read_text().splitlines()
         lines[0] = str(pid)
         f.write_text("\n".join(lines) + "\n")
+
+
+@pytest.fixture
+def store(apps: Apps, monkeypatch: pytest.MonkeyPatch) -> Iterator[pg.Layout]:
+    """A migrated store with the DAL connected to it. The variables are restored afterwards."""
+    lay = apps.layout("dal")
+    pg.ensure_running(lay)
+    monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+    for name, value in dal.environ(lay).items():
+        monkeypatch.setenv(name, value)
+    dal.connect(lay)
+    try:
+        yield lay
+    finally:
+        dal.close()
+        pg.stop(lay, quit_dump=False)

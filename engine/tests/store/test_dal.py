@@ -17,7 +17,7 @@ from collections.abc import Iterator
 
 import keyring
 import pytest
-from conftest import Apps, sql
+from conftest import sql
 from fakes import HashEmbeddings, MemoryKeyring
 
 from auto_ontology.catalog.constants import Labels
@@ -28,25 +28,9 @@ from auto_ontology.dal import connections, datasources, owners, pql_analyses, te
 from auto_ontology.dal import schema as s
 from auto_ontology.infra.keychain import KEYRING_SERVICE
 from auto_ontology.vdb import SEMANTIC_VDB_COLLECTION, VDB_SCHEMA, get_semantic_vdb
-from ontological.store import dal, local_owner, pg
+from ontological.store import local_owner, pg
 
 DIM = 8
-
-
-@pytest.fixture
-def store(apps: Apps, monkeypatch: pytest.MonkeyPatch) -> Iterator[pg.Layout]:
-    """A migrated store with the DAL connected to it. The variables are restored afterwards."""
-    lay = apps.layout("dal")
-    pg.ensure_running(lay)
-    monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
-    for name, value in dal.environ(lay).items():
-        monkeypatch.setenv(name, value)
-    dal.connect(lay)
-    try:
-        yield lay
-    finally:
-        dal.close()
-        pg.stop(lay, quit_dump=False)
 
 
 @pytest.fixture
