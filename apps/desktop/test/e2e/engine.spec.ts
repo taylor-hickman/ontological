@@ -126,11 +126,13 @@ test('quitting leaves an engine the app started running until it idles out', asy
   await running(page)
   const pid = readEngineJson(userData)!.pid
   started.push(pid)
+  const closing = Date.now()
   await app.close()
-  expect(pidAlive(pid)).toBe(true)
+  const log = (): string => readFileSync(join(userData, 'logs/engine.log'), 'utf8')
+  expect(pidAlive(pid), `app.close() took ${Date.now() - closing} ms; engine.log:\n${log()}`).toBe(true)
   await engineExits(pid, 25_000)
   // It stopped because it was idle, not because the app took it down.
-  expect(readFileSync(join(userData, 'logs/engine.log'), 'utf8')).toContain('idle for 8s: stopping')
+  expect(log()).toContain('idle for 8s: stopping')
 })
 
 test('restarts an engine it started when that engine crashes', async () => {
