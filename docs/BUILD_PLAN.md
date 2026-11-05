@@ -231,6 +231,36 @@ Prompt content, retrieval tuning and UI are built against the eval and the retri
 
 Each spike appends its result here: the date, what ran, the numbers, the decision, and the ARCHITECTURE.md section it changed.
 
+### S1: Agent SDK features (2026-11-04)
+
+**Ran:** `python3 tools/spikes/s1_agent_sdk.py` with `claude-agent-sdk` 0.2.178 and Claude Code 2.1.318, on `haiku` at `low` effort. It runs the contract tests in `engine/tests/contract/test_agent_sdk.py` (behind `ONTOLOGICAL_CONTRACT=1`) twice. The first run uses a fresh login-shell environment. The second uses the environment inherited inside a Claude Code session, which had `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` and ten other session variables set. Each run makes 5 spawns and costs about $0.003 at API prices.
+
+**Result:** all 12 checks pass in both environments, and the two runs' init messages, tool logs and results are the same.
+
+| Behaviour | Result |
+|---|---|
+| SDK MCP `@tool` error | A tool returning `is_error` reaches the model as a readable error. In a `plan`/`run` miniature of §8.1, `run` refused an unknown `plan_id`; the model called `plan` and retried with the id it got. Haiku recovered only when the system prompt said tools may refuse and name the missing step. Without that line it gave up (one run) |
+| `output_format` with tools | Works in the same session. Claude Code implements it as a `StructuredOutput` tool, which shows in the init `tools` list, and the validated object arrives in `ResultMessage.structured_output` |
+| init `model` | The alias resolves to the concrete ID (`haiku` → `claude-haiku-5-5`) |
+| `ResultMessage.model_usage` | Keyed by concrete model ID, with tokens, thinking tokens and `costUSD`. It can list more than the session's model: an `opus` probe also had a `claude-haiku-5-5` entry from Claude Code's own side call |
+| `RateLimitEvent` | Arrives at the start of every session and parses. `utilization` is `None`, because the CLI sends it per window under `raw["unifiedWindows"]`. `rate_limit_type` was `seven_day` |
+| `permission_mode="dontAsk"` + `allowed_tools` | An SDK tool outside `allowed_tools` is denied without prompting, and its handler never runs. The denial shows as a `system`/`permission_denied` message and in `ResultMessage.permission_denials`. The model is told and carries on |
+| `setting_sources=[]` | The user's plugins, MCP servers and hooks don't load. Claude Code's four built-in plugins (`cc-plugin-*@builtin`) and its bundled skills still appear in the init message. With `tools=[]` there is no `Skill` tool to invoke them |
+| `tools=[]` | No built-in tools. Only our MCP tools and `StructuredOutput` are in the init `tools` list |
+| `fallback_model` | With an unknown model, the session answers on the fallback and emits `system`/`model_fallback` with `trigger: "model_not_found"`. The overload trigger couldn't be provoked |
+
+**Also found:**
+- `options.env` is merged over `os.environ`. It can override a key but can't remove one. An inherited bogus `ANTHROPIC_API_KEY` was used (`apiKeySource: "ANTHROPIC_API_KEY"`, auth failed); with `env={"ANTHROPIC_API_KEY": ""}` the run used the subscription login (`apiKeySource: "none"`).
+- The SDK already drops `CLAUDECODE` and sets `CLAUDE_CODE_ENTRYPOINT=sdk-py` for its child. The other inherited session variables (`CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_AUTO_CONNECT_IDE`, `CLAUDE_CODE_ENABLE_TODO_TOOLS`, `CLAUDE_PID`, `CLAUDE_EFFORT`) all reach it, and the `claude` binary reads every one. None changed anything the tests can see.
+- `query()` raises `ResultError` after yielding an error `ResultMessage` (for example, a failed login). The gateway has to catch it to return `None`.
+
+**Decision:**
+- Everything works, so §8.1 stays as written: `output_format` carries `AnswerModel`, and there is no `submit_answer` tool.
+- No nested run misbehaved. §6.2 still names the full list of session variables found, so M0.6 strips a known set rather than "the others S1 finds". It also says how to strip them, since `options.env` can't remove a key: the engine deletes them from its own `os.environ` at startup, and each call also blanks the four auth variables in `options.env`.
+- §6.3 now says to record the answering model from `AssistantMessage.model` (and the `model_fallback` message), not from `model_usage`.
+- §6.5 now says to read utilization from `raw["unifiedWindows"]`.
+- For M1.7: the answer agent's system prompt says that tools can refuse and name the missing step.
+
 ### S2: How long does a spawn take? (2026-11-04)
 
 **What ran.** `tools/spikes/s2_spawn_time.py` on macOS arm64, with Claude Code 2.1.318 and `claude-agent-sdk` 0.2.178. It made 20 calls each on `haiku`, `sonnet` and `opus`, back to back, one fresh `query()` per call, so each started a new `claude` process. The call was one line, "Classify the column `customer_email` as one of: identifier, contact, measure, date.", with a one-field JSON schema, the §6.2 options and `effort="low"`. All 60 calls returned valid `structured_output`.
@@ -255,6 +285,30 @@ The first call on each model was not much slower. Spawn took 0.35 s on the first
 **Decision: no warm pool.** The rule asks whether a spawn takes more than 1.5 s at p50. It takes 0.53 s, spawn and close together. The whole `query()` is above 1.5 s at p50 (2.09 s), but that is the model's time, and a warm pool can't remove it. A pre-spawned client would save the 0.17 s spawn. The 0.34 s close could also be saved without a pool, by not waiting for the process to exit. Neither is worth the pool's complexity in M1.
 
 **ARCHITECTURE.md changed.** §6.5's estimate said each call costs "a few seconds of process startup" and that split might add 20–30 minutes. It now gives 0.53 s of overhead per call, about 1.5–2 minutes of overhead for split's extra calls on a 200-table database. §3's per-call cost note now says the same.
+
+### S8: How long does a `bm25s` rebuild take at 10⁵ documents? (2026-11-04)
+
+**What ran.** `tools/spikes/s8_bm25s_rebuild.py` with `bm25s` 0.3.16, numpy 2.5.4 and Python 3.12.13, on an Apple M5 Max. It ran twice with the defaults: 10⁵ synthetic table and column documents over 10 databases, 5 repeats, and 1,000 queries at k=50. Each document is name + synonyms + description, as §7.3 indexes them. Identifiers come in snake_case, camelCase, PascalCase and UPPER_SNAKE, with glossary abbreviations and acronyms in them, and descriptions run one to three sentences with a long tail of made-up words. That gives 1.84 M tokens, 18 tokens per document at p50 (29 at p95), a 22,128-token vocabulary and a 14 MB index.
+
+The tokenizer is the §7.3 one: split on snake_case and camelCase, lowercase, expand glossary acronyms, drop stopwords, with the same function on queries. Planted documents check it: `cust_acct_no` ranks first for "customer account number" and for `cust_acct_no`, `ZorblaxInvoiceLineID` for "zorblax invoice line id", and `QUUXTREL_SKU_QTY` for "quuxtrel SKU qty" and "quuxtrel stock keeping unit quantity".
+
+| Step | Run 1 p50 / max | Run 2 p50 / max |
+|---|---|---|
+| tokenize 10⁵ texts | 0.80 / 0.87 s | 0.82 / 0.96 s |
+| `BM25.index` on the tokens | 0.89 / 0.93 s | 0.76 / 1.24 s |
+| **full rebuild** (tokenize + index) | **1.73 / 1.75 s** | **1.49 / 2.38 s** |
+| one database's rebuild (~10⁴ docs) | 0.16 / 0.22 s | 0.17 / 0.31 s |
+| query, k=50 | 0.40 / 1.19 ms | 0.36 / 0.83 ms |
+| query while a full rebuild runs on a thread | 0.57 ms p50, 24 ms p95, 111 ms max | 0.76 ms p50, 18 ms p95, 83 ms max |
+
+Run 2's maxima came while other sessions were busy on the same machine. Searches slow down during a rebuild because they share the GIL with it. They stay correct, because the new index replaces the old one by a single reference assignment. In both runs, every search during the rebuild used the old index and none saw a partly built one.
+
+**Decision: rebuild on every change and swap atomically.** A full rebuild takes 1.5–1.7 s at p50 and at most 2.4 s, under the rule's 3 s. Per-database indexes and debounced edits aren't needed. Searches cost under a millisecond, and up to about 0.1 s while a rebuild is running, which is small next to a tool call's turn. For M3.6:
+- Run at most one rebuild at a time. A change that arrives during a rebuild marks the index stale, and one more rebuild runs after the current one, so a burst of compile writes costs two rebuilds, not one per write.
+- Cache each document's tokens by `content_hash`, so a rebuild tokenizes only changed documents. That removes about half of a rebuild (the tokenize row).
+- The numbers come from one fast machine. A slower Mac is the main risk to the 3 s margin. If a full rebuild there goes past about 3 s even with cached tokens, fall back to the per-database indexes measured above.
+
+**ARCHITECTURE.md changed.** §7.3 said a rebuild "should take about a second". It now gives the measured 1.5–1.7 s and the policy above.
 
 ### S9: Can a Pro plan use Opus in Claude Code? (2026-11-04)
 
