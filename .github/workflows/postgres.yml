@@ -4,12 +4,13 @@ name: Bundled Postgres
 # minimal configure, trimmed to the shipped file list, signed with the hardened runtime, then
 # smoke-tested and run through the store lifecycle tests (§5.3 and §12: engine/tests/store, which
 # test engine/ontological/store/pg.py and its Alembic chains, and ops.llm_call through
-# engine/ontological/llm/calls.py), the engine's idle shutdown on the real store
-# (engine/tests/engine/test_engine_pg.py), dense search with the embedding model
+# engine/ontological/llm/calls.py, and Chinook's catalog ingest through
+# engine/ontological/catalog/ and a source executor), the engine's idle shutdown on the real
+# store (engine/tests/engine/test_engine_pg.py), dense search with the embedding model
 # (engine/tests/store/test_dense_search.py), the eval cluster's tests (eval/tests/test_cluster.py)
 # and upstream's golden DAL suite on a Pagila and Chinook test cluster (engine/tests/golden_dal,
-# M2.1). Runs when the scripts, the store, the embedder, the vendored chain, the engine's
-# dependencies or the eval cluster change, or by hand.
+# M2.1). Runs when the scripts, the store, the embedder, the catalog ingest, the source executor,
+# the vendored chain, the engine's dependencies or the eval cluster change, or by hand.
 on:
   push:
     branches: [main]
@@ -19,6 +20,8 @@ on:
       - engine/ontological/store/**
       - engine/ontological/embed/**
       - .github/actions/embedding-model/**
+      - engine/ontological/catalog/**
+      - engine/ontological/sources/**
       - engine/ontological/llm/calls.py
       - engine/auto_ontology/**
       - engine/pyproject.toml
@@ -38,6 +41,8 @@ on:
       - engine/ontological/store/**
       - engine/ontological/embed/**
       - .github/actions/embedding-model/**
+      - engine/ontological/catalog/**
+      - engine/ontological/sources/**
       - engine/ontological/llm/calls.py
       - engine/auto_ontology/**
       - engine/pyproject.toml
