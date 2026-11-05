@@ -1,0 +1,69 @@
+name: Bundled Postgres
+
+# Builds the PostgreSQL 17 + pgvector binaries the app bundles (ARCHITECTURE.md §10, spike S4):
+# minimal configure, trimmed to the shipped file list, signed with the hardened runtime, then
+# smoke-tested. Runs when the scripts change, or by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - tools/spikes/s4_postgres/**
+      - .github/workflows/postgres.yml
+  pull_request:
+    paths:
+      - tools/spikes/s4_postgres/**
+      - .github/workflows/postgres.yml
+  workflow_dispatch:
+
+concurrency:
+  group: postgres-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: postgres (macOS arm64)
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: tools/spikes/s4_postgres
+    steps:
+      - uses: actions/checkout@v5
+      - run: echo "WORK=$RUNNER_TEMP/s4" >>"$GITHUB_ENV"
+      - name: Build PostgreSQL, pg_trgm and pgvector
+        run: ./build.sh "$WORK"
+      - name: Trim to the shipped file list and make relocatable
+        run: ./trim.sh "$WORK/postgres" "$WORK/dist"
+      - name: Sign with the hardened runtime (ad-hoc)
+        run: ./sign.sh "$WORK/dist" entitlements.plist
+      - name: Show library validation blocks loading without the entitlement
+        run: ./control.sh "$WORK/dist"
+      - name: Smoke test (initdb, forks, vector.dylib, pg_trgm, dump and restore)
+        run: ./smoke.sh "$WORK/dist"
+      - name: Package and measure
+        run: |
+          source versions.env
+          name="postgres-$PG_VERSION-pgvector-$PGVECTOR_VERSION-darwin-arm64"
+          tar -C "$WORK/dist" -cJf "$WORK/$name.tar.xz" .
+          echo "NAME=$name" >>"$GITHUB_ENV"
+          {
+            echo "## PostgreSQL $PG_VERSION + pgvector $PGVECTOR_VERSION, trimmed"
+            echo
+            ./measure.sh "$WORK/dist" "$WORK/$name.tar.xz"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: ${{ env.WORK }}/${{ env.NAME }}.tar.xz
+          if-no-files-found: error
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-build-logs
+          path: |
+            ${{ env.WORK }}/configure.log
+            ${{ env.WORK }}/make.log
+          if-no-files-found: ignore
