@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Protocol, cast
 
 import numpy as np
-import onnxruntime as ort  # pyright: ignore[reportMissingTypeStubs]
 from langchain_core.embeddings import Embeddings
 from numpy.typing import NDArray
 from tokenizers import Tokenizer
@@ -80,6 +79,11 @@ class Session(Protocol):
 
 def open_session(path: Path, threads: int = 0) -> Session:
     """The graph on the CPU provider; `threads` 0 is onnxruntime's default."""
+    # Imported here, not at the top: on macOS, importing onnxruntime opens a guarded descriptor,
+    # and the engine closes every inherited descriptor first thing in main(). Closing a guarded
+    # one kills the process.
+    import onnxruntime as ort  # pyright: ignore[reportMissingTypeStubs]
+
     options = ort.SessionOptions()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     options.intra_op_num_threads = threads
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL  # pyright: ignore[reportUnknownMemberType]

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,20 @@ from ontological.embed.embedder import CAP_TOKENS, MIN_CAP_TOKENS
 from ontological.engine import main
 
 __all__ = ["app_data"]  # the fixture
+
+
+def test_the_engine_closes_inherited_descriptors_before_onnxruntime_opens_any() -> None:
+    # On macOS, importing onnxruntime opens a guarded descriptor, and closing one kills the
+    # process (SIGKILL). The engine closes every inherited descriptor first thing in main(), so
+    # importing it mustn't import onnxruntime.
+    code = (
+        "import sys\n"
+        "from ontological.engine import main\n"
+        "assert 'onnxruntime' not in sys.modules, 'importing the engine imports onnxruntime'\n"
+        "main.close_inherited_fds()\n"
+    )
+    p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
 
 
 def test_the_model_directory_comes_from_the_flag_or_the_environment(
