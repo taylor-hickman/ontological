@@ -8,7 +8,8 @@ that engine and exits 0: the caller attaches to it. Otherwise it starts or adopt
 Postgres, applies pending migrations (§5.3), loads the embedder from `--model-dir` and calibrates
 its bulk batch cap (§7.1; with no model directory it runs without one), serves the API on
 127.0.0.1 at a random port with a new bearer token, writes engine.json and releases the lock. It
-prints one JSON line when it serves or attaches, `{"pid", "port", "version", "started"}`, or `{"error"}` and exits 1.
+prints one JSON line when it serves or attaches, `{"pid", "port", "version", "started"}`, or
+`{"error"}` and exits 1.
 
 It exits 0 after `--idle-timeout` seconds (600) with no live lease, no request in flight and no
 running job, or on SIGTERM or SIGINT. Either way it removes engine.json, writes the quit dump
