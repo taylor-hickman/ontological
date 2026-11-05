@@ -1,0 +1,257 @@
+"""Source executors: one read-only source connection in a process of its own (ARCHITECTURE.md
+§5.5, §5.6).
+
+A `SourceExecutor` starts its child as soon as it is made, so the source is attached before the
+first operation. It runs one operation at a time: `extract`, `run_sql` or `probe`. A timeout or a
+`cancel()` from another thread first asks the child to `interrupt()` the query. If the operation
+is still running `KILL_AFTER_S` later, the executor kills the child, starts a new one and raises.
+Results cross the pipe small: at most `MAX_PROFILE_ROWS` rows from a probe, and `MAX_ANSWER_ROWS`
+from `run_sql`.
+
+This module covers a SQLite file attached through DuckDB. The child is `worker.py`.
+"""
+
+from __future__ import annotations
+
+import multiprocessing
+import threading
+import time
+from dataclasses import dataclass
+from multiprocessing.connection import Connection, wait
+from multiprocessing.process import BaseProcess
+from pathlib import Path
+from typing import Any, Literal
+
+from ontological.sources import worker
+
+MAX_ANSWER_ROWS = 200
+MAX_PROFILE_ROWS = 1000
+KILL_AFTER_S = 2.0
+RUN_SQL_TIMEOUT_S = 60.0
+PROBE_TIMEOUT_S = 5.0
+START_TIMEOUT_S = 30.0
+_POLL_S = 0.05  # how often a waiting operation looks for a cancel()
+
+Record = dict[str, Any]
+
+
+class SourceError(Exception):
+    """The source can't be used: it failed to open, or the executor is closed."""
+
+
+class SourceQueryError(SourceError):
+    """The source refused or failed the SQL. The message is DuckDB's, for the agent to read."""
+
+
+class Cancelled(SourceError):
+    """`cancel()` stopped the operation."""
+
+
+class StatementTimeout(SourceError, TimeoutError):
+    """The operation outlived its `timeout_s` and was stopped."""
+
+
+class ExecutorDied(SourceError):
+    """The child exited in the middle of an operation. A new one has been started."""
+
+
+@dataclass(frozen=True)
+class SqliteSource:
+    path: Path
+
+
+@dataclass(frozen=True)
+class Rows:
+    columns: list[str]
+    types: list[str]  # DuckDB's type names, one per column
+    rows: list[tuple[Any, ...]]
+    truncated: bool  # the query had more rows than were kept
+
+
+@dataclass(frozen=True)
+class Catalog:
+    """What a source holds, as lists of records with the columns upstream's connectors return
+    (`connectors/base.py::SQLDatabase`), so ingest can build its DataFrames from them."""
+
+    database_name: str
+    tables: list[Record]  # table_schema, table_name, table_type ("base table" | "view")
+    columns: list[Record]  # table_schema, table_name, column_name, data_type, is_nullable,
+    # ordinal_position
+    views: list[Record]  # table_schema, table_name, view_definition
+    pks: list[Record]  # table_schema, table_name, column_name, ordinal_position
+    fks: list[Record]  # table_schema, table_name, column_name, referenced_schema,
+    # referenced_table, referenced_column
+    skipped: list[Record]  # table_schema, table_name, error: relations DuckDB can't read
+
+
+class SourceExecutor:
+    def __init__(self, source: SqliteSource, *, kill_after_s: float = KILL_AFTER_S) -> None:
+        self.source = source
+        self.kill_after_s = kill_after_s
+        self._ctx = multiprocessing.get_context("spawn")
+        self._lock = threading.Lock()  # one operation at a time
+        self._cancel = threading.Event()
+        self._busy = False
+        self._closed = False
+        self._op_id = 0
+        self._proc: BaseProcess | None = None
+        self._conn: Connection | None = None
+        self._ready = False
+        self._start()
+
+    def __enter__(self) -> SourceExecutor:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    @property
+    def pid(self) -> int | None:
+        return self._proc.pid if self._proc else None
+
+    @property
+    def busy(self) -> bool:
+        """An operation is in flight."""
+        return self._busy
+
+    # Operations
+
+    def wait_ready(self) -> None:
+        """Until the child has attached the source. Raises SourceError if it couldn't."""
+        with self._lock:
+            self._ensure_ready()
+
+    def extract(self, *, timeout_s: float | None = None) -> Catalog:
+        catalog = self._call("extract", (), timeout_s)
+        return Catalog(**catalog)
+
+    def run_sql(self, sql: str, *, timeout_s: float = RUN_SQL_TIMEOUT_S) -> Rows:
+        """The answer agent's query: one SELECT, at most `MAX_ANSWER_ROWS` rows."""
+        return Rows(**self._call("rows", (sql, MAX_ANSWER_ROWS), timeout_s))
+
+    def probe(
+        self, sql: str, *, max_rows: int = MAX_ANSWER_ROWS, timeout_s: float = PROBE_TIMEOUT_S
+    ) -> Rows:
+        """One capped, read-only query: the gate's probes, empty-result handling, profiling and
+        the semantic-FK value-overlap check. `max_rows` is at most `MAX_PROFILE_ROWS`."""
+        if not 0 < max_rows <= MAX_PROFILE_ROWS:
+            raise ValueError(f"max_rows must be between 1 and {MAX_PROFILE_ROWS}, not {max_rows}")
+        return Rows(**self._call("rows", (sql, max_rows), timeout_s))
+
+    def cancel(self) -> None:
+        """Stop the operation in flight, from any thread. Does nothing when there is none."""
+        if self._busy:
+            self._cancel.set()
+
+    def close(self) -> None:
+        """Stop the child. An operation in flight is cancelled first."""
+        self._closed = True
+        self.cancel()
+        with self._lock:
+            self._stop()
+
+    # The child
+
+    def _start(self) -> None:
+        parent, child = self._ctx.Pipe()
+        proc = self._ctx.Process(
+            target=worker.serve,
+            args=(child, str(self.source.path)),
+            name=f"source-executor:{self.source.path.name}",
+            daemon=True,
+        )
+        proc.start()
+        child.close()  # so the parent sees EOF when the child exits
+        self._proc, self._conn, self._ready = proc, parent, False
+
+    def _stop(self, *, kill: bool = False) -> None:
+        """Stop the child: close the pipe, which the child exits on, or kill it outright."""
+        proc, conn = self._proc, self._conn
+        self._proc, self._conn, self._ready = None, None, False
+        if conn is not None:
+            conn.close()
+        if proc is None:
+            return
+        if not kill:
+            proc.join(self.kill_after_s)
+        if proc.is_alive():
+            proc.kill()
+        proc.join()
+
+    def _restart(self) -> None:
+        self._stop(kill=True)
+        self._start()
+
+    def _ensure_ready(self) -> None:
+        if self._closed:
+            raise SourceError("the source executor is closed")
+        if self._proc is None:
+            self._start()
+        if self._ready:
+            return
+        assert self._proc is not None and self._conn is not None
+        if not wait([self._conn, self._proc.sentinel], START_TIMEOUT_S):
+            self._stop(kill=True)
+            raise SourceError(f"the source executor didn't start in {START_TIMEOUT_S:g}s")
+        try:
+            kind, detail = self._conn.recv()
+        except (EOFError, OSError):
+            kind, detail = "failed", "the source executor exited while it started"
+        if kind != "ready":
+            self._stop(kill=True)  # the next operation tries again with a new child
+            raise SourceError(f"{self.source.path}: {detail}")
+        self._ready = True
+
+    def _call(self, op: str, args: tuple[Any, ...], timeout_s: float | None) -> Any:
+        with self._lock:
+            self._ensure_ready()
+            assert self._conn is not None
+            self._cancel.clear()
+            self._op_id += 1
+            self._busy = True
+            try:
+                self._conn.send((self._op_id, op, args))
+                return self._await(self._op_id, timeout_s)
+            finally:
+                self._busy = False
+
+    def _await(self, op_id: int, timeout_s: float | None) -> Any:
+        assert self._proc is not None and self._conn is not None
+        conn, sentinel = self._conn, self._proc.sentinel
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
+        why: Literal["cancel", "timeout"] | None = None
+        kill_at = 0.0
+        while True:
+            if wait([conn, sentinel], _POLL_S):
+                try:
+                    reply_id, kind, payload = conn.recv()
+                except (EOFError, OSError):
+                    self._restart()
+                    raise ExecutorDied(
+                        f"the source executor for {self.source.path} exited"
+                    ) from None
+                if reply_id != op_id:
+                    continue
+                if kind == "ok":
+                    return payload
+                if kind == "error":
+                    raise SourceQueryError(payload)
+                raise self._stopped(why or "cancel", timeout_s)
+            now = time.monotonic()
+            if why is None:
+                if self._cancel.is_set():
+                    why = "cancel"
+                elif deadline is not None and now >= deadline:
+                    why = "timeout"
+                if why is not None:
+                    conn.send(("cancel", op_id))
+                    kill_at = now + self.kill_after_s
+            elif now >= kill_at:
+                self._restart()
+                raise self._stopped(why, timeout_s)
+
+    @staticmethod
+    def _stopped(why: Literal["cancel", "timeout"], timeout_s: float | None) -> SourceError:
+        if why == "timeout":
+            return StatementTimeout(f"the query ran longer than its {timeout_s:g}s timeout")
+        return Cancelled("the operation was cancelled")
