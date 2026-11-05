@@ -3,13 +3,13 @@
 Runs the store's server for one `<appData>/Ontological` directory: first launch (initdb), start,
 adopting a server a previous engine left running, stop with the quit dump, dumps, migrations
 with restore on failure, the major-version move, and the pause when the disk is full. It drives
-the bundled binaries (`initdb`, `pg_ctl`, `psql`, `pg_dump`, `pg_restore`) as subprocesses and
-uses only the standard library. Grown from spike S5's prototype
-(tools/spikes/s5_pg_lifecycle/pg.py).
+the bundled binaries (`initdb`, `pg_ctl`, `psql`, `pg_dump`, `pg_restore`) as subprocesses; the
+Alembic chains (`chains.py`) connect through SQLAlchemy and psycopg. Grown from spike S5's
+prototype (tools/spikes/s5_pg_lifecycle/pg.py).
 
-The engine calls `ensure_running` (or `wait_until_running`, which waits out a full disk) before
-it serves requests, and `stop` on shutdown. Several engines may call them at once: `pg.lock`
-serialises them, and they all end up on one postmaster.
+The engine calls `ensure_running` (or `wait_until_running`, which waits out a full disk), then
+`migrate`, before it serves requests, and `stop` on shutdown. Several engines may call them at
+once: `pg.lock` serialises them, and they all end up on one postmaster.
 """
 
 from __future__ import annotations
@@ -28,6 +28,10 @@ from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
+
+from ontological.store import chains as alembic_chains
+from ontological.store.chains import Chain
 
 USER = "ontological"
 DATABASE = "ontological"
@@ -206,8 +210,8 @@ def wait_gone(pid: int, timeout_s: float) -> None:
 
 @contextlib.contextmanager
 def locked(layout: Layout) -> Generator[None]:
-    """Serialise initdb, start, adopt, stop and restore between engines. The kernel drops an
-    flock when its holder dies, so a kill -9 never leaves it held."""
+    """Serialise initdb, start, adopt, stop, restore and migrate between engines. The kernel
+    drops an flock when its holder dies, so a kill -9 never leaves it held."""
     layout.app_data.mkdir(parents=True, exist_ok=True)
     with open(layout.lock, "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
@@ -229,6 +233,12 @@ def psql(
         ]
     )  # fmt: skip
     return p.stdout.strip()
+
+
+def url(layout: Layout, db: str = DATABASE) -> str:
+    """The store's SQLAlchemy URL: psycopg over the socket, with no password (local socket
+    connections are trusted). The socket directory goes in the query, percent-encoded."""
+    return f"postgresql+psycopg://{USER}@/{db}?host={quote(str(layout.pgsocket), safe='/')}"
 
 
 def check_socket_path(layout: Layout) -> None:
@@ -377,11 +387,17 @@ def discard_staging(layout: Layout, staging: Path) -> None:
     shutil.rmtree(staging)
 
 
+def migrate_new_store(layout: Layout) -> None:
+    """First launch's last step: both Alembic chains onto the new store. No dump, since there is
+    nothing to lose: a failure discards the whole staging cluster."""
+    alembic_chains.upgrade(url(layout))
+
+
 def first_launch(layout: Layout, prepare_store: Callable[[Layout], None] | None) -> None:
     """§5.3, First launch. All of it happens in pgdata.initdb/: initdb, start, create the store
-    and its extensions, `prepare_store` (the Alembic chains), stop. Only then is it renamed to
-    pgdata/, so a crash or an error at any step leaves no pgdata/, and the next start runs first
-    launch again from the beginning."""
+    and its extensions, `prepare_store` (by default the Alembic chains), stop. Only then is it
+    renamed to pgdata/, so a crash or an error at any step leaves no pgdata/, and the next start
+    runs first launch again from the beginning."""
     staging = layout.staging("initdb")
     initdb(layout, staging)
     clear_stale_socket(layout)
@@ -433,14 +449,15 @@ def start(layout: Layout, pgdata: Path | None = None) -> None:
 def ensure_running(
     layout: Layout,
     *,
-    prepare_store: Callable[[Layout], None] | None = None,
+    prepare_store: Callable[[Layout], None] | None = migrate_new_store,
     confirm_stale_dump: Callable[[str], bool] = lambda _: True,
 ) -> Server:
     """Start or adopt the store's server (§5.3).
 
     `prepare_store` runs once, at first launch, against the new store before it becomes
-    pgdata/: the place for the Alembic chains. `confirm_stale_dump` is asked before a
-    major-version move restores a dump that misses later changes; it gets the reason.
+    pgdata/; by default it runs both Alembic chains. Later starts bring the chains up to date
+    with `migrate`. `confirm_stale_dump` is asked before a major-version move restores a dump
+    that misses later changes; it gets the reason.
 
     Raises DiskFull when the server can't start for want of space; see `wait_until_running`.
     """
@@ -480,7 +497,7 @@ def wait_until_running(
     on_disk_full: Callable[[DiskFull], None],
     poll_s: float = 5.0,
     cancel: threading.Event | None = None,
-    prepare_store: Callable[[Layout], None] | None = None,
+    prepare_store: Callable[[Layout], None] | None = migrate_new_store,
     confirm_stale_dump: Callable[[str], bool] = lambda _: True,
 ) -> Server:
     """The disk-full pause (§5.3, Disk): `ensure_running`, and while the disk is too full for
@@ -595,28 +612,34 @@ def restore(layout: Layout, path: Path) -> None:
 
     `DROP DATABASE … WITH (FORCE)` ends every connection to the store, so the engine's pool has
     to reconnect afterwards."""
+    with locked(layout):  # resume_restore() runs under the same lock
+        _restore(layout, path)
+
+
+def _restore(layout: Layout, path: Path) -> None:
+    """restore() for a caller that already holds pg.lock (flock isn't re-entrant: a second
+    open() of the lock file in the same process blocks against the first)."""
     if not path.is_file():
         raise PgError(f"the dump {path} is missing; the store is unchanged")
-    with locked(layout):  # resume_restore() runs under the same lock
-        psql(layout, f"DROP DATABASE IF EXISTS {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
-        psql(layout, f"CREATE DATABASE {RESTORE_DATABASE}", db="postgres")
-        try:
-            run(
-                [
-                    layout.tool("pg_restore"), "--exit-on-error", "--single-transaction",
-                    "-h", str(layout.pgsocket), "-p", str(PORT), "-U", USER,
-                    "-d", RESTORE_DATABASE, str(path),
-                ]
-            )  # fmt: skip
-        except PgError as e:
-            psql(layout, f"DROP DATABASE {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
-            msg = f"restoring {path.name} failed; the store is unchanged: {e}"
-            if ENOSPC in str(e):
-                raise DiskFull(layout.app_data, msg) from e
-            raise PgError(msg) from e
-        # DROP DATABASE can't run inside a transaction, so this takes two statements.
-        psql(layout, f"DROP DATABASE {DATABASE} WITH (FORCE)", db="postgres")
-        psql(layout, f"ALTER DATABASE {RESTORE_DATABASE} RENAME TO {DATABASE}", db="postgres")
+    psql(layout, f"DROP DATABASE IF EXISTS {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
+    psql(layout, f"CREATE DATABASE {RESTORE_DATABASE}", db="postgres")
+    try:
+        run(
+            [
+                layout.tool("pg_restore"), "--exit-on-error", "--single-transaction",
+                "-h", str(layout.pgsocket), "-p", str(PORT), "-U", USER,
+                "-d", RESTORE_DATABASE, str(path),
+            ]
+        )  # fmt: skip
+    except PgError as e:
+        psql(layout, f"DROP DATABASE {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
+        msg = f"restoring {path.name} failed; the store is unchanged: {e}"
+        if ENOSPC in str(e):
+            raise DiskFull(layout.app_data, msg) from e
+        raise PgError(msg) from e
+    # DROP DATABASE can't run inside a transaction, so this takes two statements.
+    psql(layout, f"DROP DATABASE {DATABASE} WITH (FORCE)", db="postgres")
+    psql(layout, f"ALTER DATABASE {RESTORE_DATABASE} RENAME TO {DATABASE}", db="postgres")
 
 
 def resume_restore(layout: Layout) -> str | None:
@@ -641,34 +664,38 @@ class MigrationFailed(PgError):
         self.restored_from = restored_from
 
 
-def migrate(
-    layout: Layout,
-    *,
-    pending: Callable[[Layout], bool],
-    upgrade: Callable[[Layout], None],
-) -> Path | None:
-    """Apply pending migrations with a dump first (§5.3, Migrations). Returns the dump, or None
-    when nothing is pending.
+def migrate(layout: Layout, *, chains: Sequence[Chain] = alembic_chains.CHAINS) -> Path | None:
+    """Bring both Alembic chains to their heads with a dump first (§5.3, Migrations). Returns the
+    dump, or None when nothing is pending. Call with the server running.
 
-    `upgrade` applies every pending revision (M0.4: both Alembic chains, one transaction per
-    revision), so an earlier revision has committed by the time a later one fails. That is what
+    Upstream's chain runs first, then Ontological's, so by the time a revision fails, the
+    revisions before it (in its own chain, and all of upstream's) have committed. That is what
     the dump is for: on any failure the store is restored from it and MigrationFailed raised. If
-    the restore fails too, a PgError says the store is as the failed migration left it."""
-    if not pending(layout):
-        return None
-    before = dump(layout, "premigrate")
-    try:
-        upgrade(layout)
-    except Exception as e:
+    the restore fails too, a PgError says the store is as the failed migration left it. The
+    restore ends every connection to the store, so the engine's pool has to reconnect
+    afterwards.
+
+    pg.lock is held from the pending check through the restore. Engines starting together each
+    call migrate: the first migrates, and the others then find nothing pending. Without the
+    lock, a second engine would dump the unmigrated store, fail on the tables the first had just
+    created, and restore its dump over the first's finished migration."""
+    store_url = url(layout)
+    with locked(layout):
+        if not alembic_chains.pending(store_url, chains):
+            return None
+        before = dump(layout, "premigrate")
         try:
-            restore(layout, before)
-        except PgError as r:
-            raise PgError(
-                f"the migration failed ({e}), and so did restoring {before.name}. The store is "
-                f"as the failed migration left it: {r}"
-            ) from r
-        raise MigrationFailed(e, before) from e
-    return before
+            alembic_chains.upgrade(store_url, chains)
+        except Exception as e:
+            try:
+                _restore(layout, before)
+            except PgError as r:
+                raise PgError(
+                    f"the migration failed ({e}), and so did restoring {before.name}. The store "
+                    f"is as the failed migration left it: {r}"
+                ) from r
+            raise MigrationFailed(e, before) from e
+        return before
 
 
 # --- major-version move ------------------------------------------------------------------------

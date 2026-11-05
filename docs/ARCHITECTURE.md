@@ -315,12 +315,12 @@ The Postgres binaries, DuckDB extensions and embedding model ship inside the app
 
 | Schema | Contents | Migrations |
 |---|---|---|
-| `public` | Upstream's catalog and semantic tables, unchanged: `catalog_database → catalog_schema → catalog_table → catalog_column`, foreign keys, query history, `term`, `table__term`, `column_attribute`, `column__semantic_fk`, `sql_attribute`, custom analyses, tags, rules | Upstream's Alembic chain (7 revisions at `2a24f5d`), vendored |
+| `public` | Upstream's catalog and semantic tables, unchanged: `catalog_database → catalog_schema → catalog_table → catalog_column`, foreign keys, query history, `term`, `table__term`, `column_attribute`, `column__semantic_fk`, `sql_attribute`, custom analyses, tags, rules | Upstream's Alembic chain (7 revisions at `2a24f5d`), vendored at `engine/auto_ontology/alembic/`, version table `public.alembic_version` |
 | `vdb` | Upstream's langchain-postgres vector tables, holding the `data_objects_layer` and `semantic_layer` collections | Created by upstream's `PostgresVDB`, with `vector_size` set to the bundled model's dimension |
 | `app` | `conversation, message, setting(key, value JSONB), acronym, prompt_prefix, query_log` (replaces analytics) | Ontological's Alembic chain |
 | `ops` | `job, job_step` (resumable compile checkpoints), `llm_call` (cache + usage log), `compile_run`, `change_log` | Ontological's Alembic chain |
 
-Upstream's `frontend` schema (Prisma, Better Auth) is never created. App state lives in `app`, owned by the engine. The two Alembic chains are independent: Ontological's chain keeps its version table in `ops`, so new upstream revisions can be vendored without renumbering anything.
+Upstream's `frontend` schema (Prisma, Better Auth) is never created. App state lives in `app`, owned by the engine. The two Alembic chains are independent: Ontological's chain (`engine/ontological/store/migrations/`) keeps its version table at `ops.alembic_version`, so new upstream revisions can be vendored without renumbering anything. Upstream's chain runs first, then Ontological's, each to its head. Ontological's runs one transaction per revision.
 
 ### 5.3 Running Postgres
 
@@ -745,12 +745,13 @@ ontological/
     src/main/                   window, engine supervisor, engine.json reader, menus
     src/preload/                typed bridge: native dialogs, context menus, notifications, theme (DESIGN.md §3.4); {engineUrl, token} with the engine supervisor
     src/renderer/               React app (§9.1)
-  engine/                       Python package `ontological` (uv-managed)
+  engine/                       Python packages `ontological` and `auto_ontology` (uv-managed, one distribution)
+    auto_ontology/              vendored upstream DAL, vdb and Alembic chain (alembic/), under upstream's own
+                                package name so each file diffs cleanly against upstream; UPSTREAM.md   (§5.4, §11)
     ontological/
       api/                      FastAPI routes + SSE
-      upstream/                 vendored upstream DAL, vdb and Alembic chain, run as-is   (§5.4)
-      store/                    pg.py (initdb, start, adopt, stop, dump/restore), migrations/ (Ontological's chain),
-                                local_owner.py (owner/group stub), backups
+      store/                    pg.py (initdb, start, adopt, stop, dump/restore), chains.py (runs both Alembic chains),
+                                migrations/ (Ontological's chain), local_owner.py (owner/group stub), backups
       sources/                  SQLDatabase ABC, duckdb/sqlite/scanner connectors, executor.py, keyring refs
       catalog/                  extract, normalize, diff, query-history parsing, parse_pool.py   (ported)
       profile/                  sampling, date_format, json paths (run inside the executor)     (ported)
@@ -782,7 +783,7 @@ ontological/
 
 ## 11. Reuse plan from upstream
 
-Upstream is Apache-2.0. For vendored and ported files:
+Upstream is Apache-2.0. Vendored files keep upstream's package name and paths in `engine/auto_ontology/`, so their absolute `auto_ontology.*` imports stay as they are and each file diffs cleanly against upstream. The one move is the Alembic chain, from the repository root to `auto_ontology/alembic/`, so it ships in the wheel. `engine/auto_ontology/UPSTREAM.md` lists every vendored file and its edits. For vendored and ported files:
 - Keep the SPDX headers and add a "modified by" line to every file Ontological changes.
 - Carry over `LICENSE`, `NOTICE` and the relevant `THIRD_PARTY_NOTICES` entries, plus PostgreSQL's and pgvector's licenses for the bundled binaries.
 - Remove NVIDIA branding: names, `#76b900`, logos, `nvidia-` skill names, and `@nvidia/foundations-react-core`. Apache-2.0 grants no trademark rights.
