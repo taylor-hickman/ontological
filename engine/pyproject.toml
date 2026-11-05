@@ -12,9 +12,11 @@ dependencies = [
     "langchain-core>=1.6.1",
     "langchain-postgres>=0.0.17",
     "numpy>=2.5.2",
+    "onnxruntime>=1.31.1",
     "pandas>=2.3.3,<3",
     "psycopg[binary]>=3.3.4",
     "sqlalchemy>=2.0.52,<2.1",
+    "tokenizers>=0.23.3",
     "uvicorn>=0.54.0",
 ]
 
