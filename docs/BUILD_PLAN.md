@@ -260,3 +260,28 @@ Each spike appends its result here: the date, what ran, the numbers, the decisio
 - §6.3 now says to record the answering model from `AssistantMessage.model` (and the `model_fallback` message), not from `model_usage`.
 - §6.5 now says to read utilization from `raw["unifiedWindows"]`.
 - For M1.7: the answer agent's system prompt says that tools can refuse and name the missing step.
+
+### S2: How long does a spawn take? (2026-11-04)
+
+**What ran.** `tools/spikes/s2_spawn_time.py` on macOS arm64, with Claude Code 2.1.318 and `claude-agent-sdk` 0.2.178. It made 20 calls each on `haiku`, `sonnet` and `opus`, back to back, one fresh `query()` per call, so each started a new `claude` process. The call was one line, "Classify the column `customer_email` as one of: identifier, contact, measure, date.", with a one-field JSON schema, the §6.2 options and `effort="low"`. All 60 calls returned valid `structured_output`.
+
+The script splits each call into three timings:
+
+- **spawn**, from calling `query()` to the CLI's `init` message. This covers the SDK's `claude -v` check, starting the process and the initialize handshake.
+- **the CLI's turn**, `ResultMessage.duration_ms`.
+- **close**, from the `ResultMessage` until the process exits and `query()` returns.
+
+Overhead is spawn plus close. `duration_api_ms` can't be used to work out overhead. It counts API requests the CLI sends while it is still starting up, so it often comes out longer than `duration_ms`.
+
+| Model | `query()` p50 / p95 | spawn p50 / p95 | close p50 / p95 | overhead p50 / p95 | CLI turn p50 / p95 |
+|---|---|---|---|---|---|
+| haiku | 1.87 / 3.17 s | 0.17 / 0.21 s | 0.34 / 0.44 s | 0.53 / 0.61 s | 1.36 / 2.62 s |
+| sonnet | 1.99 / 2.26 s | 0.17 / 0.25 s | 0.33 / 0.40 s | 0.53 / 0.58 s | 1.45 / 1.78 s |
+| opus | 3.02 / 5.64 s | 0.18 / 0.23 s | 0.33 / 0.43 s | 0.55 / 0.62 s | 2.50 / 5.24 s |
+| all 60 | 2.09 / 4.08 s | 0.17 / 0.23 s | 0.34 / 0.43 s | 0.53 / 0.62 s | 1.57 / 3.49 s |
+
+The first call on each model was not much slower. Spawn took 0.35 s on the first `sonnet` and `opus` calls, against 0.17 s after that. Whole `query()` time varies with the model, mostly on `opus`, where one call took 8.2 s. Overhead hardly varies.
+
+**Decision: no warm pool.** The rule asks whether a spawn takes more than 1.5 s at p50. It takes 0.53 s, spawn and close together. The whole `query()` is above 1.5 s at p50 (2.09 s), but that is the model's time, and a warm pool can't remove it. A pre-spawned client would save the 0.17 s spawn. The 0.34 s close could also be saved without a pool, by not waiting for the process to exit. Neither is worth the pool's complexity in M1.
+
+**ARCHITECTURE.md changed.** §6.5's estimate said each call costs "a few seconds of process startup" and that split might add 20–30 minutes. It now gives 0.53 s of overhead per call, about 1.5–2 minutes of overhead for split's extra calls on a 200-table database. §3's per-call cost note now says the same.
