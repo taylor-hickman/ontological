@@ -307,6 +307,73 @@ Library validation is only enforced with System Integrity Protection on. GitHub'
 
 **ARCHITECTURE.md changed.** §10 gives the measured size, the configure choices, the `@rpath` relink and the entitlement.
 
+### S6: Do upstream's golden fixtures and DAL tests run against a bare Postgres outside Docker? (2026-11-04)
+
+**What ran.** `tools/spikes/s6_golden_dal/run.sh` on macOS arm64, with S4's trimmed and ad-hoc-signed tree (PostgreSQL 17.11, pgvector 0.8.7) and upstream at `2a24f5d`, unmodified. It follows upstream's own CI job with the `pgvector/pgvector:pg17` container swapped for a cluster from `initdb -E UTF8 --locale=C`, listening on `127.0.0.1` with a password. Upstream's `seed_fixtures` loads Pagila into a `pagila` database and builds Chinook as a SQLite file. Then come `alembic upgrade head`, `seed_graph_fixture --reset` (CONNECTION_STRINGS naming both, through upstream's connectors), `alembic check`, and `pytest auto_ontology/dal/tests` with `POSTGRES_*` set. A whole run takes about 30 s.
+
+**Result: 781 passed, 0 failed, 0 skipped.** The seed wrote 2 databases, 37 tables, 209 columns, 5 terms, 4 SQL attributes, 2 custom analyses, 1 PQL analysis and 3 zones, and `alembic check` found no drift. The goldens were recorded against the Docker image, whose default locale is `en_US.utf8`, and all 122 recorded reads still match on locale `C`.
+
+| Test file | Passed | | Test file | Passed |
+|---|---:|---|---|---:|
+| `test_analyses.py` | 27 | | `test_reset.py` | 14 |
+| `test_attributes.py` | 60 | | `test_rules.py` | 35 |
+| `test_candidates.py` | 16 | | `test_schema_version.py` | 9 |
+| `test_close_store.py` | 2 | | `test_search.py` | 69 |
+| `test_column_properties.py` | 9 | | `test_session.py` | 10 |
+| `test_dal_surface.py` | 25 | | `test_sql_attributes.py` | 35 |
+| `test_datasources_semantic.py` | 37 | | `test_sql_fragments.py` | 12 |
+| `test_exploration.py` | 33 | | `test_tags.py` | 143 |
+| `test_golden.py` | 128 | | `test_terms.py` | 52 |
+| `test_groups.py` | 7 | | `test_users.py` | 12 |
+| `test_metadata_batch.py` | 8 | | `test_zones.py` | 15 |
+| `test_migration_revision.py` | 2 | | **all** | **781** |
+| `test_model_interchange.py` | 21 | | | |
+
+Two control runs show how quietly the suite turns itself off:
+
+- With `POSTGRES_*` unset, 741 of the 781 skip and pytest exits 0.
+- Over the Unix socket only, as §5.3 has the engine connect (`POSTGRES_HOST` set to the socket directory), 734 skip, `test_groups.py` errors 7 times and 40 pass. Upstream's `infra/postgres.py` builds `postgresql://user:password@{host}:{port}/{db}`, which can't name a socket directory, raw or percent-encoded. psycopg falls back to `/tmp/.s.PGSQL.5432`, and each test module's "schema unavailable" guard skips.
+
+**Vendored files that need edits.** Nothing needed an edit to run against a bare Postgres. The edits come from vendoring a subset. §11's set (79 files: `dal/`, `catalog/store/`, `vdb/postgres.py` and `alembic/` for the engine; the seed, capture, Postgres and SQLite connectors, two service modules and the DAL tests as test-only code) imports 54 more upstream modules at module level. The seed and tests loaded 58 outside modules. Through `connectors/__init__.py`, `server/sql_utils.py` and `utils/__init__.py`, those bring in all ten connectors and their drivers (Databricks, Snowflake, Trino, PyHive, HeavyDB, MySQL, DuckDB), `hvac`, `python-dotenv`, and the OpenAI and NVIDIA LangChain clients. `imports.py` lists them, and the edits below cut them. With the engine edits applied, the engine's part imports only 18 more upstream modules, about 1,600 lines of constants, catalog models, `normalize`, `diff`, `query_stats`, zone helpers and `sample_values`, and needs nothing beyond numpy and pandas.
+
+Engine (M1.1):
+
+| File | Why | Edit |
+|---|---|---|
+| `dal/connections.py` | Imports `connectors.vault` (`hvac`), which also runs `connectors/__init__.py` and loads every connector | Read the keyring reference instead (§3) |
+| `dal/custom_analyses.py`, `dal/sql_attributes.py` | Import only `SqlParseError` from `server/sql_utils.py`, which imports every connector, the sqlglot parsers and `retrieval/` | Take `SqlParseError` from a one-class module |
+| `dal/custom_analyses.py`, `dal/pql_analyses.py` | Embed lazily through `utils.embedding` (OpenAI client to NIM) | Embed through the local embedder (§5.4, §7.1) |
+| `dal/model_interchange.py` | Imports the embedding stack (`server/model_interchange/embed.py`, `semantic/embed.py`) and `server/sql_utils.py` at module level | Not vendored: §11 already ports it with `server/model_interchange/*` |
+| `dal/schema_version.py` | Finds `alembic/` two levels above itself, as in upstream's checkout | Point it at the vendored chain |
+| `alembic/env.py` | Imports `auto_ontology.env` to load `.env` with python-dotenv | Drop the import; the engine sets the URL |
+| `infra/postgres.py` (vendored for `dal/session.py`, `dal/groups.py`, `vdb/__init__.py`) | Its URL can't name a socket directory, so every test skips over the socket | Build `postgresql://user@/db?host=<socket dir>`, no password |
+| `utils/__init__.py` | `dal/datasources.py`, `candidates.py`, `exploration.py` and `terms.py` import `utils.sample_values`, which runs `utils/__init__.py`, which imports `utils.embedding` | Vendor `utils/sample_values.py` with an empty `__init__.py` |
+| `catalog/store/db.py`, `queries.py`, `schemas.py` | Import `catalog.diff`, `normalize`, `query_stats` and `model` at module level, which §11 ports with fixes | Import the ported modules, or vendor upstream's copies beside the store |
+
+Test-only (M2.1):
+
+| File | Why | Edit |
+|---|---|---|
+| `seed_graph_fixture.py` | Ingests through `catalog.ingest_catalog`, so it needs upstream's ingest (`catalog/ingest.py`, `extract.py`, `write.py`, `table_filter.py`, `parsers/`, `services/schema.py`), not just the connectors | None to the file. Vendor that chain unchanged as test-only code, since the goldens are byte-for-byte against its output |
+| `connectors/__init__.py`, `connectors/registry.py` | Import all ten connectors at module level; the seed calls `registry.create_connector` | Keep only Postgres and SQLite |
+| `server/sql_attributes/service.py` | Imports `description_suggester` (an LLM call through `utils.llm_invoke`) and `utils.embedding` at module level, though the seed replaces the embed calls | Drop both imports |
+| `server/custom_analyses/service.py`, `server/sql_utils.py` | `sql_utils` validates SQL through `catalog/sql_parse.py` and `retrieval/data_access/graph_schemas.py`, and reads dialects through `connectors.get_connectors()` | Vendor `sql_utils` and those two modules; it gets the trimmed connectors |
+| `capture_dal_golden.py` | Finds the goldens at `parents[2]/auto_ontology/dal/tests/golden` | Point it at the vendored goldens |
+| `dal/tests/test_migration_revision.py` | `test_the_chart_pins_the_head_revision` reads upstream's Helm `values.yaml`; both tests find `alembic/` three levels up | Drop the Helm test; point the other at the vendored chain |
+| `dal/tests/test_model_interchange.py` (21 tests) | Tests `dal/model_interchange.py`, which is ported, not vendored | Runs against the port |
+| `dal/tests/test_dal_surface.py` | Snapshots every module in `auto_ontology.dal`, and `test_no_module_disappeared` fails if `model_interchange` leaves the package | Keep the port at `dal/model_interchange.py` with upstream's signatures, or take it out of `dal_surface.json` |
+
+The package name touches more files than all of that. 72 of the 79 files import upstream by absolute `auto_ontology.` paths, with no relative imports, and `test_dal_surface.py` imports `auto_ontology.dal.<module>` by name. §10's layout puts the code under `ontological/upstream/`, which means rewriting all 72.
+
+**Decision.**
+- §5.4's plan holds on the bundled binaries. M2.1's test cluster is an `initdb`'d S4 tree with the steps `run.sh` takes, and no Docker.
+- M2.1's gate fails on any skip, as `report.py` does. Pytest's exit status isn't enough: a missing or wrong connection skips about 95% of the suite.
+- M1.1 makes the engine edits above. `infra/postgres.py` gets a socket form, because the engine has no TCP port or password (§5.3).
+- Recommended for M1.1: keep the vendored package's name, `auto_ontology`, as a second top-level package in the engine's distribution. Then the 72 files keep their imports and each vendored file diffs cleanly against upstream. This changes §10's layout, and M1.1 decides.
+- Counting the Helm test that gets dropped, M2.1's conformance suite is 780 tests, 21 of them against the ported interchange module.
+
+**ARCHITECTURE.md changed.** §5.4 now says what S6 ran and that the seed also needs upstream's catalog ingest. §11's rows for `dal/*` and the test-only code list the edits and the extra files.
+
 ### S7: embedder loader and speed (2026-11-04)
 
 Ran `uv run tools/spikes/s7_embedder.py` on an Apple M5 Max (18 cores, 64 GB, macOS 26.5.2) with onnxruntime 1.31.1, against `snowflake-arctic-embed-m-v1.5` at `e58a8f7`, file `onnx/model_int8.onnx` (110.1 MB). The raw numbers are in `tools/spikes/s7_results.json`.
@@ -340,6 +407,7 @@ A one-off check (not in the script) of other files and providers on a 16×64 bat
 - A full 10⁵-text embed takes about 7 minutes on this machine and longer on smaller ones. It runs as a background job.
 
 Changed ARCHITECTURE.md §5.6 (Embedder) and §7.1. Not measured: a smaller Mac, and int8 recall against fp32 (the retrieval benchmark, §7.4, covers quality).
+
 
 ### S8: How long does a `bm25s` rebuild take at 10⁵ documents? (2026-11-04)
 
