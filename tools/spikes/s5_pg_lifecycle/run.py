@@ -301,8 +301,66 @@ def case_kill9_adopt(ctx: Ctx) -> None:
     check("server was not restarted", "database system is ready" not in log_since(lay, off), "")
     check("rows intact", count(lay) == 500, count(lay))
     seed(lay, 501, 10)
-    b.term()
+    b.kill9()
+
+    # A server of ours that can't take a connection right now is not a stale one. With all 30
+    # slots taken (the reserved superuser ones too), psql gets "too many clients": the next
+    # engine must fail and leave the lock files alone, not delete them and start a second one.
+    psql_sleep = [lay.tool("psql"), "-X", "-h", str(lay.pgsocket), "-p", str(pg.PORT)]
+    psql_sleep += ["-U", pg.USER, "-d", pg.DATABASE, "-c", "SELECT pg_sleep(60)"]
+    quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    sleepers = [subprocess.Popen(psql_sleep, **quiet) for _ in range(30)]  # type: ignore[call-overload]
+    try:
+        for _ in range(100):
+            if len(_backends(a.postmaster)) >= 30:
+                break
+            time.sleep(0.1)
+        full = pg.run(
+            [lay.tool("psql"), "-X", "-h", str(lay.pgsocket), "-p", str(pg.PORT), "-U", pg.USER,
+             "-d", "postgres", "-c", "SELECT 1"],
+            check=False,
+        )  # fmt: skip
+        check("server is full", "too many clients" in full.stderr, full.stderr)
+        try:
+            Engine(lay)
+            raise CaseFailed("an engine started against a full server")
+        except CaseFailed as e:
+            check("next engine refuses to guess and exits", "before it was ready" in str(e), e)
+        check("postmaster still running", pg.pid_alive(a.postmaster), "")
+        sock_lock = lay.pgsocket / f".s.PGSQL.{pg.PORT}.lock"
+        check(
+            "postmaster.pid and the socket lock left alone",
+            (lay.pgdata / "postmaster.pid").exists() and sock_lock.exists(),
+            "",
+        )
+    finally:
+        # A backend in pg_sleep doesn't notice its client has gone, so end the backends too
+        # (SIGTERM is what pg_terminate_backend sends).
+        for p in sleepers:
+            p.kill()
+            p.wait()
+        for pid in _backends(a.postmaster):
+            os.kill(pid, signal.SIGTERM)
+        for _ in range(100):
+            if not _backends(a.postmaster):
+                break
+            time.sleep(0.1)
+    c = Engine(lay)
+    check("once there is room, the next engine adopts", c.action == "adopt", c.info)
+    check("same postmaster", c.postmaster == a.postmaster, (a.postmaster, c.postmaster))
+    check("rows intact", count(lay) == 510, count(lay))
+    c.term()
     check("adopting engine stops it cleanly", not (lay.pgdata / "postmaster.pid").exists(), "")
+
+
+def _backends(postmaster: int) -> list[int]:
+    """Client backends of `postmaster` (their title starts with "postgres: <user> <db>")."""
+    out = subprocess.run(["ps", "-axo", "pid=,ppid=,command="], capture_output=True, text=True)
+    return [
+        int(f[0])
+        for f in (ln.split(None, 2) for ln in out.stdout.splitlines())
+        if len(f) == 3 and f[1] == str(postmaster) and f[2].startswith(f"postgres: {pg.USER} ")
+    ]
 
 
 def case_crash_recover(ctx: Ctx) -> None:
@@ -394,7 +452,7 @@ def case_stale_pid(ctx: Ctx) -> None:
         d.action == "start" and d.postmaster != o.postmaster,
         d.info,
     )
-    check("reason given", "not this server" in notes or "serves" in notes, notes)
+    check("reason given", "not listening on our socket" in notes, notes)
     check("other cluster still running", pg.pid_alive(o.postmaster), "")
     check("rows intact", count(lay) == 500, count(lay))
     d.term()

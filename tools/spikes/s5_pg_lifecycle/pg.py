@@ -204,6 +204,11 @@ def inspect_pid_file(
     including another cluster's postgres, and `pg_ctl status` (which only does kill(pid, 0))
     reports it as running. It is ours only if the process is a postgres and a connection
     through the socket it advertises reports this data directory.
+
+    Stale is returned only on positive evidence, because the caller then deletes the lock
+    files: the pid is dead, the process isn't postgres, the socket answers for another data
+    directory, or the socket doesn't exist or refuses connections. Any other failure (too many
+    clients, a fork failure, out of memory) can come from our own healthy server, so it raises.
     """
     pgdata = pgdata or layout.pgdata
     pf = read_pid_file(pgdata)
@@ -215,6 +220,7 @@ def inspect_pid_file(
     if Path(cmd).name != "postgres":
         return Stale(pf, f"pid {pf.pid} is {cmd or 'unknown'}, not postgres")
     deadline = time.monotonic() + wait_s
+    refused = 0
     while True:
         # A starting server (WAL replay) or one shutting down refuses connections for a while.
         p = run(
@@ -229,10 +235,18 @@ def inspect_pid_file(
             return Running(pf) if ours else Stale(pf, f"pid {pf.pid} serves {p.stdout.strip()}")
         if not pid_alive(pf.pid):
             return Stale(pf, f"pid {pf.pid} exited while we waited for it")
+        err = p.stderr.strip()
+        if "No such file or directory" in err or "Connection refused" in err:
+            # No socket, or nothing listening on it: the pid is some other postgres. macOS also
+            # refuses when a live server's listen backlog is full, so look again before deciding.
+            refused += 1
+            if refused >= 5:
+                return Stale(pf, f"pid {pf.pid} is a postgres not listening on our socket: {err}")
+            time.sleep(0.5)
+            continue
         busy = ("starting up", "shutting down", "not yet accepting connections", "recovery")
-        if not any(s in p.stderr for s in busy):
-            # Another cluster's postgres whose socket isn't ours, or a socket that is gone.
-            return Stale(pf, f"pid {pf.pid} is a postgres but not this server: {p.stderr.strip()}")
+        if not any(s in err for s in busy):
+            raise PgError(f"can't tell whether postgres pid {pf.pid} is ours: {err}")
         if time.monotonic() > deadline:
             raise PgError(f"postgres pid {pf.pid} is still {pf.status or 'busy'} after {wait_s}s")
         time.sleep(0.2)
