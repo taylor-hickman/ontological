@@ -440,3 +440,28 @@ def test_check_gives_up_on_a_claude_that_does_not_answer(
     pid = int((tmp_path / "pid").read_text())
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+def test_a_successful_answer_that_mentions_not_logged_in_is_kept(tmp_path: Path) -> None:
+    answer = "Users who are not logged in only see the landing page."
+    h = Harness(tmp_path, [answered(text=answer)])
+    assert h.text() == answer
+    assert h.rows[0].outcome == "ok"
+    assert h.status.logged_in is True and h.status.state == "ready"
+
+
+def test_a_structured_answer_whose_result_text_mentions_not_logged_in_is_kept(
+    tmp_path: Path,
+) -> None:
+    script = [init(), said(), result(structured={"pk": ["id"]}, text="not logged in users")]
+    h = Harness(tmp_path, [script])
+    assert h.structured() == Keys(pk=["id"])
+    assert h.status.state == "ready"
+
+
+def test_an_answer_that_arrives_with_a_rejected_rate_limit_event_is_kept(tmp_path: Path) -> None:
+    script = [init(), limit("rejected", utilization=1.0), said(), result(structured={"pk": []})]
+    h = Harness(tmp_path, [script])
+    assert h.structured() == Keys(pk=[])
+    assert h.rows[0].outcome == "ok"
+    assert h.status.state == "limited", "the event still says the window is used up"

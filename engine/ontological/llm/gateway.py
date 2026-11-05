@@ -364,8 +364,16 @@ class ClaudeGateway:
 
     def _failure(self, session: _Session) -> _Verdict | None:
         """The verdict on a spawn that got no usable answer for a reason other than its output;
-        None when the output decides. Updates the status on the way."""
+        None when the output decides. Updates the status on the way.
+
+        A result that isn't an error always goes to the output: its text is the model's answer,
+        which may mention anything, and a rejected rate-limit event can arrive in a session that
+        still answered."""
         result = session.result
+        if result is not None and not result.is_error:
+            self._logged_in = True
+            self._error = None
+            return None
         if session.cli_missing:
             self._installed = False
             return self._fail("error", session.exception)
@@ -381,7 +389,7 @@ class ClaudeGateway:
         if result is None:
             return self._fail("error", session.exception or "the session ended without a result")
         self._logged_in = True
-        if result.is_error and not result.subtype.startswith("error_max"):
+        if not result.subtype.startswith("error_max"):
             detail = "; ".join(result.errors or []) or text or session.exception
             return self._fail("error", f"{result.subtype}: {detail}")
         self._error = None
