@@ -5,7 +5,8 @@ name: Bundled Postgres
 # smoke-tested and run through the store lifecycle tests (§5.3 and §12: engine/tests/store, which
 # test engine/ontological/store/pg.py and its Alembic chains), the engine's idle shutdown on the
 # real store (engine/tests/engine/test_engine_pg.py) and the eval cluster's tests
-# (eval/tests/test_cluster.py). Runs when the scripts, the store, the vendored chain, the
+# (eval/tests/test_cluster.py), and upstream's golden DAL suite on a Pagila and Chinook test cluster
+# (engine/tests/golden_dal, M2.1). Runs when the scripts, the store, the vendored chain, the
 # engine's dependencies or the eval cluster change, or by hand.
 on:
   push:
@@ -18,6 +19,8 @@ on:
       - engine/pyproject.toml
       - engine/uv.lock
       - engine/tests/store/**
+      - engine/tests/golden_dal/**
+      - engine/tests/upstream_fixtures/**
       - engine/tests/engine/test_engine_pg.py
       - eval/ontological_eval/cluster.py
       - eval/ontological_eval/home.py
@@ -32,6 +35,8 @@ on:
       - engine/pyproject.toml
       - engine/uv.lock
       - engine/tests/store/**
+      - engine/tests/golden_dal/**
+      - engine/tests/upstream_fixtures/**
       - engine/tests/engine/test_engine_pg.py
       - eval/ontological_eval/cluster.py
       - eval/ontological_eval/home.py
@@ -83,6 +88,20 @@ jobs:
         run: |
           uv sync --locked
           uv run pytest tests/store tests/engine/test_engine_pg.py -ra
+      - name: Golden DAL suite (upstream's seed on Pagila and Chinook, then its DAL and catalog-store tests; any skip fails)
+        working-directory: engine
+        env:
+          ONTOLOGICAL_PG_BIN: ${{ env.WORK }}/dist/bin
+          ONTOLOGICAL_PG_REQUIRED: "1"
+          ONTOLOGICAL_GOLDEN_REPORTS: ${{ runner.temp }}/golden
+        run: uv run pytest tests/golden_dal -ra
+      - name: Upload the golden DAL suite's reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-dal-reports
+          path: ${{ runner.temp }}/golden
+          if-no-files-found: ignore
       - name: Eval cluster tests (WWI-shaped load, adopt, failed load, row-count check)
         working-directory: eval
         env:
