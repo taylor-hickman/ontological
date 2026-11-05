@@ -5,9 +5,9 @@
 
 Under engine.lock, it looks for a live engine through engine.json. If there is one, it prints
 that engine and exits 0: the caller attaches to it. Otherwise it starts or adopts the store's
-Postgres, serves the API on 127.0.0.1 at a random port with a new bearer token, writes
-engine.json and releases the lock. It prints one JSON line when it serves or attaches,
-`{"pid", "port", "version", "started"}`, or `{"error"}` and exits 1.
+Postgres, applies pending migrations (§5.3), serves the API on 127.0.0.1 at a random port with
+a new bearer token, writes engine.json and releases the lock. It prints one JSON line when it
+serves or attaches, `{"pid", "port", "version", "started"}`, or `{"error"}` and exits 1.
 
 It exits 0 after `--idle-timeout` seconds (600) with no live lease, no request in flight and no
 running job, or on SIGTERM or SIGINT. Either way it removes engine.json, writes the quit dump
@@ -84,10 +84,14 @@ class PgStore:
         self.layout = layout
 
     def start(self) -> None:
+        """Start or adopt the server, then bring both Alembic chains to their heads (a first
+        launch has already run them)."""
         server = pg.ensure_running(self.layout)
         log.info("store: %s, postmaster %d", server.action, server.postmaster_pid)
         for note in server.notes:
             log.info("store: %s", note)
+        if (dump := pg.migrate(self.layout)) is not None:
+            log.info("store: migrated, after dumping %s", dump.name)
 
     def stop(self) -> None:
         dump = pg.stop(self.layout)
