@@ -45,7 +45,7 @@ import ontological
 from ontological.api.app import create_app
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
-from ontological.store import pg
+from ontological.store import dal, pg
 
 log = logging.getLogger("ontological.engine")
 
@@ -92,8 +92,10 @@ class PgStore:
             log.info("store: %s", note)
         if (dump := pg.migrate(self.layout)) is not None:
             log.info("store: migrated, after dumping %s", dump.name)
+        dal.connect(self.layout)
 
     def stop(self) -> None:
+        dal.close()
         dump = pg.stop(self.layout)
         log.info("store stopped; quit dump %s", dump.name if dump else "not needed")
 
