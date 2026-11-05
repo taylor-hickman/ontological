@@ -60,8 +60,8 @@ The eval is a scoreboard for this project, not a reproduction of anyone's benchm
 
 | Set | Contents | When it runs |
 |---|---|---|
-| **Dev** (~80) | All 41 Wide World Importers questions, plus about 40 BIRD Mini-Dev questions: 10 each from `financial`, `california_schools`, `formula_1` and `debit_card_specializing`, sampled to Mini-Dev's own simple / moderate / challenging mix | Tuning rounds; full runs when a default is being set |
-| **Held-out** (~40) | 10 further Mini-Dev questions from each of the same four databases | Once per milestone, for the winning configuration only |
+| **Dev** (76) | 36 of the 41 Wide World Importers questions (the other 5 have gold SQL that returns no rows on the data; M0.8), plus 40 BIRD Mini-Dev questions: 10 each from `financial`, `california_schools`, `formula_1` and `debit_card_specializing`, sampled to Mini-Dev's own simple / moderate / challenging mix | Tuning rounds; full runs when a default is being set |
+| **Held-out** (40) | 40 further Mini-Dev questions from the same four databases: `debit_card_specializing` has only 14, so it gives 4 and the other three 12 each | Once per milestone, for the winning configuration only |
 | **Smoke** (20) | 10 WWI and 10 BIRD questions taken from dev | Day-to-day development, with `answer_agent` pinned to Sonnet |
 
 Why these four BIRD databases: `financial` and `debit_card_specializing` are transaction data close to what users will point the tool at, `formula_1` has many tables and long join paths, and `california_schools` has column names with spaces and abbreviations that exercise the identifier tokenizer. WWI is a sales and warehouse database with checked gold SQL.
