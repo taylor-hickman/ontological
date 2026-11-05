@@ -126,6 +126,12 @@ test('quitting leaves an engine the app started running until it idles out', asy
   await running(page)
   const pid = readEngineJson(userData)!.pid
   started.push(pid)
+  if (process.platform === 'linux') {
+    const { readdirSync, readlinkSync } = await import('node:fs')
+    const fds = (p: number) => readdirSync(`/proc/${p}/fd`).map((fd) => `${fd} -> ${(() => { try { return readlinkSync(`/proc/${p}/fd/${fd}`) } catch { return '?' } })()}`)
+    console.log('DIAG engine fds:\n' + fds(pid).join('\n'))
+    console.log('DIAG electron fds 0-2:\n' + fds(app.process().pid!).filter((l) => /^[012] /.test(l)).join('\n'))
+  }
   const closing = Date.now()
   await app.close()
   const log = (): string => readFileSync(join(userData, 'logs/engine.log'), 'utf8')
