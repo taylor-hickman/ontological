@@ -1,0 +1,40 @@
+[project]
+name = "ontological-eval"
+version = "0.0.0"
+description = "Ontological's eval: data download, the WWI eval cluster, and later the runner."
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+    "ontological",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+ontological = { path = "../engine", editable = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["ontological_eval", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+xfail_strict = true
+
+[dependency-groups]
+dev = [
+    "pyright[nodejs]>=1.1.414",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
