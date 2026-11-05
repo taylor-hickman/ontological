@@ -419,22 +419,27 @@ The costs of Postgres, accepted: a larger app (Postgres binaries are a few hundr
 ### 6.1 Interface
 
 ```python
-class Route(NamedTuple):
+@dataclass(frozen=True)
+class Route:
     model: str    # CLI alias ("haiku" | "sonnet" | "opus" | "fable") or a full model ID ("claude-opus-5-5")
     effort: str   # "low" | "medium" | "high" | "xhigh" | "max"
 
 class ClaudeGateway:
     routes: dict[str, Route]   # task -> route; defaults in §6.3, overridable in Settings
     async def structured(self, task: str, system: str, user: str,
-                         schema: type[BaseModel],
-                         cache_key_extra: str = "") -> BaseModel | None: ...
-    async def text(self, task: str, system: str, user: str) -> str | None: ...
+                         schema: type[M], cache_key_extra: str = "",
+                         *, prompt_version: str = "") -> M | None: ...
+    async def text(self, task: str, system: str, user: str,
+                   *, prompt_version: str = "") -> str | None: ...
     def agent(self, task: str, system: str, tools: list[SdkTool],
               output: type[BaseModel], max_turns: int) -> AgentRun: ...  # async-iterable events + tool log
+    async def check(self) -> GatewayStatus: ...   # claude --version, then a ping
     status: GatewayStatus   # installed? logged in? limited until? utilization?
 ```
 
-Callers name a task, never a model. The route table (§6.3) picks the model and effort for each task.
+Callers name a task, never a model. The route table (§6.3) picks the model and effort for each task. A route's model is checked when the route is made: a CLI alias, or a full ID of the form `claude-…`. A route for a task the code doesn't have is refused.
+
+`status.state` is one of `unknown` (nothing has run yet), `ready`, `not_installed`, `outdated` (older than the `claude` the contract tests last passed on, 2.1.318), `needs_login` or `limited` (a `rejected` rate-limit event whose `resets_at` hasn't passed). The calls update it as they go, and `check()` re-resolves the binary, reads `claude --version` and pings on the `ping` route.
 
 `structured()` keeps upstream's contract: return `None` on failure so the caller falls back deterministically. That lets the upstream stage code port with minimal changes. `agent()` is new; the answer path uses it (§8). `AgentRun` records every tool call in order, which the post-run check in §8.1 reads.
 
@@ -450,7 +455,7 @@ Each call runs `claude_agent_sdk.query()` with these `ClaudeAgentOptions`:
 | `tools` | `[]` (structured) or only Ontological's SDK MCP tools (agent) | no Bash, Read, Write or WebFetch; source data in prompts can't trigger side effects |
 | `permission_mode` | deny-by-default; `allowed_tools` = exactly the Ontological tools | unattended runs never hang on a prompt |
 | `output_format` | `{"type":"json_schema","schema": Model.model_json_schema()}` | validated JSON; then `Model.model_validate(result.structured_output)` |
-| `model` | `routes[task].model`, a CLI alias | aliases track the current models the CLI resolves (§6.3) |
+| `model` | `routes[task].model`, a CLI alias or a pinned full ID | aliases track the current models the CLI resolves; eval configs pin (§6.3) |
 | `effort` | `routes[task].effort` | thinking depth and token spend per task (§6.3) |
 | `fallback_model` | `sonnet` for `opus` routes; unset otherwise | Opus overloaded or not on the user's plan (§6.3) |
 | `max_turns` | 1–2 for structured, about 16 for agent | bound the spend |
@@ -513,8 +518,9 @@ Upstream was written for a cheap, fast HTTP endpoint and makes many small calls.
 | Answer: 6–15 separate calls | One Opus agent session plus 1–2 Sonnet review calls (§8.1) |
 
 **Caching.**
-- Every structured call is keyed by `sha256(task, prompt_version, model, effort, system, user, schema)` and logged in `ops.llm_call` with usage. `model` is the route's alias or pinned ID (§6.3). Effort is in the key because it changes the output. A recompile of unchanged tables costs nothing.
-- Prompt templates carry an explicit `prompt_version`, so editing a prompt invalidates only that task's cache.
+- Every structured call is keyed by `sha256(task, prompt_version, model, effort, system, user, schema)`, plus the caller's `cache_key_extra`, and logged in `ops.llm_call` with usage. `model` is the route's alias or pinned ID (§6.3). Effort is in the key because it changes the output. A recompile of unchanged tables costs nothing.
+- `ops.llm_call` has one row per spawn, so a retried call has two (`attempt` 1 and 2). Each row records the route's model and effort, the resolved and answering models, whether the fallback answered, the outcome (`ok`, `invalid`, `limited` or `error`), the output, `model_usage`, cost and duration. A lookup serves the newest `ok` structured answer for the key. An answer from the fallback model is logged but not served again, so the next run asks the route's model. `text()` calls are logged but never cached.
+- Prompt templates carry an explicit `prompt_version`, which callers pass to `structured()`, so editing a prompt invalidates only that task's cache.
 
 **Concurrency.** A global semaphore limits in-flight Claude processes. The default is 3; it is a user setting.
 

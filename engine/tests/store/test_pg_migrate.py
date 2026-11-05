@@ -18,7 +18,7 @@ from conftest import STUB, Apps, Engine, count, nearest, seed, sql
 from ontological.store import chains, pg
 
 UPSTREAM_HEAD = "99d4d343dd0b"  # upstream's chain at 2a24f5d
-OURS_HEAD = "0001"
+OURS_HEAD = "0002"
 
 
 def upstream_rev(lay: pg.Layout) -> str:
@@ -38,12 +38,12 @@ def schemas(lay: pg.Layout) -> set[str]:
 
 
 def extended(tmp_path: Path, *revisions: str) -> tuple[chains.Chain, ...]:
-    """Both chains, with Ontological's copied and grown by one revision per SQL string (0002,
-    0003, …), each in its own transaction."""
+    """Both chains, with Ontological's copied and grown by one revision per SQL string, numbered
+    on from its head, each in its own transaction."""
     scripts = tmp_path / "migrations"
     shutil.copytree(chains.ONTOLOGICAL.scripts, scripts)
     down = OURS_HEAD
-    for i, q in enumerate(revisions, start=2):
+    for i, q in enumerate(revisions, start=int(OURS_HEAD) + 1):
         rev = f"{i:04d}"
         (scripts / "versions" / f"{rev}_test.py").write_text(
             "from alembic import op\n\n"
@@ -116,7 +116,7 @@ def test_a_new_revision_runs_only_where_it_is_pending(apps: Apps, tmp_path: Path
     grown = extended(tmp_path, CONVERSATION)
     assert chains.pending(pg.url(lay), grown) == ["ontological"]
     assert pg.migrate(lay, chains=grown) is not None
-    assert ours_rev(lay) == "0002" and exists(lay, "app.conversation")
+    assert ours_rev(lay) == "0003" and exists(lay, "app.conversation")
     assert upstream_rev(lay) == UPSTREAM_HEAD
     e.term()
 
@@ -140,7 +140,7 @@ def test_failed_migration_then_restore(apps: Apps, tmp_path: Path) -> None:
     assert dump.name.endswith("-premigrate.dump") and dump.is_file()
     held.wait(10)
     assert held.returncode != 0, "restore ends the pool's connections"
-    assert ours_rev(lay) == OURS_HEAD, "0002 had committed; the restore undid it"
+    assert ours_rev(lay) == OURS_HEAD, "0003 had committed; the restore undid it"
     assert not exists(lay, "app.conversation") and not exists(lay, "app.message")
     assert upstream_rev(lay) == UPSTREAM_HEAD
     assert count(lay) == 500
@@ -177,7 +177,7 @@ def test_a_migration_whose_restore_fails_too_says_so(
         pg.migrate(lay, chains=extended(tmp_path, CONVERSATION, FAILS))
     assert not isinstance(failed.value, pg.MigrationFailed), "no restore happened"
     assert "as the failed migration left it" in str(failed.value)
-    assert ours_rev(lay) == "0002" and exists(lay, "app.conversation")
+    assert ours_rev(lay) == "0003" and exists(lay, "app.conversation")
     assert not exists(lay, "app.message"), "the failed revision rolled back on its own"
     monkeypatch.undo()
     e.term()
