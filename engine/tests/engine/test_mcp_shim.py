@@ -202,10 +202,10 @@ def test_an_engine_that_dies_is_started_again(app_data: Path) -> None:
     assert live_engine(app_data).pid != first.pid
 
 
-def test_a_closing_engine_sends_the_shim_to_start_another(app_data: Path) -> None:
-    # The old engine idles out but can't stop while the test holds engine.lock, so it answers
-    # /health and refuses leases with 503. The shim starts a new engine, which waits for the old
-    # one to stop.
+def test_a_closing_engine_is_outlasted_and_the_shim_starts_another(app_data: Path) -> None:
+    # The old engine idles out but can't stop while the test holds engine.lock, so it keeps
+    # answering /health and engine.json still names it, but it refuses leases with 503. The
+    # shim waits for it to stop, however long that takes, then starts a new engine.
     old = headless(app_data, *FAST)
     with open(app_data / "engine.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -214,6 +214,8 @@ def test_a_closing_engine_sends_the_shim_to_start_another(app_data: Path) -> Non
         shim = Shim(app_data, *FAST)
         shim.initialize()
         wait_until(lambda: "closing" in shim.stderr.read_text(), 30, "the shim to get a 503")
+        time.sleep(3)  # longer than the shim's retries of an engine that doesn't answer
+        assert leases_taken(app_data) == 0
         fcntl.flock(lock, fcntl.LOCK_UN)
     wait_until(lambda: leases_taken(app_data) == 1, 30, "a lease on a new engine")
     assert not alive(old)

@@ -6,9 +6,10 @@
 engine stops answering. It releases the lease on exit, and the engine idles out once no client
 holds one.
 
-A closing engine refuses a lease with 503. The shim then runs `--headless` again: the new engine
-waits on engine.lock until the old one has stopped, then starts. The shim never takes
-engine.lock itself; the engine takes it to settle which of two starting engines serves.
+A closing engine refuses a lease with 503, but it answers /health and engine.json names it until
+it has taken engine.lock to stop. So the shim waits until engine.json no longer names it, or it
+has died, and attaches again, which starts a new engine. The shim never takes engine.lock
+itself; the engine takes it to settle which of two starting engines serves.
 
 Tool calls wait on `EngineLink.engine()`, so a call made while the engine starts waits for it.
 """
@@ -32,14 +33,20 @@ from ontological.engine import discovery
 log = logging.getLogger("ontological.mcp")
 
 CLIENT = "ontological-mcp"
-ATTACH_ATTEMPTS = 5  # closing or vanishing engines in a row before giving up
+ATTACH_ATTEMPTS = 5  # engines in a row that vanish or don't answer, before giving up
 ATTEMPT_PAUSE_S = 0.2
+CLOSING_WAIT_S = 300.0  # a closing engine waits for engine.lock, which a starting one holds
+CLOSING_POLL_S = 0.1
 REQUEST_TIMEOUT_S = 10.0
 RELEASE_TIMEOUT_S = 2.0
 
 
 class EngineUnavailable(Exception):
     """No engine could be started or attached to; the message says why."""
+
+
+class _Closing(Exception):
+    """The engine refused a lease with 503: it is stopping."""
 
 
 @dataclass(frozen=True)
@@ -104,15 +111,35 @@ class EngineLink:
             await self._http.aclose()
 
     async def _attach(self) -> tuple[discovery.EngineInfo, _Lease]:
-        for attempt in range(ATTACH_ATTEMPTS):
-            if attempt:
-                await anyio.sleep(ATTEMPT_PAUSE_S)
+        """Waiting out a closing engine doesn't count as a failed attempt."""
+        failures = 0
+        while True:
             info = await anyio.to_thread.run_sync(discovery.find_engine, self.app_data)
             if info is None:
                 info = await self._start()
-            if info is not None and (lease := await self._take_lease(info)) is not None:
-                return info, lease
-        raise EngineUnavailable(f"no engine took a lease after {ATTACH_ATTEMPTS} attempts")
+            if info is not None:
+                try:
+                    if (lease := await self._take_lease(info)) is not None:
+                        return info, lease
+                except _Closing:
+                    await self._outlast(info)
+                    continue
+            failures += 1
+            if failures == ATTACH_ATTEMPTS:
+                raise EngineUnavailable(f"no engine took a lease after {failures} attempts")
+            await anyio.sleep(ATTEMPT_PAUSE_S)
+
+    async def _outlast(self, info: discovery.EngineInfo) -> None:
+        """Wait until engine.json no longer names this closing engine, or it has died."""
+        log.info("engine %d is closing: waiting for it to stop", info.pid)
+        with anyio.move_on_after(CLOSING_WAIT_S):
+            while discovery.pid_alive(info.pid):
+                named = discovery.read_engine_json(self.app_data)
+                if named is None or named.pid != info.pid:
+                    return
+                await anyio.sleep(CLOSING_POLL_S)
+            return
+        raise EngineUnavailable(f"engine {info.pid} didn't stop in {CLOSING_WAIT_S:g}s")
 
     async def _start(self) -> discovery.EngineInfo | None:
         """Start an engine and return what engine.json says once it serves, or None if it has
@@ -134,14 +161,13 @@ class EngineLink:
         return info if info is not None and info.pid == said["pid"] else None
 
     async def _take_lease(self, info: discovery.EngineInfo) -> _Lease | None:
-        """A new lease, or None if the engine is closing (503) or doesn't answer."""
+        """A new lease, or None if the engine doesn't answer. Raises _Closing on a 503."""
         status, body = await self._call(info, "POST", "/leases", {"client": CLIENT})
         if status == 201 and body is not None:
             return _Lease(str(body["lease"]), float(body["renew_every_s"]))
         if status == 503:
-            log.info("engine %d is closing: starting another", info.pid)
-        else:
-            log.warning("engine %d refused a lease: %s", info.pid, status or "no answer")
+            raise _Closing
+        log.warning("engine %d refused a lease: %s", info.pid, status or "no answer")
         return None
 
     async def _hold(self) -> None:
@@ -155,9 +181,10 @@ class EngineLink:
                 continue
             if status == 404:  # lapsed, as when the machine slept
                 log.info("lease lapsed: taking a new one")
-                if (lease := await self._take_lease(engine)) is not None:
-                    self._lease = lease
-                    continue
+                with contextlib.suppress(_Closing):  # attaching again waits it out
+                    if (lease := await self._take_lease(engine)) is not None:
+                        self._lease = lease
+                        continue
             log.warning("lost engine %d (%s): attaching again", engine.pid, status or "no answer")
             return
 
