@@ -4,14 +4,16 @@ Ontological's owns `app` and `ops` and keeps its version table in `ops`."""
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from conftest import Apps, Engine, count, nearest, seed, sql
+from conftest import STUB, Apps, Engine, count, nearest, seed, sql
 
 from ontological.store import chains, pg
 
@@ -81,6 +83,30 @@ def test_migrate_brings_an_unmigrated_store_to_both_heads(apps: Apps) -> None:
     assert dump is not None and dump.name.endswith("-premigrate.dump")
     assert upstream_rev(lay) == UPSTREAM_HEAD and ours_rev(lay) == OURS_HEAD
     assert pg.migrate(lay) is None
+    e.term()
+
+
+def test_two_engines_migrating_at_once_take_turns(apps: Apps) -> None:
+    """Without pg.lock around the whole migration, both see the chains pending and dump the
+    unmigrated store; one's upgrade commits, the other's fails on the same tables, and its
+    restore drops the store and puts the unmigrated dump back over the first's migration."""
+    lay = apps.layout("concurrent")
+    e = Engine(lay)  # unmigrated
+    procs = [
+        subprocess.Popen(
+            [sys.executable, str(STUB), str(lay.app_data), str(lay.bin), "--migrate"],
+            stdout=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        for _ in range(3)
+    ]
+    outs = [p.communicate(timeout=120)[0] for p in procs]
+    assert [p.returncode for p in procs] == [0, 0, 0], outs
+    migrated = [json.loads(o.splitlines()[-1])["migrated"] for o in outs]
+    assert sum(m is not None for m in migrated) == 1, "one migrates; the others find it done"
+    assert len(list(lay.backups.glob("*-premigrate.dump"))) == 1
+    assert upstream_rev(lay) == UPSTREAM_HEAD and ours_rev(lay) == OURS_HEAD
     e.term()
 
 

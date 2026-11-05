@@ -210,8 +210,8 @@ def wait_gone(pid: int, timeout_s: float) -> None:
 
 @contextlib.contextmanager
 def locked(layout: Layout) -> Generator[None]:
-    """Serialise initdb, start, adopt, stop and restore between engines. The kernel drops an
-    flock when its holder dies, so a kill -9 never leaves it held."""
+    """Serialise initdb, start, adopt, stop, restore and migrate between engines. The kernel
+    drops an flock when its holder dies, so a kill -9 never leaves it held."""
     layout.app_data.mkdir(parents=True, exist_ok=True)
     with open(layout.lock, "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
@@ -612,28 +612,34 @@ def restore(layout: Layout, path: Path) -> None:
 
     `DROP DATABASE … WITH (FORCE)` ends every connection to the store, so the engine's pool has
     to reconnect afterwards."""
+    with locked(layout):  # resume_restore() runs under the same lock
+        _restore(layout, path)
+
+
+def _restore(layout: Layout, path: Path) -> None:
+    """restore() for a caller that already holds pg.lock (flock isn't re-entrant: a second
+    open() of the lock file in the same process blocks against the first)."""
     if not path.is_file():
         raise PgError(f"the dump {path} is missing; the store is unchanged")
-    with locked(layout):  # resume_restore() runs under the same lock
-        psql(layout, f"DROP DATABASE IF EXISTS {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
-        psql(layout, f"CREATE DATABASE {RESTORE_DATABASE}", db="postgres")
-        try:
-            run(
-                [
-                    layout.tool("pg_restore"), "--exit-on-error", "--single-transaction",
-                    "-h", str(layout.pgsocket), "-p", str(PORT), "-U", USER,
-                    "-d", RESTORE_DATABASE, str(path),
-                ]
-            )  # fmt: skip
-        except PgError as e:
-            psql(layout, f"DROP DATABASE {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
-            msg = f"restoring {path.name} failed; the store is unchanged: {e}"
-            if ENOSPC in str(e):
-                raise DiskFull(layout.app_data, msg) from e
-            raise PgError(msg) from e
-        # DROP DATABASE can't run inside a transaction, so this takes two statements.
-        psql(layout, f"DROP DATABASE {DATABASE} WITH (FORCE)", db="postgres")
-        psql(layout, f"ALTER DATABASE {RESTORE_DATABASE} RENAME TO {DATABASE}", db="postgres")
+    psql(layout, f"DROP DATABASE IF EXISTS {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
+    psql(layout, f"CREATE DATABASE {RESTORE_DATABASE}", db="postgres")
+    try:
+        run(
+            [
+                layout.tool("pg_restore"), "--exit-on-error", "--single-transaction",
+                "-h", str(layout.pgsocket), "-p", str(PORT), "-U", USER,
+                "-d", RESTORE_DATABASE, str(path),
+            ]
+        )  # fmt: skip
+    except PgError as e:
+        psql(layout, f"DROP DATABASE {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
+        msg = f"restoring {path.name} failed; the store is unchanged: {e}"
+        if ENOSPC in str(e):
+            raise DiskFull(layout.app_data, msg) from e
+        raise PgError(msg) from e
+    # DROP DATABASE can't run inside a transaction, so this takes two statements.
+    psql(layout, f"DROP DATABASE {DATABASE} WITH (FORCE)", db="postgres")
+    psql(layout, f"ALTER DATABASE {RESTORE_DATABASE} RENAME TO {DATABASE}", db="postgres")
 
 
 def resume_restore(layout: Layout) -> str | None:
@@ -667,23 +673,29 @@ def migrate(layout: Layout, *, chains: Sequence[Chain] = alembic_chains.CHAINS) 
     the dump is for: on any failure the store is restored from it and MigrationFailed raised. If
     the restore fails too, a PgError says the store is as the failed migration left it. The
     restore ends every connection to the store, so the engine's pool has to reconnect
-    afterwards."""
+    afterwards.
+
+    pg.lock is held from the pending check through the restore. Engines starting together each
+    call migrate: the first migrates, and the others then find nothing pending. Without the
+    lock, a second engine would dump the unmigrated store, fail on the tables the first had just
+    created, and restore its dump over the first's finished migration."""
     store_url = url(layout)
-    if not alembic_chains.pending(store_url, chains):
-        return None
-    before = dump(layout, "premigrate")
-    try:
-        alembic_chains.upgrade(store_url, chains)
-    except Exception as e:
+    with locked(layout):
+        if not alembic_chains.pending(store_url, chains):
+            return None
+        before = dump(layout, "premigrate")
         try:
-            restore(layout, before)
-        except PgError as r:
-            raise PgError(
-                f"the migration failed ({e}), and so did restoring {before.name}. The store is "
-                f"as the failed migration left it: {r}"
-            ) from r
-        raise MigrationFailed(e, before) from e
-    return before
+            alembic_chains.upgrade(store_url, chains)
+        except Exception as e:
+            try:
+                _restore(layout, before)
+            except PgError as r:
+                raise PgError(
+                    f"the migration failed ({e}), and so did restoring {before.name}. The store "
+                    f"is as the failed migration left it: {r}"
+                ) from r
+            raise MigrationFailed(e, before) from e
+        return before
 
 
 # --- major-version move ------------------------------------------------------------------------
