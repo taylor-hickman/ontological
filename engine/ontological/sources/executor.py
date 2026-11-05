@@ -185,6 +185,8 @@ class SourceExecutor:
     def _ensure_ready(self) -> None:
         if self._closed:
             raise SourceError("the source executor is closed")
+        if self._proc is not None and not self._proc.is_alive():
+            self._stop(kill=True)  # it died between operations: start a new one
         if self._proc is None:
             self._start()
         if self._ready:
@@ -210,7 +212,10 @@ class SourceExecutor:
             self._op_id += 1
             self._busy = True
             try:
-                self._conn.send((self._op_id, op, args))
+                try:
+                    self._conn.send((self._op_id, op, args))
+                except OSError:
+                    raise self._died() from None
                 return self._await(self._op_id, timeout_s)
             finally:
                 self._busy = False
@@ -226,10 +231,7 @@ class SourceExecutor:
                 try:
                     reply_id, kind, payload = conn.recv()
                 except (EOFError, OSError):
-                    self._restart()
-                    raise ExecutorDied(
-                        f"the source executor for {self.source.path} exited"
-                    ) from None
+                    raise self._died() from None
                 if reply_id != op_id:
                     continue
                 if kind == "ok":
@@ -244,11 +246,19 @@ class SourceExecutor:
                 elif deadline is not None and now >= deadline:
                     why = "timeout"
                 if why is not None:
-                    conn.send(("cancel", op_id))
+                    try:
+                        conn.send(("cancel", op_id))
+                    except OSError:
+                        raise self._died() from None
                     kill_at = now + self.kill_after_s
             elif now >= kill_at:
                 self._restart()
                 raise self._stopped(why, timeout_s)
+
+    def _died(self) -> ExecutorDied:
+        """The child has gone mid-operation: start a new one, and the error to raise."""
+        self._restart()
+        return ExecutorDied(f"the source executor for {self.source.path} exited")
 
     @staticmethod
     def _stopped(why: Literal["cancel", "timeout"], timeout_s: float | None) -> SourceError:

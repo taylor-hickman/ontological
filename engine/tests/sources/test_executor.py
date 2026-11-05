@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import signal
 import sqlite3
+import subprocess
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -84,6 +85,11 @@ def run_in_thread(fn: Callable[[], object]) -> tuple[threading.Thread, dict[str,
     t = threading.Thread(target=target, daemon=True)
     t.start()
     return t, out
+
+
+def is_zombie(pid: int) -> bool:
+    ps = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return ps.stdout.strip().startswith("Z")
 
 
 def wait_running(ex: SourceExecutor) -> None:
@@ -368,6 +374,20 @@ def test_a_process_that_dies_is_replaced(executor: SourceExecutor) -> None:
     assert isinstance(out.get("error"), ExecutorDied)
     assert executor.run_sql("SELECT 1").rows == [(1,)]
     assert executor.pid != pid
+
+
+def test_a_process_that_dies_while_idle_is_replaced(executor: SourceExecutor) -> None:
+    pid = executor.pid
+    assert pid is not None
+    executor.run_sql("SELECT 1")
+    os.kill(pid, signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    while not is_zombie(pid):  # dead, and not yet reaped by the executor
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    assert executor.run_sql("SELECT 1").rows == [(1,)]
+    assert executor.pid != pid
+    assert executor.run_sql("SELECT count(*) FROM artist").rows == [(300,)]
 
 
 # Lifecycle
