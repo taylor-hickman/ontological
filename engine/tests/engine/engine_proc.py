@@ -32,10 +32,20 @@ class Proc:
     {"pid", "port", "version", "started"}, or {"error"}."""
 
     def __init__(
-        self, cmd: list[str], *, ready: bool = True, env: dict[str, str] | None = None
+        self,
+        cmd: list[str],
+        *,
+        ready: bool = True,
+        env: dict[str, str] | None = None,
+        pass_fds: tuple[int, ...] = (),
     ) -> None:
         self.proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, text=True, start_new_session=True, env=env
+            cmd,
+            stdout=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+            env=env,
+            pass_fds=pass_fds,
         )
         PROCS.append(self.proc)
         self.lines: queue.Queue[str] = queue.Queue()

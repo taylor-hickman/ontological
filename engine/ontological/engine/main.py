@@ -59,6 +59,19 @@ GRACEFUL_SHUTDOWN_S = 5  # how long an open request (an SSE stream) may hold up 
 SESSION_VARIABLES: tuple[str, ...] = ()
 
 
+def close_inherited_fds() -> None:
+    """Close every descriptor above stdio that the engine inherited. Electron on Linux leaks
+    dozens into its children: Chromium's lock files and IPC sockets, and the pipe to its own
+    parent. The engine outlives Electron (§4.4), so holding them would keep Chromium's locks
+    taken and make whoever reads that pipe wait for the engine to exit. Python's subprocess does
+    the same for its own children. Call it first, before the engine opens anything."""
+    try:
+        limit = os.sysconf("SC_OPEN_MAX")
+    except (ValueError, OSError):
+        limit = -1
+    os.closerange(3, limit if limit > 3 else 65536)
+
+
 def sanitize_environ(environ: MutableMapping[str, str] = os.environ) -> None:
     for name in SESSION_VARIABLES:
         environ.pop(name, None)
@@ -150,6 +163,7 @@ def main(
     relaunch: Sequence[str] = (sys.executable, "-m", "ontological.engine"),
 ) -> int:
     """`store` makes the store; `relaunch` is the command `--headless` runs, without arguments."""
+    close_inherited_fds()
     args = list(sys.argv[1:] if argv is None else argv)
     config, headless = parse_args(args)
     if headless:

@@ -8,6 +8,7 @@ import contextlib
 import fcntl
 import json
 import os
+import select
 import socket
 import stat
 import subprocess
@@ -319,3 +320,25 @@ def test_a_line_to_a_reader_that_has_gone_is_dropped(monkeypatch: pytest.MonkeyP
     replaced.close()
     with contextlib.suppress(BrokenPipeError):  # the first line is still in its buffer
         gone.close()
+
+
+def test_the_engine_closes_descriptors_it_inherited(app_data: Path) -> None:
+    """Electron on Linux leaks its descriptors into the engine: Chromium's lock files, IPC
+    sockets, the pipe to its own parent. The engine outlives Electron, so it closes them, or
+    whoever reads that pipe waits until the engine exits (§4.4)."""
+    r, w = os.pipe()
+    try:
+        engine = Proc([sys.executable, str(STUB), "--app-data", str(app_data)], pass_fds=(w,))
+        os.close(w)
+        w = -1
+        assert engine.alive()
+        # Only the engine could still hold the write end; EOF means it closed it.
+        ready, _, _ = select.select([r], [], [], 10)
+        assert ready, "the engine still holds the inherited pipe"
+        assert os.read(r, 1) == b""
+        assert engine.alive()
+        assert engine.term() == 0
+    finally:
+        os.close(r)
+        if w >= 0:
+            os.close(w)
