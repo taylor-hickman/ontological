@@ -18,7 +18,7 @@ import {
   type MenuItemConstructorOptions
 } from 'electron'
 import type { EngineState } from '@shared/engine'
-import { INITIAL_STATE_ARG, IPC, type InitialShellState, type ShellCommand } from '@shared/ipc'
+import { IPC, type InitialShellState, type ShellCommand } from '@shared/ipc'
 import { WINDOW_BACKGROUND, isScreenId, isThemeSource, type ThemeSource } from '@shared/shell'
 import { APP_ORIGIN, APP_SCHEME, appProtocolHandler } from './app-protocol'
 import { contentSecurityPolicy } from './csp'
@@ -200,7 +200,6 @@ function createWindow(): void {
     state.bounds,
     screen.getAllDisplays().map((d) => d.workArea)
   )
-  const initial: InitialShellState = { screen: state.screen, theme: state.theme }
 
   const win = new BrowserWindow({
     ...bounds,
@@ -214,8 +213,7 @@ function createWindow(): void {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
       contextIsolation: true,
       sandbox: true,
-      nodeIntegration: false,
-      additionalArguments: [INITIAL_STATE_ARG + JSON.stringify(initial)]
+      nodeIntegration: false
     }
   })
   mainWindow = win
@@ -267,6 +265,13 @@ function fromMainWindow(event: IpcMainInvokeEvent): BrowserWindow {
 }
 
 function registerIpc(): void {
+  // Each document load asks, so a reload gets the screen and theme open now. A sync message must
+  // always answer, so an unknown sender gets null and the preload's defaults.
+  ipcMain.on(IPC.initialState, (event) => {
+    const initial: InitialShellState = { screen: state.screen, theme: state.theme }
+    event.returnValue = isMainWindowSender(event) ? initial : null
+  })
+
   // A one-way message has no caller to reject to, so a bad one is dropped.
   ipcMain.on(IPC.setScreen, (event, screenId: unknown) => {
     if (!isMainWindowSender(event) || !isScreenId(screenId)) return

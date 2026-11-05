@@ -3,14 +3,14 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { EngineState } from '@shared/engine'
-import { INITIAL_STATE_ARG, IPC, type InitialShellState, type OntologicalApi, type ShellCommand } from '@shared/ipc'
+import { IPC, type InitialShellState, type OntologicalApi, type ShellCommand } from '@shared/ipc'
 
+/** Main's screen and theme as they are now, so a reload doesn't fall back to the launch-time ones. */
 function readInitialState(): InitialShellState {
-  const arg = process.argv.find((a) => a.startsWith(INITIAL_STATE_ARG))
   const fallback: InitialShellState = { screen: 'ask', theme: 'system' }
-  if (!arg) return fallback
   try {
-    return { ...fallback, ...(JSON.parse(arg.slice(INITIAL_STATE_ARG.length)) as Partial<InitialShellState>) }
+    const state = ipcRenderer.sendSync(IPC.initialState) as InitialShellState | null
+    return state ? { ...fallback, ...state } : fallback
   } catch {
     return fallback
   }
