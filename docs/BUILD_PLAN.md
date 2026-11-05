@@ -309,3 +309,18 @@ Run 2's maxima came while other sessions were busy on the same machine. Searches
 - The numbers come from one fast machine. A slower Mac is the main risk to the 3 s margin. If a full rebuild there goes past about 3 s even with cached tokens, fall back to the per-database indexes measured above.
 
 **ARCHITECTURE.md changed.** §7.3 said a rebuild "should take about a second". It now gives the measured 1.5–1.7 s and the policy above.
+
+### S9: Can a Pro plan use Opus in Claude Code? (2026-11-04)
+
+**What ran.** A read of Anthropic's plan docs on 2026-11-04.
+
+**Answer: yes, Opus is part of the Pro plan in Claude Code.** Two pages say so:
+
+- [Claude Code model configuration](https://code.claude.com/docs/en/model-config), "`default` model setting": "**Pro, Max, Ultra, Team, Enterprise, and Anthropic API**: defaults to Opus 5.5".
+- [claude.com/pricing](https://claude.com/pricing), plan comparison: the Opus row reads No / Yes / Yes / Yes for Free / Pro / Max / Ultra, and Claude Code is included from Pro up.
+
+One exception: the same model configuration page, under "Extended context", says Pro needs usage credits for Opus 4.6 with 1M context. Ontological doesn't route to `[1m]` variants. The [Pro plan article](https://support.claude.com/en/articles/8325606-what-is-the-pro-plan) and [Using Claude Code with your Pro or Max plan](https://support.claude.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan) don't mention Opus. They say Pro's five-hour and weekly limits apply across all models. Some third-party posts from earlier in 2026 say Pro needs extra usage for Opus. Anthropic's current docs don't say that.
+
+**Decision: no change.** Ontological is for the author's own use on an Ultra plan, so Pro access doesn't affect the build. `fallback_model="sonnet"` stays on `opus` routes for overloaded Opus (§6.3).
+
+**ARCHITECTURE.md changed.** Nothing.
