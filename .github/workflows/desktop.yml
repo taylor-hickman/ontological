@@ -1,0 +1,61 @@
+# The Electron app in apps/desktop: typecheck, unit tests, then the built app under Playwright.
+# Runs on Ubuntu under xvfb, which covers everything the specs check; a macOS minute bills at
+# ten times a Linux one.
+name: desktop
+
+on:
+  push:
+    branches: [main]
+    paths: [apps/desktop/**, .github/workflows/desktop.yml]
+  pull_request:
+    paths: [apps/desktop/**, .github/workflows/desktop.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: desktop (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: apps/desktop/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      # The postinstall script downloads Electron; keep it between runs.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml') }}
+
+      - run: pnpm install --frozen-lockfile
+      # Electron needs the system libraries Playwright's browser builds use.
+      - run: pnpm exec playwright install-deps
+      - run: pnpm typecheck
+      - run: pnpm test:unit
+      - run: pnpm build
+      - run: xvfb-run --auto-servernum -- pnpm exec playwright test
+
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-test-results
+          path: apps/desktop/test-results/
+          if-no-files-found: ignore

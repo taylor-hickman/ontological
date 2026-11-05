@@ -231,6 +231,82 @@ Prompt content, retrieval tuning and UI are built against the eval and the retri
 
 Each spike appends its result here: the date, what ran, the numbers, the decision, and the ARCHITECTURE.md section it changed.
 
+### S1: Agent SDK features (2026-11-04)
+
+**Ran:** `python3 tools/spikes/s1_agent_sdk.py` with `claude-agent-sdk` 0.2.178 and Claude Code 2.1.318, on `haiku` at `low` effort. It runs the contract tests in `engine/tests/contract/test_agent_sdk.py` (behind `ONTOLOGICAL_CONTRACT=1`) twice. The first run uses a fresh login-shell environment. The second uses the environment inherited inside a Claude Code session, which had `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` and ten other session variables set. Each run makes 5 spawns and costs about $0.003 at API prices.
+
+**Result:** all 12 checks pass in both environments, and the two runs' init messages, tool logs and results are the same.
+
+| Behaviour | Result |
+|---|---|
+| SDK MCP `@tool` error | A tool returning `is_error` reaches the model as a readable error. In a `plan`/`run` miniature of §8.1, `run` refused an unknown `plan_id`; the model called `plan` and retried with the id it got. Haiku recovered only when the system prompt said tools may refuse and name the missing step. Without that line it gave up (one run) |
+| `output_format` with tools | Works in the same session. Claude Code implements it as a `StructuredOutput` tool, which shows in the init `tools` list, and the validated object arrives in `ResultMessage.structured_output` |
+| init `model` | The alias resolves to the concrete ID (`haiku` → `claude-haiku-5-5`) |
+| `ResultMessage.model_usage` | Keyed by concrete model ID, with tokens, thinking tokens and `costUSD`. It can list more than the session's model: an `opus` probe also had a `claude-haiku-5-5` entry from Claude Code's own side call |
+| `RateLimitEvent` | Arrives at the start of every session and parses. `utilization` is `None`, because the CLI sends it per window under `raw["unifiedWindows"]`. `rate_limit_type` was `seven_day` |
+| `permission_mode="dontAsk"` + `allowed_tools` | An SDK tool outside `allowed_tools` is denied without prompting, and its handler never runs. The denial shows as a `system`/`permission_denied` message and in `ResultMessage.permission_denials`. The model is told and carries on |
+| `setting_sources=[]` | The user's plugins, MCP servers and hooks don't load. Claude Code's four built-in plugins (`cc-plugin-*@builtin`) and its bundled skills still appear in the init message. With `tools=[]` there is no `Skill` tool to invoke them |
+| `tools=[]` | No built-in tools. Only our MCP tools and `StructuredOutput` are in the init `tools` list |
+| `fallback_model` | With an unknown model, the session answers on the fallback and emits `system`/`model_fallback` with `trigger: "model_not_found"`. The overload trigger couldn't be provoked |
+
+**Also found:**
+- `options.env` is merged over `os.environ`. It can override a key but can't remove one. An inherited bogus `ANTHROPIC_API_KEY` was used (`apiKeySource: "ANTHROPIC_API_KEY"`, auth failed); with `env={"ANTHROPIC_API_KEY": ""}` the run used the subscription login (`apiKeySource: "none"`).
+- The SDK already drops `CLAUDECODE` and sets `CLAUDE_CODE_ENTRYPOINT=sdk-py` for its child. The other inherited session variables (`CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_AUTO_CONNECT_IDE`, `CLAUDE_CODE_ENABLE_TODO_TOOLS`, `CLAUDE_PID`, `CLAUDE_EFFORT`) all reach it, and the `claude` binary reads every one. None changed anything the tests can see.
+- `query()` raises `ResultError` after yielding an error `ResultMessage` (for example, a failed login). The gateway has to catch it to return `None`.
+
+**Decision:**
+- Everything works, so §8.1 stays as written: `output_format` carries `AnswerModel`, and there is no `submit_answer` tool.
+- No nested run misbehaved. §6.2 still names the full list of session variables found, so M0.6 strips a known set rather than "the others S1 finds". It also says how to strip them, since `options.env` can't remove a key: the engine deletes them from its own `os.environ` at startup, and each call also blanks the four auth variables in `options.env`.
+- §6.3 now says to record the answering model from `AssistantMessage.model` (and the `model_fallback` message), not from `model_usage`.
+- §6.5 now says to read utilization from `raw["unifiedWindows"]`.
+- For M1.7: the answer agent's system prompt says that tools can refuse and name the missing step.
+
+### S2: How long does a spawn take? (2026-11-04)
+
+**What ran.** `tools/spikes/s2_spawn_time.py` on macOS arm64, with Claude Code 2.1.318 and `claude-agent-sdk` 0.2.178. It made 20 calls each on `haiku`, `sonnet` and `opus`, back to back, one fresh `query()` per call, so each started a new `claude` process. The call was one line, "Classify the column `customer_email` as one of: identifier, contact, measure, date.", with a one-field JSON schema, the §6.2 options and `effort="low"`. All 60 calls returned valid `structured_output`.
+
+The script splits each call into three timings:
+
+- **spawn**, from calling `query()` to the CLI's `init` message. This covers the SDK's `claude -v` check, starting the process and the initialize handshake.
+- **the CLI's turn**, `ResultMessage.duration_ms`.
+- **close**, from the `ResultMessage` until the process exits and `query()` returns.
+
+Overhead is spawn plus close. `duration_api_ms` can't be used to work out overhead. It counts API requests the CLI sends while it is still starting up, so it often comes out longer than `duration_ms`.
+
+| Model | `query()` p50 / p95 | spawn p50 / p95 | close p50 / p95 | overhead p50 / p95 | CLI turn p50 / p95 |
+|---|---|---|---|---|---|
+| haiku | 1.87 / 3.17 s | 0.17 / 0.21 s | 0.34 / 0.44 s | 0.53 / 0.61 s | 1.36 / 2.62 s |
+| sonnet | 1.99 / 2.26 s | 0.17 / 0.25 s | 0.33 / 0.40 s | 0.53 / 0.58 s | 1.45 / 1.78 s |
+| opus | 3.02 / 5.64 s | 0.18 / 0.23 s | 0.33 / 0.43 s | 0.55 / 0.62 s | 2.50 / 5.24 s |
+| all 60 | 2.09 / 4.08 s | 0.17 / 0.23 s | 0.34 / 0.43 s | 0.53 / 0.62 s | 1.57 / 3.49 s |
+
+The first call on each model was not much slower. Spawn took 0.35 s on the first `sonnet` and `opus` calls, against 0.17 s after that. Whole `query()` time varies with the model, mostly on `opus`, where one call took 8.2 s. Overhead hardly varies.
+
+**Decision: no warm pool.** The rule asks whether a spawn takes more than 1.5 s at p50. It takes 0.53 s, spawn and close together. The whole `query()` is above 1.5 s at p50 (2.09 s), but that is the model's time, and a warm pool can't remove it. A pre-spawned client would save the 0.17 s spawn. The 0.34 s close could also be saved without a pool, by not waiting for the process to exit. Neither is worth the pool's complexity in M1.
+
+**ARCHITECTURE.md changed.** §6.5's estimate said each call costs "a few seconds of process startup" and that split might add 20–30 minutes. It now gives 0.53 s of overhead per call, about 1.5–2 minutes of overhead for split's extra calls on a 200-table database. §3's per-call cost note now says the same.
+
+### S4: How big are trimmed Postgres 17 + pgvector binaries, and can CI build and sign them? (2026-11-04)
+
+**What ran.** `tools/spikes/s4_postgres/`, run locally and by `.github/workflows/postgres.yml` on `macos-15`. It builds PostgreSQL 17.11 with `--without-icu --with-libedit-preferred --disable-nls`, plus `pg_trgm` and pgvector 0.8.7 (`OPTFLAGS=""`), for macOS 13 and later. It trims the install to §10's file list and relinks libpq as `@rpath/libpq.5.dylib`. Then it signs every file ad-hoc with the hardened runtime and smoke-tests a copy under a path with spaces: `initdb` (UTF-8, locale `C`), a start on a Unix socket only, `CREATE EXTENSION vector` and `pg_trgm`, an HNSW query, a parallel worker, 8 concurrent client backends, and `pg_dump -Fc` and `pg_restore`. The build takes under a minute on an M-series Mac. Every file links only to libraries inside the tree or macOS's own (`libSystem`, `libz`, `libedit`). Upstream's Alembic chain creates only `vector` and `pg_trgm`, so no other contrib module is built.
+
+| Part | Files | Size |
+|---|---:|---:|
+| `bin/` (7 executables) | 7 | 11.1 MB |
+| `lib/` (libpq and the server's modules) | 31 | 4.9 MB |
+| `share/` | 701 | 1.9 MB |
+| **Total, unpacked** | 739 | **17.9 MB** |
+| As `.tar.xz` | | 3.9 MB |
+| `@embedded-postgres/darwin-arm64`, unpacked | | 337 MB |
+
+**Signing.** With the hardened runtime and an ad-hoc signature, library validation refuses every library of ours: an ad-hoc signature has no Team ID, so it never matches the process's. dyld won't load `libpq.5.dylib` into `initdb`, `psql`, `pg_dump` or `pg_restore`, and `postgres` can't `dlopen` `plpgsql`, `dict_snowball` or `vector` ("mapping process and mapped file (non-platform) have different Team IDs"). `initdb` fails before it finishes. Adding `com.apple.security.cs.disable-library-validation` to the executables fixes all of it. `control.sh` checks that the failure happens without the entitlement.
+
+Library validation is only enforced with System Integrity Protection on. GitHub's macOS runners have SIP off: without the entitlement, `initdb` loaded libpq there. So the CI job shows that the trimmed, signed tree works, but not that the entitlement is enough, and `control.sh` skips there. The library-validation results come from a local run on a Mac with SIP on (macOS 26), where `control.sh` and `smoke.sh` both pass. M7.4's clean-machine test covers it again for the notarized build. Forking needed nothing. JIT is not built, so `allow-jit` isn't needed either.
+
+**Decision.** Ship the trimmed tree from this CI job (M7.2), with `entitlements.plist` on the executables. After a change to how the tree is built or signed, run `control.sh` and `smoke.sh` on a Mac with SIP on, since CI can't check library validation. In M7, once the Developer ID exists, run `control.sh` with `CODESIGN_IDENTITY` set. If the libraries then load without the entitlement, drop it. Keeping it is also fine for notarization.
+
+**ARCHITECTURE.md changed.** §10 gives the measured size, the configure choices, the `@rpath` relink and the entitlement.
+
 ### S7: embedder loader and speed (2026-11-04)
 
 Ran `uv run tools/spikes/s7_embedder.py` on an Apple M5 Max (18 cores, 64 GB, macOS 26.5.2) with onnxruntime 1.31.1, against `snowflake-arctic-embed-m-v1.5` at `e58a8f7`, file `onnx/model_int8.onnx` (110.1 MB). The raw numbers are in `tools/spikes/s7_results.json`.
@@ -264,3 +340,42 @@ A one-off check (not in the script) of other files and providers on a 16×64 bat
 - A full 10⁵-text embed takes about 7 minutes on this machine and longer on smaller ones. It runs as a background job.
 
 Changed ARCHITECTURE.md §5.6 (Embedder) and §7.1. Not measured: a smaller Mac, and int8 recall against fp32 (the retrieval benchmark, §7.4, covers quality).
+
+### S8: How long does a `bm25s` rebuild take at 10⁵ documents? (2026-11-04)
+
+**What ran.** `tools/spikes/s8_bm25s_rebuild.py` with `bm25s` 0.3.16, numpy 2.5.4 and Python 3.12.13, on an Apple M5 Max. It ran twice with the defaults: 10⁵ synthetic table and column documents over 10 databases, 5 repeats, and 1,000 queries at k=50. Each document is name + synonyms + description, as §7.3 indexes them. Identifiers come in snake_case, camelCase, PascalCase and UPPER_SNAKE, with glossary abbreviations and acronyms in them, and descriptions run one to three sentences with a long tail of made-up words. That gives 1.84 M tokens, 18 tokens per document at p50 (29 at p95), a 22,128-token vocabulary and a 14 MB index.
+
+The tokenizer is the §7.3 one: split on snake_case and camelCase, lowercase, expand glossary acronyms, drop stopwords, with the same function on queries. Planted documents check it: `cust_acct_no` ranks first for "customer account number" and for `cust_acct_no`, `ZorblaxInvoiceLineID` for "zorblax invoice line id", and `QUUXTREL_SKU_QTY` for "quuxtrel SKU qty" and "quuxtrel stock keeping unit quantity".
+
+| Step | Run 1 p50 / max | Run 2 p50 / max |
+|---|---|---|
+| tokenize 10⁵ texts | 0.80 / 0.87 s | 0.82 / 0.96 s |
+| `BM25.index` on the tokens | 0.89 / 0.93 s | 0.76 / 1.24 s |
+| **full rebuild** (tokenize + index) | **1.73 / 1.75 s** | **1.49 / 2.38 s** |
+| one database's rebuild (~10⁴ docs) | 0.16 / 0.22 s | 0.17 / 0.31 s |
+| query, k=50 | 0.40 / 1.19 ms | 0.36 / 0.83 ms |
+| query while a full rebuild runs on a thread | 0.57 ms p50, 24 ms p95, 111 ms max | 0.76 ms p50, 18 ms p95, 83 ms max |
+
+Run 2's maxima came while other sessions were busy on the same machine. Searches slow down during a rebuild because they share the GIL with it. They stay correct, because the new index replaces the old one by a single reference assignment. In both runs, every search during the rebuild used the old index and none saw a partly built one.
+
+**Decision: rebuild on every change and swap atomically.** A full rebuild takes 1.5–1.7 s at p50 and at most 2.4 s, under the rule's 3 s. Per-database indexes and debounced edits aren't needed. Searches cost under a millisecond, and up to about 0.1 s while a rebuild is running, which is small next to a tool call's turn. For M3.6:
+- Run at most one rebuild at a time. A change that arrives during a rebuild marks the index stale, and one more rebuild runs after the current one, so a burst of compile writes costs two rebuilds, not one per write.
+- Cache each document's tokens by `content_hash`, so a rebuild tokenizes only changed documents. That removes about half of a rebuild (the tokenize row).
+- The numbers come from one fast machine. A slower Mac is the main risk to the 3 s margin. If a full rebuild there goes past about 3 s even with cached tokens, fall back to the per-database indexes measured above.
+
+**ARCHITECTURE.md changed.** §7.3 said a rebuild "should take about a second". It now gives the measured 1.5–1.7 s and the policy above.
+
+### S9: Can a Pro plan use Opus in Claude Code? (2026-11-04)
+
+**What ran.** A read of Anthropic's plan docs on 2026-11-04.
+
+**Answer: yes, Opus is part of the Pro plan in Claude Code.** Two pages say so:
+
+- [Claude Code model configuration](https://code.claude.com/docs/en/model-config), "`default` model setting": "**Pro, Max, Ultra, Team, Enterprise, and Anthropic API**: defaults to Opus 5.5".
+- [claude.com/pricing](https://claude.com/pricing), plan comparison: the Opus row reads No / Yes / Yes / Yes for Free / Pro / Max / Ultra, and Claude Code is included from Pro up.
+
+One exception: the same model configuration page, under "Extended context", says Pro needs usage credits for Opus 4.6 with 1M context. Ontological doesn't route to `[1m]` variants. The [Pro plan article](https://support.claude.com/en/articles/8325606-what-is-the-pro-plan) and [Using Claude Code with your Pro or Max plan](https://support.claude.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan) don't mention Opus. They say Pro's five-hour and weekly limits apply across all models. Some third-party posts from earlier in 2026 say Pro needs extra usage for Opus. Anthropic's current docs don't say that.
+
+**Decision: no change.** Ontological is for the author's own use on an Ultra plan, so Pro access doesn't affect the build. `fallback_model="sonnet"` stays on `opus` routes for overloaded Opus (§6.3).
+
+**ARCHITECTURE.md changed.** Nothing.

@@ -2,4 +2,8 @@
 
 Scripts for the M0 spikes (S1 to S9), kept so they can be re-run. Each spike's result note goes in [BUILD_PLAN.md, Spike results](../../docs/BUILD_PLAN.md#spike-results).
 
-- `s7_embedder.py`: S7, the embedder's loader and speed. `uv run tools/spikes/s7_embedder.py` (about 30 minutes; `--quick` takes 3). Its last full run is `s7_results.json`.
+| Spike | Script | Run |
+|---|---|---|
+| S1 | [s1_agent_sdk.py](s1_agent_sdk.py) | `python3 tools/spikes/s1_agent_sdk.py` from inside a Claude Code session, so the `current` column is the nested case. It runs the Agent SDK contract tests in a fresh login-shell environment and in the current one, and prints pass or fail for each behaviour and every difference between the two |
+| S4 | [s4_postgres/](s4_postgres/) | `.github/workflows/postgres.yml` runs it on every change to the folder. Locally, run the steps in [its README](s4_postgres/README.md) on a Mac with SIP on: CI runners have SIP off, so only a local run checks library validation |
+| S7 | [s7_embedder.py](s7_embedder.py) | `uv run tools/spikes/s7_embedder.py`, about 30 minutes (`--quick`: 3). It downloads the model once, loads it through fastembed and directly, and prints load time, parity, batch cost by shape, bulk texts per second and query latency. The last full run is [s7_results.json](s7_results.json) |
