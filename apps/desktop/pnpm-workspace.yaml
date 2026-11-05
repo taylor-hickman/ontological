@@ -1,0 +1,3 @@
+allowBuilds:
+  # The postinstall script in package.json downloads the Electron binary.
+  electron: false

@@ -4,7 +4,9 @@ version = "0.0.0"
 description = "Ontological's engine: catalog, compile, retrieval, answer agent and Claude gateway."
 readme = "README.md"
 requires-python = "==3.12.*"
-dependencies = []
+dependencies = [
+    "claude-agent-sdk>=0.2.178",
+]
 
 [build-system]
 requires = ["uv_build>=0.13,<0.14"]
