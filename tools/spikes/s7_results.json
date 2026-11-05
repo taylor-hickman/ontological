@@ -1,0 +1,361 @@
+{
+  "machine": {
+    "cpu": "Apple M5 Max",
+    "cores": "18",
+    "perf_cores": "6",
+    "memory_gb": "68719476736",
+    "macos": "26.5.2",
+    "onnxruntime": "1.31.1"
+  },
+  "model": "Snowflake/snowflake-arctic-embed-m-v1.5@e58a8f7 onnx/model_int8.onnx",
+  "model_mb": 110.1,
+  "load_ms": {
+    "direct": 112,
+    "fastembed": 180
+  },
+  "parity": {
+    "passage_min_cosine": 0.9999998211860657,
+    "query_min_cosine": 0.9999998807907104,
+    "sentence_embedding_min_cosine": 0.9964382648468018,
+    "alone_vs_batched_min_cosine": 0.9959612488746643
+  },
+  "shape_grid": [
+    {
+      "seq": 16,
+      "batch": 1,
+      "tokens": 16,
+      "ms": 2.5
+    },
+    {
+      "seq": 16,
+      "batch": 2,
+      "tokens": 32,
+      "ms": 4.0
+    },
+    {
+      "seq": 16,
+      "batch": 4,
+      "tokens": 64,
+      "ms": 7.5
+    },
+    {
+      "seq": 16,
+      "batch": 8,
+      "tokens": 128,
+      "ms": 13.2
+    },
+    {
+      "seq": 16,
+      "batch": 16,
+      "tokens": 256,
+      "ms": 24.2
+    },
+    {
+      "seq": 16,
+      "batch": 32,
+      "tokens": 512,
+      "ms": 46.2
+    },
+    {
+      "seq": 16,
+      "batch": 64,
+      "tokens": 1024,
+      "ms": 88.1
+    },
+    {
+      "seq": 16,
+      "batch": 128,
+      "tokens": 2048,
+      "ms": 176.6
+    },
+    {
+      "seq": 16,
+      "batch": 256,
+      "tokens": 4096,
+      "ms": 349.9
+    },
+    {
+      "seq": 32,
+      "batch": 1,
+      "tokens": 32,
+      "ms": 4.2
+    },
+    {
+      "seq": 32,
+      "batch": 2,
+      "tokens": 64,
+      "ms": 7.6
+    },
+    {
+      "seq": 32,
+      "batch": 4,
+      "tokens": 128,
+      "ms": 12.9
+    },
+    {
+      "seq": 32,
+      "batch": 8,
+      "tokens": 256,
+      "ms": 24.1
+    },
+    {
+      "seq": 32,
+      "batch": 16,
+      "tokens": 512,
+      "ms": 47.0
+    },
+    {
+      "seq": 32,
+      "batch": 32,
+      "tokens": 1024,
+      "ms": 88.5
+    },
+    {
+      "seq": 32,
+      "batch": 64,
+      "tokens": 2048,
+      "ms": 175.2
+    },
+    {
+      "seq": 32,
+      "batch": 128,
+      "tokens": 4096,
+      "ms": 340.1
+    },
+    {
+      "seq": 64,
+      "batch": 1,
+      "tokens": 64,
+      "ms": 6.4
+    },
+    {
+      "seq": 64,
+      "batch": 2,
+      "tokens": 128,
+      "ms": 11.0
+    },
+    {
+      "seq": 64,
+      "batch": 4,
+      "tokens": 256,
+      "ms": 21.1
+    },
+    {
+      "seq": 64,
+      "batch": 8,
+      "tokens": 512,
+      "ms": 41.4
+    },
+    {
+      "seq": 64,
+      "batch": 16,
+      "tokens": 1024,
+      "ms": 83.1
+    },
+    {
+      "seq": 64,
+      "batch": 32,
+      "tokens": 2048,
+      "ms": 165.6
+    },
+    {
+      "seq": 64,
+      "batch": 64,
+      "tokens": 4096,
+      "ms": 314.0
+    },
+    {
+      "seq": 128,
+      "batch": 1,
+      "tokens": 128,
+      "ms": 10.9
+    },
+    {
+      "seq": 128,
+      "batch": 2,
+      "tokens": 256,
+      "ms": 23.0
+    },
+    {
+      "seq": 128,
+      "batch": 4,
+      "tokens": 512,
+      "ms": 45.9
+    },
+    {
+      "seq": 128,
+      "batch": 8,
+      "tokens": 1024,
+      "ms": 86.9
+    },
+    {
+      "seq": 128,
+      "batch": 16,
+      "tokens": 2048,
+      "ms": 170.1
+    },
+    {
+      "seq": 128,
+      "batch": 32,
+      "tokens": 4096,
+      "ms": 316.5
+    },
+    {
+      "seq": 256,
+      "batch": 1,
+      "tokens": 256,
+      "ms": 22.4
+    },
+    {
+      "seq": 256,
+      "batch": 2,
+      "tokens": 512,
+      "ms": 43.0
+    },
+    {
+      "seq": 256,
+      "batch": 4,
+      "tokens": 1024,
+      "ms": 81.9
+    },
+    {
+      "seq": 256,
+      "batch": 8,
+      "tokens": 2048,
+      "ms": 165.4
+    },
+    {
+      "seq": 256,
+      "batch": 16,
+      "tokens": 4096,
+      "ms": 333.6
+    },
+    {
+      "seq": 512,
+      "batch": 1,
+      "tokens": 512,
+      "ms": 47.9
+    },
+    {
+      "seq": 512,
+      "batch": 2,
+      "tokens": 1024,
+      "ms": 93.1
+    },
+    {
+      "seq": 512,
+      "batch": 4,
+      "tokens": 2048,
+      "ms": 188.3
+    },
+    {
+      "seq": 512,
+      "batch": 8,
+      "tokens": 4096,
+      "ms": 372.2
+    }
+  ],
+  "tokens_per_ms": 10.58,
+  "token_cap": 1057,
+  "bulk_token_lengths": {
+    "p50": 51,
+    "p95": 78,
+    "max": 125
+  },
+  "bulk": {
+    "batches_token_capped": 5084,
+    "text_cap": 8,
+    "direct_sorted_token_cap": {
+      "seconds": 430.5,
+      "texts_per_s": 232
+    },
+    "direct_unsorted_text_cap": {
+      "seconds": 677.9,
+      "texts_per_s": 148
+    },
+    "fastembed_text_cap": {
+      "seconds": 651.1,
+      "texts_per_s": 154
+    }
+  },
+  "query_latency_ms": {
+    "idle_direct": {
+      "n": 200,
+      "p50": 3.3,
+      "p95": 3.8,
+      "max": 5.7,
+      "mean": 3.3
+    },
+    "idle_fastembed": {
+      "n": 200,
+      "p50": 3.3,
+      "p95": 4.3,
+      "max": 6.0,
+      "mean": 3.5
+    },
+    "priority_worker_1x_cap": {
+      "query": {
+        "n": 200,
+        "p50": 50.3,
+        "p95": 87.9,
+        "max": 136.1,
+        "mean": 50.3
+      },
+      "bulk_batch": {
+        "n": 291,
+        "p50": 91.3,
+        "p95": 100.4,
+        "max": 225.3,
+        "mean": 92.6
+      }
+    },
+    "concurrent_session_1x_cap": {
+      "query": {
+        "n": 200,
+        "p50": 6.7,
+        "p95": 7.6,
+        "max": 8.7,
+        "mean": 6.6
+      },
+      "bulk_batch": {
+        "n": 208,
+        "p50": 90.6,
+        "p95": 98.4,
+        "max": 105.6,
+        "mean": 91.0
+      }
+    },
+    "priority_worker_4x_cap": {
+      "query": {
+        "n": 200,
+        "p50": 265.7,
+        "p95": 335.2,
+        "max": 352.6,
+        "mean": 266.0
+      },
+      "bulk_batch": {
+        "n": 201,
+        "p50": 347.8,
+        "p95": 372.5,
+        "max": 397.6,
+        "mean": 349.6
+      }
+    },
+    "concurrent_session_4x_cap": {
+      "query": {
+        "n": 200,
+        "p50": 5.7,
+        "p95": 7.4,
+        "max": 10.3,
+        "mean": 5.6
+      },
+      "bulk_batch": {
+        "n": 53,
+        "p50": 354.8,
+        "p95": 368.6,
+        "max": 383.0,
+        "mean": 354.0
+      }
+    }
+  }
+}
