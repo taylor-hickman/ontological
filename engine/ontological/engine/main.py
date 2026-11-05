@@ -153,15 +153,29 @@ def main(
 
 class _Stop:
     """SIGTERM and SIGINT ask the engine to stop. While uvicorn serves, it routes them to
-    `_Server.handle_exit`, which lands here too."""
+    `_Server.handle_exit`, which lands here too.
+
+    The handler only records the signal. Python runs it between two bytecodes of the main
+    thread, so logging from it can land in the middle of a write to stderr and raise "reentrant
+    call inside BufferedWriter", and the engine never stops. The engine logs it from its own
+    loop instead, with `log_once`."""
 
     def __init__(self) -> None:
-        self.requested = False
+        self.signum: int | None = None
+        self._logged = False
+
+    @property
+    def requested(self) -> bool:
+        return self.signum is not None
 
     def __call__(self, signum: int, frame: FrameType | None) -> None:
-        if not self.requested:
-            log.info("%s: stopping", signal.Signals(signum).name)
-        self.requested = True
+        if self.signum is None:
+            self.signum = signum
+
+    def log_once(self) -> None:
+        if self.signum is not None and not self._logged:
+            self._logged = True
+            log.info("%s: stopping", signal.Signals(self.signum).name)
 
 
 class _Server(uvicorn.Server):
@@ -197,7 +211,9 @@ def serve(config: Config, make_store: Callable[[Config], Store]) -> int:
         new_store = make_store(config)
         new_store.start()
         store = new_store
-        if not stop.requested:
+        if stop.requested:
+            stop.log_once()
+        else:
             asyncio.run(_serve(config, sock, lock, stop))
     except Exception as e:
         log.exception("engine failed")
@@ -253,6 +269,7 @@ async def _serve(
         if lifetime.should_exit():
             log.info("idle for %gs: stopping", config.idle_timeout_s)
         if lifetime.closing or stop.requested:
+            stop.log_once()
             lifetime.close()
             # Take engine.lock before we stop answering: an engine starting meanwhile holds it
             # while it checks for us, so it either finds us still serving and exits, or waits
