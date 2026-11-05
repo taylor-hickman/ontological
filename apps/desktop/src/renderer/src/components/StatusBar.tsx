@@ -1,17 +1,45 @@
+import type { EngineState } from '@shared/engine'
+import { useEngine } from '../useEngine'
+
+const ENGINE_LABEL: Record<EngineState['status'], string> = {
+  starting: 'Starting engine…',
+  running: 'Engine running',
+  restarting: 'Engine stopped. Restarting…',
+  stopped: 'Engine stopped',
+  failed: 'Engine failed to start'
+}
+
+/** A filled dot only while the engine runs; status never depends on color alone (DESIGN.md §2.1). */
+function EngineDot({ state }: { state: EngineState }) {
+  const base = 'size-[7px] rounded-full'
+  if (state.status === 'running') return <span aria-hidden="true" className={`${base} bg-verified`} />
+  if (state.status === 'starting' || state.status === 'restarting') {
+    return <span aria-hidden="true" className={`${base} border border-text-muted motion-safe:animate-pulse`} />
+  }
+  if (state.status === 'failed') return <span aria-hidden="true" className={`${base} bg-attention`} />
+  return <span aria-hidden="true" className={`${base} border border-text-muted`} />
+}
+
 /**
  * DESIGN.md §4.6. Always present, 28 px. Left: engine state, then Claude Code. Right: the main
- * background job, then the usage meter. With no engine yet, every part is in its "no data" state.
+ * background job, then the usage meter. Until the engine reports them, those parts are in their
+ * "no data" state.
  */
 export function StatusBar() {
+  const engine = useEngine()
   return (
     <footer
       data-testid="status-bar"
       className="flex h-7 shrink-0 items-center gap-[18px] overflow-hidden border-t border-border bg-chrome px-3.5 text-xs whitespace-nowrap text-text-2"
     >
-      <span className="flex items-center gap-1.5">
-        {/* A hollow dot: status never depends on color alone (DESIGN.md §2.1). */}
-        <span aria-hidden="true" className="size-[7px] rounded-full border border-text-muted" />
-        Engine not running
+      <span
+        data-testid="engine-status"
+        data-status={engine.status}
+        title={engine.status === 'failed' ? engine.error : undefined}
+        className="flex items-center gap-1.5"
+      >
+        <EngineDot state={engine} />
+        {ENGINE_LABEL[engine.status]}
       </span>
       <span>Claude Code not checked</span>
       <span className="flex-1" />

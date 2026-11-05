@@ -9,7 +9,7 @@ Paths map one to one, except for the Alembic chain. Upstream keeps it at the rep
 | `alembic/` | `auto_ontology/alembic/` |
 | `auto_ontology/<path>` | `auto_ontology/<path>` |
 
-Upstream's `alembic.ini` isn't vendored. `ontological/store/chains.py` configures the chain in code. Upstream's tests (`dal/tests/`, `catalog/store/tests/`, `vdb/tests/`) aren't vendored here: M2.1 vendors the DAL suite as test-only code.
+Upstream's `alembic.ini` isn't vendored. `ontological/store/chains.py` configures the chain in code. Upstream's tests (`dal/tests/`, `catalog/store/tests/`, `vdb/tests/`) aren't vendored here. M2.1 vendors the DAL and catalog-store tests as test-only code (see [The conformance suite](#the-conformance-suite)).
 
 ## Files
 
@@ -52,8 +52,8 @@ Each modified or added file says so under its SPDX header.
 - **Zones.** Every DAL read takes `zone_ids=None`, the whole catalog. An empty list grants nothing.
 - **Vectors.** Callers pass the embedder and its dimension: `get_vdb(embeddings=..., vector_size=...)`. The local embedder arrives in M1.5.
 
-## For M2.1's conformance suite
+## The conformance suite
 
-Run against this package, upstream's DAL tests (no golden seed) pass except four, each from an edit above: `test_dal_surface.py` sees the new `embed_custom_analyses` and `embed_pql_analyses` signatures and the missing `model_interchange` module, and `test_migration_revision.py` looks for `alembic/` three levels up. When M2.1 vendors `server/sql_utils.py` as test-only code, it should import `SqlParseError` from `server/sql_errors.py`, so the services' `except SqlParseError` still catches the DAL's errors.
+Upstream's DAL tests and golden fixtures run against this package as M2's conformance gate (`engine/tests/golden_dal/`, M2.1), with the seed and the code it needs vendored as test-only code under `engine/tests/upstream_fixtures/` (its `UPSTREAM.md` lists the files and edits). The edits here show up there as a regenerated `dal_surface.json` (the `embed_custom_analyses` and `embed_pql_analyses` signatures, no `model_interchange`) and a `test_migration_revision.py` that finds `auto_ontology/alembic`.
 
 To check a file against upstream: `diff <upstream checkout>/auto_ontology/dal/connections.py engine/auto_ontology/dal/connections.py`.

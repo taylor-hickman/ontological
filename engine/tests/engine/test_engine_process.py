@@ -4,9 +4,11 @@ fake store that logs what it was asked to do."""
 from __future__ import annotations
 
 import base64
+import contextlib
 import fcntl
 import json
 import os
+import select
 import socket
 import stat
 import subprocess
@@ -19,7 +21,7 @@ import pytest
 from engine_proc import STUB, Proc, app_data, http, store_log, wait_until
 
 import ontological
-from ontological.engine import discovery
+from ontological.engine import discovery, main
 from ontological.engine.discovery import EngineInfo
 
 __all__ = ["app_data"]  # the fixture
@@ -301,3 +303,42 @@ def test_a_store_that_fails_to_start_is_reported_and_leaves_no_engine_json(
     assert "error" in line
     assert e.wait_exit(10) == 1
     assert not (app_data / "engine.json").exists()
+
+
+def test_a_line_to_a_reader_that_has_gone_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Electron reads the engine's line and may quit while its engine runs on (ARCHITECTURE.md
+    §4.4). A later line, such as an error, must not raise and skip stopping the store."""
+    r, w = os.pipe()
+    os.close(r)
+    gone = os.fdopen(w, "w")
+    monkeypatch.setattr(sys, "stdout", gone)
+    main.emit(error="RuntimeError: boom")
+    main.emit(error="and again")
+    replaced = sys.stdout
+    monkeypatch.undo()
+    assert replaced is not gone
+    replaced.close()
+    with contextlib.suppress(BrokenPipeError):  # the first line is still in its buffer
+        gone.close()
+
+
+def test_the_engine_closes_descriptors_it_inherited(app_data: Path) -> None:
+    """Electron on Linux leaks its descriptors into the engine: Chromium's lock files, IPC
+    sockets, the pipe to its own parent. The engine outlives Electron, so it closes them, or
+    whoever reads that pipe waits until the engine exits (§4.4)."""
+    r, w = os.pipe()
+    try:
+        engine = Proc([sys.executable, str(STUB), "--app-data", str(app_data)], pass_fds=(w,))
+        os.close(w)
+        w = -1
+        assert engine.alive()
+        # Only the engine could still hold the write end; EOF means it closed it.
+        ready, _, _ = select.select([r], [], [], 10)
+        assert ready, "the engine still holds the inherited pipe"
+        assert os.read(r, 1) == b""
+        assert engine.alive()
+        assert engine.term() == 0
+    finally:
+        os.close(r)
+        if w >= 0:
+            os.close(w)
