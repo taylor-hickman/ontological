@@ -3,7 +3,8 @@ name: Bundled Postgres
 # Builds the PostgreSQL 17 + pgvector binaries the app bundles (ARCHITECTURE.md §10, spike S4):
 # minimal configure, trimmed to the shipped file list, signed with the hardened runtime, then
 # smoke-tested and run through the store lifecycle tests (§5.3 and §12: engine/tests/store, which
-# test engine/ontological/store/pg.py). Runs when the scripts or the store change, or by hand.
+# test engine/ontological/store/pg.py) and the engine's idle shutdown on the real store
+# (engine/tests/engine/test_engine_pg.py). Runs when the scripts or the store change, or by hand.
 on:
   push:
     branches: [main]
@@ -12,6 +13,7 @@ on:
       - tools/spikes/s5_pg_lifecycle/**
       - engine/ontological/store/**
       - engine/tests/store/**
+      - engine/tests/engine/test_engine_pg.py
       - .github/workflows/postgres.yml
   pull_request:
     paths:
@@ -19,6 +21,7 @@ on:
       - tools/spikes/s5_pg_lifecycle/**
       - engine/ontological/store/**
       - engine/tests/store/**
+      - engine/tests/engine/test_engine_pg.py
       - .github/workflows/postgres.yml
   workflow_dispatch:
 
@@ -57,7 +60,7 @@ jobs:
         with:
           working-directory: engine
           enable-cache: true
-      - name: Store lifecycle tests (first launch, stop, adopt, stale pid, second engine, restore, 16 to 17, disk full)
+      - name: Store lifecycle tests (first launch, stop, adopt, stale pid, second engine, restore, 16 to 17, disk full), and the engine idling out on the store
         working-directory: engine
         env:
           ONTOLOGICAL_PG_BIN: ${{ env.WORK }}/dist/bin
@@ -65,7 +68,7 @@ jobs:
           ONTOLOGICAL_PG_REQUIRED: "1"
         run: |
           uv sync --locked
-          uv run pytest tests/store -ra
+          uv run pytest tests/store tests/engine/test_engine_pg.py -ra
       - name: Package and measure
         run: |
           source versions.env
