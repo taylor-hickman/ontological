@@ -1,4 +1,5 @@
-"""Contract tests for the Agent SDK behaviour the gateway and the gated agent rely on (spike S1).
+"""Contract tests for the Agent SDK behaviour the gateway and the gated agent rely on (spike S1),
+and for the gateway itself on the real binary (M0.6).
 
 Every test but the parser test spawns the user's logged-in `claude` and spends a little quota,
 so they run only when ONTOLOGICAL_CONTRACT=1. ONTOLOGICAL_CONTRACT_MODEL picks the model
@@ -13,11 +14,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import tempfile
-from collections.abc import Iterator
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Iterator
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 from claude_agent_sdk import (
@@ -25,6 +27,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     HookEventMessage,
     McpSdkServerConfig,
+    Message,
     RateLimitEvent,
     ResultMessage,
     SystemMessage,
@@ -35,6 +38,11 @@ from claude_agent_sdk import (
 from claude_agent_sdk._internal.message_parser import (  # pyright: ignore[reportPrivateUsage]
     parse_message,
 )
+from pydantic import BaseModel
+
+from ontological.llm.calls import LlmCall
+from ontological.llm.gateway import ClaudeGateway
+from ontological.llm.routes import Route
 
 CONTRACT = os.environ.get("ONTOLOGICAL_CONTRACT") == "1"
 MODEL = os.environ.get("ONTOLOGICAL_CONTRACT_MODEL", "haiku")
@@ -391,3 +399,106 @@ def test_spawned_session_is_not_the_parent_session(gated: Run) -> None:
     parent = os.environ.get("CLAUDE_CODE_SESSION_ID")
     assert gated.init["session_id"] != parent
     assert "ontological-sandbox-" in gated.init["cwd"]
+
+
+# --- the gateway (M0.6) -------------------------------------------------------------------------
+# ClaudeGateway on the real binary, with §6.2's options: two spawns, a structured call and the
+# ping. tests/llm covers the rest against a scripted query().
+
+
+class Column(BaseModel):
+    kind: Literal["identifier", "contact", "measure", "date"]
+
+
+@dataclass
+class ListCalls:
+    rows: list[LlmCall] = field(default_factory=list[LlmCall])
+
+    def lookup(self, cache_key: str) -> Any | None:
+        hits = [r.output for r in self.rows if r.cache_key == cache_key and r.cacheable]
+        return hits[-1] if hits else None
+
+    def record(self, call: LlmCall) -> None:
+        self.rows.append(call)
+
+
+@dataclass
+class GatewayRun:
+    gateway: ClaudeGateway
+    calls: ListCalls
+    spawns: list[str]
+    first: BaseModel | None
+    second: BaseModel | None
+
+
+def _gateway(calls: ListCalls, spawns: list[str]) -> ClaudeGateway:
+    def counted(*, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[Message]:
+        spawns.append(prompt)
+        return query(prompt=prompt, options=options)
+
+    cli = shutil.which("claude")
+    assert cli, "claude is not on PATH"
+    return ClaudeGateway(
+        calls=calls,
+        sandbox=Path(tempfile.mkdtemp(prefix="ontological-sandbox-")),
+        cli_path=cli,
+        routes={"pii_classify": Route(MODEL, "low"), "ping": Route(MODEL, "low")},
+        query=counted,
+    )
+
+
+@pytest.fixture(scope="module")
+def gateway_run() -> GatewayRun:
+    """A structured call made twice, with a bogus ANTHROPIC_API_KEY inherited: the gateway blanks
+    it, so the call bills the login, and the second call is a cache hit."""
+    calls, spawns = ListCalls(), list[str]()
+    gateway = _gateway(calls, spawns)
+    saved = os.environ.get("ANTHROPIC_API_KEY")
+    os.environ["ANTHROPIC_API_KEY"] = BOGUS_API_KEY
+    system = "You classify database columns."
+    user = "Classify the column `customer_email` as one of: identifier, contact, measure, date."
+    try:
+        first = asyncio.run(gateway.structured("pii_classify", system, user, Column))
+        second = asyncio.run(gateway.structured("pii_classify", system, user, Column))
+    finally:
+        if saved is None:
+            del os.environ["ANTHROPIC_API_KEY"]
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = saved
+    _REPORT["gateway"] = [asdict(r) for r in calls.rows]
+    return GatewayRun(gateway, calls, spawns, first, second)
+
+
+@needs_claude
+def test_gateway_structured_answers_on_the_login_and_logs_the_answering_model(
+    gateway_run: GatewayRun,
+) -> None:
+    assert gateway_run.first == Column(kind="contact")
+    [row] = gateway_run.calls.rows
+    assert row.outcome == "ok" and row.attempt == 1, row.error
+    assert (row.model, row.effort) == (MODEL, "low")
+    assert row.resolved_model and row.resolved_model.startswith("claude-")
+    assert row.answered_model == row.resolved_model and not row.fallback
+    assert row.usage and row.resolved_model in row.usage
+    status = gateway_run.gateway.status
+    assert status.logged_in and status.rate_limit is not None
+    assert status.rate_limit.status in ("allowed", "allowed_warning", "rejected")
+
+
+@needs_claude
+def test_gateway_serves_a_repeated_structured_call_from_the_cache(
+    gateway_run: GatewayRun,
+) -> None:
+    assert gateway_run.second == gateway_run.first
+    assert len(gateway_run.spawns) == 1
+
+
+@needs_claude
+def test_gateway_check_reads_the_version_and_pings() -> None:
+    calls: ListCalls = ListCalls()
+    gateway = _gateway(calls, [])
+    status = asyncio.run(gateway.check())
+    _REPORT["gateway_check"] = asdict(status)
+    assert status.version and status.installed
+    assert status.state == "ready", status
+    assert [(r.task, r.outcome) for r in calls.rows] == [("ping", "ok")]
