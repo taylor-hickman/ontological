@@ -31,8 +31,12 @@ class Proc:
     """An engine process in the foreground. It prints one JSON line once it serves or attaches:
     {"pid", "port", "version", "started"}, or {"error"}."""
 
-    def __init__(self, cmd: list[str], *, ready: bool = True) -> None:
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, start_new_session=True)
+    def __init__(
+        self, cmd: list[str], *, ready: bool = True, env: dict[str, str] | None = None
+    ) -> None:
+        self.proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, text=True, start_new_session=True, env=env
+        )
         PROCS.append(self.proc)
         self.lines: queue.Queue[str] = queue.Queue()
         threading.Thread(target=self._pump, daemon=True).start()
@@ -83,7 +87,7 @@ def http(app_data: Path, method: str, path: str, *, token: str | None = None) ->
         headers={"Authorization": f"Bearer {info.token if token is None else token}"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with discovery.LOCAL.open(req, timeout=10) as r:
             body = r.read()
             return r.status, json.loads(body) if body else None
     except urllib.error.HTTPError as e:

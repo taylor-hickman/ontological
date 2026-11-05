@@ -7,12 +7,15 @@ import base64
 import fcntl
 import json
 import os
+import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
+import pytest
 from engine_proc import STUB, Proc, app_data, http, store_log, wait_until
 
 import ontological
@@ -127,6 +130,68 @@ def test_engines_started_at_once_make_one_engine(app_data: Path) -> None:
         if e is not serving:
             assert e.wait_exit(10) == 0
     assert store_log(app_data) == ["start"]
+
+
+class FakeProxy:
+    """A proxy that records whoever connects to it and answers 502."""
+
+    def __init__(self) -> None:
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen()
+        self.url = f"http://127.0.0.1:{self.sock.getsockname()[1]}"
+        self.requests: list[bytes] = []
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                self.requests.append(conn.recv(65536))
+                conn.sendall(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+
+    def close(self) -> None:
+        self.sock.close()
+
+
+PROXY_VARS = ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY")
+
+
+def test_finding_the_engine_ignores_a_proxy(
+    app_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A proxy must never see the token, and can't reach the engine anyway.
+    e = Proc.stub(app_data)
+    proxy = FakeProxy()
+    try:
+        for var in PROXY_VARS:
+            monkeypatch.setenv(var, proxy.url)
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        live = discovery.find_engine(app_data)
+        assert live is not None and live.pid == e.pid
+        assert proxy.requests == []
+    finally:
+        proxy.close()
+
+
+def test_an_engine_started_behind_a_proxy_still_attaches(app_data: Path) -> None:
+    first = Proc.stub(app_data)
+    proxy = FakeProxy()
+    env = {k: v for k, v in os.environ.items() if k.lower() != "no_proxy"}
+    env.update(dict.fromkeys(PROXY_VARS, proxy.url))
+    try:
+        second = Proc([sys.executable, str(STUB), "--app-data", str(app_data)], env=env)
+        assert second.info["started"] is False
+        assert second.info["pid"] == first.pid
+        assert second.wait_exit(10) == 0
+        assert proxy.requests == []
+        assert store_log(app_data) == ["start"]
+    finally:
+        proxy.close()
 
 
 def test_a_stale_engine_json_is_replaced(app_data: Path) -> None:

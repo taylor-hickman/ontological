@@ -28,6 +28,12 @@ ENGINE_LOCK = "engine.lock"
 TOKEN_BYTES = 32
 HEALTH_TIMEOUT_S = 2.0
 
+# For every request to an engine on 127.0.0.1. urlopen's default opener sends it through
+# http_proxy/HTTP_PROXY unless NO_PROXY exempts 127.0.0.1, which nothing does by default: the
+# proxy would get the bearer token, and the probe would fail against a live engine, so a second
+# engine would start on the same Postgres.
+LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 @dataclass(frozen=True)
 class EngineInfo:
@@ -152,7 +158,7 @@ def answers(info: EngineInfo, timeout_s: float = HEALTH_TIMEOUT_S) -> bool:
         headers={"Authorization": f"Bearer {info.token}"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        with LOCAL.open(req, timeout=timeout_s) as r:
             body: Any = json.loads(r.read())
     except (OSError, ValueError):  # refused, timed out, an HTTP error, not JSON
         return False
