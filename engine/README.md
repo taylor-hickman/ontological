@@ -45,4 +45,6 @@ ONTOLOGICAL_PG_BIN=<tree>/bin ONTOLOGICAL_PG16_BIN=<work>/postgres/bin uv run py
 
 The engine process tests in `tests/engine`, and the shim's, run the real engine with a fake store and need no binaries, except `test_engine_pg.py`, which runs it on the bundled Postgres with `ONTOLOGICAL_PG_BIN` set.
 
+The source executor tests in `tests/sources` run real executor processes on SQLite files they write. DuckDB downloads its `sqlite_scanner` extension the first time it attaches one; bundling the extensions with autoinstall off is M7.2.
+
 `ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip; `postgres.yml` sets it. The disk-full tests mount small disk images with `hdiutil`, so they run on macOS only.
