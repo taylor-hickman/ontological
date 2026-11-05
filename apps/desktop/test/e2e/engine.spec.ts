@@ -1,6 +1,8 @@
 // The engine supervisor against the real engine process (ARCHITECTURE.md §4.4), with the engine's
 // fake store standing in for Postgres.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import type { EngineState } from '../../src/shared/engine'
 import { pidAlive, readEngineJson } from '../../src/main/engine/io'
@@ -119,13 +121,16 @@ test('attaches to a headless engine already running, and quitting releases its l
 
 test('quitting leaves an engine the app started running until it idles out', async () => {
   const userData = freshUserData()
-  const { app, page } = await launch(userData, ['--idle-timeout', '3', '--lease-renew', '5'])
+  // Long enough an idle timeout to outlast the app's own shutdown on a slow CI machine.
+  const { app, page } = await launch(userData, ['--idle-timeout', '8', '--lease-renew', '5'])
   await running(page)
   const pid = readEngineJson(userData)!.pid
   started.push(pid)
   await app.close()
   expect(pidAlive(pid)).toBe(true)
-  await engineExits(pid)
+  await engineExits(pid, 25_000)
+  // It stopped because it was idle, not because the app took it down.
+  expect(readFileSync(join(userData, 'logs/engine.log'), 'utf8')).toContain('idle for 8s: stopping')
 })
 
 test('restarts an engine it started when that engine crashes', async () => {
