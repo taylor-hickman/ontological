@@ -1,7 +1,7 @@
 // The engine supervisor against the real engine process (ARCHITECTURE.md §4.4), with the engine's
 // fake store standing in for Postgres.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import type { EngineState } from '../../src/shared/engine'
@@ -140,9 +140,17 @@ test('restarts an engine it started when that engine crashes', async () => {
   const { app, page } = await launch(userData)
   try {
     await running(page)
+    await expect(page.getByTestId('engine-banner')).toHaveCount(0)
     const first = readEngineJson(userData)!.pid
     started.push(first)
+    // The next engine takes 3 s to start its store, long enough to see the banner.
+    writeFileSync(join(userData, 'slow-start'), '3')
     process.kill(first, 'SIGKILL')
+
+    const banner = page.getByTestId('engine-banner')
+    await expect(banner).toHaveAttribute('data-status', 'restarting', { timeout: 10_000 })
+    await expect(banner).toContainText('The engine stopped. Restarting…')
+    await expect(banner.getByRole('button')).toHaveCount(0)
 
     await expect
       .poll(() => readEngineJson(userData)?.pid, { timeout: 20_000, message: 'a new engine writes engine.json' })
@@ -152,6 +160,7 @@ test('restarts an engine it started when that engine crashes', async () => {
     started.push(second.pid)
     expect(state.startedByApp).toBe(true)
     expect(state.token).toBe(second.token)
+    await expect(page.getByTestId('engine-banner')).toHaveCount(0)
     // The new engine has a new port; the window reloaded with it in its CSP.
     expect(await healthFromRenderer(page, state)).toEqual({ status: 200, pid: second.pid })
   } finally {
@@ -173,6 +182,32 @@ test('doesn’t restart an engine it attached to when that engine crashes', asyn
     await page.waitForTimeout(1500)
     expect(readEngineJson(userData)!.pid).toBe(pid)
     expect(await page.evaluate(() => window.ontological.engine())).toEqual({ status: 'stopped' })
+  } finally {
+    await app.close()
+  }
+})
+
+test('Reconnect starts an engine after an attached one has gone, without relaunching', async () => {
+  const userData = freshUserData()
+  const pid = startHeadless(userData)
+  started.push(pid)
+  const { app, page } = await launch(userData)
+  try {
+    expect((await running(page)).startedByApp).toBe(false)
+    process.kill(pid, 'SIGKILL')
+
+    const banner = page.getByTestId('engine-banner')
+    await expect(banner).toHaveAttribute('data-status', 'stopped', { timeout: 20_000 })
+    await expect(banner).toContainText('The engine stopped')
+    await banner.getByRole('button', { name: 'Reconnect' }).click()
+
+    const state = await running(page)
+    const next = readEngineJson(userData)!
+    started.push(next.pid)
+    expect(next.pid).not.toBe(pid)
+    expect(state.startedByApp).toBe(true)
+    await expect(page.getByTestId('engine-banner')).toHaveCount(0)
+    expect(await healthFromRenderer(page, state)).toEqual({ status: 200, pid: next.pid })
   } finally {
     await app.close()
   }

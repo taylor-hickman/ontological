@@ -1,5 +1,6 @@
 import type { ScreenId, ThemeSource } from '@shared/shell'
 import type { ScreenFrame } from '../screens'
+import { EngineBanner } from './EngineBanner'
 import { Settings } from './Settings'
 
 interface ScreenBodyProps {
@@ -17,6 +18,7 @@ export function ScreenBody({ screen, frame, theme, onThemeChange }: ScreenBodyPr
       data-testid="main-column"
       className={`flex min-w-0 flex-[999_1_520px] flex-col gap-5 px-9 pt-7 pb-6 ${screen === 'ask' ? 'max-w-[860px]' : ''}`}
     >
+      <EngineBanner />
       {screen === 'settings' ? (
         <Settings theme={theme} onThemeChange={onThemeChange} />
       ) : (

@@ -94,6 +94,15 @@ export class EngineSupervisor {
     await this.connect(false)
   }
 
+  /**
+   * After an engine this app attached to has gone: attach to the live engine or start one, as at
+   * launch (DESIGN.md §6, Engine crashed). Does nothing in any other state.
+   */
+  async reconnect(): Promise<void> {
+    if (this.state.status !== 'stopped' || this.quitting) return
+    await this.start()
+  }
+
   /** Releases the lease and leaves the engine running: it idles out once no client holds a lease. */
   async quit(): Promise<void> {
     this.quitting = true
