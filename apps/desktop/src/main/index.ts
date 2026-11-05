@@ -185,7 +185,8 @@ function installMenu(): void {
       setTheme,
       openLoginHelp: () => void shell.openExternal(LOGIN_HELP_URL),
       openLogsFolder: () => {
-        const logs = app.getPath('logs')
+        // <appData>/logs, where the engine and Postgres log (ARCHITECTURE.md §5.1).
+        const logs = join(app.getPath('userData'), 'logs')
         mkdirSync(logs, { recursive: true })
         void shell.openPath(logs)
       }
