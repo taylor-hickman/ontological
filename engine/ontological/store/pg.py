@@ -1,10 +1,11 @@
 """The bundled Postgres's lifecycle (ARCHITECTURE.md §5.3).
 
 Runs the store's server for one `<appData>/Ontological` directory: first launch (initdb), start,
-adopting a server a previous engine left running, stop with the quit dump, dumps and restore, the
-major-version move, and the pause when the disk is full. It drives the bundled binaries
-(`initdb`, `pg_ctl`, `psql`, `pg_dump`, `pg_restore`) as subprocesses and uses only the standard
-library. Grown from spike S5's prototype (tools/spikes/s5_pg_lifecycle/pg.py).
+adopting a server a previous engine left running, stop with the quit dump, dumps, migrations
+with restore on failure, the major-version move, and the pause when the disk is full. It drives
+the bundled binaries (`initdb`, `pg_ctl`, `psql`, `pg_dump`, `pg_restore`) as subprocesses and
+uses only the standard library. Grown from spike S5's prototype
+(tools/spikes/s5_pg_lifecycle/pg.py).
 
 The engine calls `ensure_running` (or `wait_until_running`, which waits out a full disk) before
 it serves requests, and `stop` on shutdown. Several engines may call them at once: `pg.lock`
@@ -629,6 +630,45 @@ def resume_restore(layout: Layout) -> str | None:
         return "discarded an unfinished restore"
     psql(layout, f"ALTER DATABASE {RESTORE_DATABASE} RENAME TO {DATABASE}", db="postgres")
     return "finished an interrupted restore"
+
+
+class MigrationFailed(PgError):
+    """A migration failed and the store was restored from the pre-migration dump."""
+
+    def __init__(self, error: BaseException, restored_from: Path) -> None:
+        super().__init__(f"the migration failed and {restored_from.name} was restored: {error}")
+        self.error = error
+        self.restored_from = restored_from
+
+
+def migrate(
+    layout: Layout,
+    *,
+    pending: Callable[[Layout], bool],
+    upgrade: Callable[[Layout], None],
+) -> Path | None:
+    """Apply pending migrations with a dump first (§5.3, Migrations). Returns the dump, or None
+    when nothing is pending.
+
+    `upgrade` applies every pending revision (M0.4: both Alembic chains, one transaction per
+    revision), so an earlier revision has committed by the time a later one fails. That is what
+    the dump is for: on any failure the store is restored from it and MigrationFailed raised. If
+    the restore fails too, a PgError says the store is as the failed migration left it."""
+    if not pending(layout):
+        return None
+    before = dump(layout, "premigrate")
+    try:
+        upgrade(layout)
+    except Exception as e:
+        try:
+            restore(layout, before)
+        except PgError as r:
+            raise PgError(
+                f"the migration failed ({e}), and so did restoring {before.name}. The store is "
+                f"as the failed migration left it: {r}"
+            ) from r
+        raise MigrationFailed(e, before) from e
+    return before
 
 
 # --- major-version move ------------------------------------------------------------------------

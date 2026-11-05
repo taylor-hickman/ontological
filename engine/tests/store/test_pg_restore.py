@@ -1,11 +1,12 @@
-"""Dumps and restore (ARCHITECTURE.md §5.3, Dumps and Migrations; §12, "failed migration then
-restore"). The Alembic chains arrive in M0.4; here a migration is plain SQL, and the test plays
-the part M0.4 will: dump before migrating, restore when a revision fails."""
+"""Migrations, dumps and restore (ARCHITECTURE.md §5.3, Dumps and Migrations; §12, "failed
+migration then restore"). The Alembic chains arrive in M0.4; here each revision is plain SQL in
+its own transaction, as Alembic's transaction_per_migration runs them."""
 
 from __future__ import annotations
 
 import subprocess
 import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,18 @@ def databases(lay: pg.Layout) -> list[str]:
     return sql(lay, "SELECT datname FROM pg_database ORDER BY datname", db="postgres").split()
 
 
+def upgrade_to(revisions: list[str]) -> Callable[[pg.Layout], None]:
+    def upgrade(lay: pg.Layout) -> None:
+        for r in revisions[int(rev(lay)) :]:
+            apply(lay, r)
+
+    return upgrade
+
+
+def pending(revisions: list[str]) -> Callable[[pg.Layout], bool]:
+    return lambda lay: int(rev(lay)) < len(revisions)
+
+
 def test_failed_migration_then_restore(apps: Apps) -> None:
     lay, e = at_revision_1(apps, "migrate")
     before = nearest(lay)
@@ -64,17 +77,14 @@ def test_failed_migration_then_restore(apps: Apps) -> None:
     )  # fmt: skip
     time.sleep(0.3)
 
-    dump = pg.dump(lay, "premigrate")
-    assert dump.name.endswith("-premigrate.dump")
-    apply(lay, REV2)
-    with pytest.raises(pg.PgError, match="division by zero"):
-        apply(lay, REV3)
-    assert rev(lay) == "2" and has_conversation(lay), "revision 2 committed before 3 failed"
-
-    pg.restore(lay, dump)
+    revisions = [REV1, REV2, REV3]
+    with pytest.raises(pg.MigrationFailed, match="division by zero") as failed:
+        pg.migrate(lay, pending=pending(revisions), upgrade=upgrade_to(revisions))
+    dump = failed.value.restored_from
+    assert dump.name.endswith("-premigrate.dump") and dump.is_file()
     held.wait(10)
     assert held.returncode != 0, "restore ends the pool's connections"
-    assert rev(lay) == "1"
+    assert rev(lay) == "1", "revision 2 had committed; the restore undid it"
     assert not has_conversation(lay)
     cols = sql(
         lay,
@@ -86,6 +96,39 @@ def test_failed_migration_then_restore(apps: Apps) -> None:
     assert sql(lay, "SELECT value FROM app.setting") == '"dark"'
     assert nearest(lay) == before, "the HNSW index is back"
     assert pg.RESTORE_DATABASE not in databases(lay)
+    e.term()
+
+
+def test_a_migration_dumps_first_and_nothing_pending_does_nothing(apps: Apps) -> None:
+    lay, e = at_revision_1(apps, "migrate-ok")
+    revisions = [REV1, REV2]
+    dump = pg.migrate(lay, pending=pending(revisions), upgrade=upgrade_to(revisions))
+    assert dump is not None and dump.name.endswith("-premigrate.dump")
+    assert rev(lay) == "2" and has_conversation(lay)
+    assert pg.migrate(lay, pending=pending(revisions), upgrade=upgrade_to(revisions)) is None
+    assert sorted(lay.backups.glob("*.dump")) == [dump]
+    e.term()
+
+
+def test_a_migration_whose_restore_fails_too_says_so(
+    apps: Apps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lay, e = at_revision_1(apps, "migrate-both")
+    real_run = pg.run
+
+    def run(cmd: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        if Path(cmd[0]).name == "pg_restore":
+            raise pg.PgError("pg_restore failed (1): simulated")
+        return real_run(cmd, check=check)
+
+    monkeypatch.setattr(pg, "run", run)
+    revisions = [REV1, REV2, REV3]
+    with pytest.raises(pg.PgError, match="so did restoring") as failed:
+        pg.migrate(lay, pending=pending(revisions), upgrade=upgrade_to(revisions))
+    assert not isinstance(failed.value, pg.MigrationFailed), "no restore happened"
+    assert "as the failed migration left it" in str(failed.value)
+    assert rev(lay) == "2" and has_conversation(lay)
+    monkeypatch.undo()
     e.term()
 
 
