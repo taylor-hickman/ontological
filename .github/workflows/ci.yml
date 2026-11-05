@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: engine (macOS arm64)
+    runs-on: macos-15
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: engine/uv.lock
+      - name: Check runner is arm64
+        run: test "$(uname -m)" = arm64
+      - name: Install
+        run: uv sync --locked
+      - name: Ruff lint
+        run: uv run ruff check
+      - name: Ruff format
+        run: uv run ruff format --check
+      - name: Pyright
+        run: uv run pyright
+      - name: Pytest
+        run: uv run pytest
