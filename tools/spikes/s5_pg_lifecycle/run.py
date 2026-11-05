@@ -16,7 +16,8 @@ Runs the prototype `pg.py` against the S4 binaries through every lifecycle case 
                    is restored while the engine holds a connection open
   major-version    a PostgreSQL 16 store (made by pg.py on 16 binaries) moved to 17: from a
                    clean quit dump, from a stale dump after a crash, and from a 16 server
-                   still running
+                   still running; then the engine killed mid-restore and mid-swap, and a
+                   restore that fails, none of which may leave pgdata/ missing or empty
 
 Each engine is `pg.py` run as a subprocess in its own session, so it can be killed like the
 real one. Every <appData> has a space in its path, like ~/Library/Application Support.
@@ -43,8 +44,9 @@ import sys
 import tempfile
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -513,10 +515,10 @@ def _old_app(ctx: Ctx, name: str) -> tuple[pg.Layout, pg.Layout]:
     return old, new
 
 
-def _check_upgraded(lay: pg.Layout, e: Engine, rows: int, aside_major: int = 16) -> None:
-    check(
-        "engine moved the store to 17", e.action == "upgrade" and pg.data_major(lay) == 17, e.info
-    )
+def _check_upgraded(lay: pg.Layout, e: Engine, rows: int, action: str = "upgrade") -> None:
+    check("engine moved the store to 17", e.action == action and pg.data_major(lay) == 17, e.info)
+    left = sorted(p.name for p in lay.app_data.glob("pgdata.*"))
+    check("no staging cluster left", left == [], left)
     check("server is 17", sql(lay, "SHOW server_version_num")[:2] == "17", "")
     check(f"{rows} rows restored", count(lay) == rows, count(lay))
     check(
@@ -533,7 +535,7 @@ def _check_upgraded(lay: pg.Layout, e: Engine, rows: int, aside_major: int = 16)
     asides = list(lay.app_data.glob("pgdata-16-*"))
     check(
         "old data directory kept aside",
-        len(asides) == 1 and (asides[0] / "PG_VERSION").read_text().strip() == str(aside_major),
+        len(asides) == 1 and (asides[0] / "PG_VERSION").read_text().strip() == "16",
         asides,
     )
 
@@ -598,6 +600,89 @@ def case_major_version(ctx: Ctx) -> None:
     check("16 server stopped", not pg.pid_alive(a.postmaster), "")
     _check_upgraded(new, b, 600)
     b.term()
+
+    # (d) the engine dies during the move. pgdata/ must never end up missing or empty: the
+    # next start finishes or redoes the move, and never runs a first launch.
+    old, new = _old_store(ctx, "major-crash-restore")
+    code = _upgrade_until(new, "pg_restore")
+    check("engine killed during pg_restore into the staging cluster", code == 9, code)
+    check("pgdata/ is still the 16 cluster", pg.data_major(new) == 16, pg.data_major(new))
+    b = Engine(new)
+    notes = " ".join(map(str, b.info["notes"]))  # type: ignore[arg-type]
+    check("next start discards the staging cluster", "discarded an unfinished" in notes, notes)
+    _check_upgraded(new, b, 500)
+    b.term()
+
+    old, new = _old_store(ctx, "major-crash-swap")
+    code = _upgrade_until(new, "aside")
+    check("engine killed after moving the 16 cluster aside", code == 9, code)
+    check("pgdata/ is missing", not new.pgdata.exists(), "")
+    b = Engine(new)
+    notes = " ".join(map(str, b.info["notes"]))  # type: ignore[arg-type]
+    check("next start finishes the swap, no initdb", "finished an interrupted" in notes, notes)
+    _check_upgraded(new, b, 500, action="start")
+    b.term()
+
+    # (e) the restore fails: the move stops with an error and pgdata/ stays the 16 cluster
+    old, new = _old_store(ctx, "major-bad-dump")
+    good = pg.newest_dump(new)
+    assert good is not None
+    bad = good.with_name(good.name.replace("-quit", "9-quit"))  # sorts after the good one
+    bad.write_bytes(good.read_bytes()[: good.stat().st_size // 2])
+    try:
+        Engine(new)
+        raise CaseFailed("the upgrade should have failed on a truncated dump")
+    except CaseFailed as e:
+        check("upgrade fails on a truncated dump", "before it was ready" in str(e), e)
+    check("pgdata/ is still the 16 cluster", pg.data_major(new) == 16, pg.data_major(new))
+    left = sorted(p.name for p in new.app_data.glob("pgdata*"))
+    check("no staging cluster, nothing moved aside", left == ["pgdata"], left)
+    bad.unlink()
+    b = Engine(new)
+    _check_upgraded(new, b, 500)
+    b.term()
+
+
+def _old_store(ctx: Ctx, name: str) -> tuple[pg.Layout, pg.Layout]:
+    """A 16 store with 500 rows that quit cleanly."""
+    old, new = _old_app(ctx, name)
+    a = Engine(old)
+    seed(old, 1, 500)
+    a.term()
+    return old, new
+
+
+def _upgrade_until(lay: pg.Layout, step: str) -> int | None:
+    """Run the 17 engine's upgrade in a forked child that dies (exit 9, like kill -9) at `step`:
+    "pg_restore" kills it as pg_restore starts, "aside" right after the old cluster is moved
+    aside. Returns the child's exit code."""
+    proc = mp.get_context("fork").Process(target=_die_at, args=(lay, step))
+    proc.start()
+    proc.join(120)
+    return proc.exitcode
+
+
+def _die_at(lay: pg.Layout, step: str) -> None:
+    if step == "pg_restore":
+        real_run = pg.run
+
+        def run(cmd: Sequence[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+            if Path(cmd[0]).name == "pg_restore":
+                os._exit(9)
+            return real_run(cmd, **kw)
+
+        pg.run = run  # type: ignore[assignment]
+    else:
+        real_rename = Path.rename
+
+        def rename(self: Path, target: Any) -> Path:
+            moved = real_rename(self, target)
+            if Path(target).name.startswith("pgdata-16-"):
+                os._exit(9)
+            return moved
+
+        Path.rename = rename  # type: ignore[method-assign]
+    pg.ensure_running(lay)
 
 
 CASES: dict[str, Callable[[Ctx], None]] = {

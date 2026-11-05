@@ -195,7 +195,9 @@ class Stale:
     reason: str
 
 
-def inspect_pid_file(layout: Layout, *, wait_s: float = START_TIMEOUT_S) -> Running | Stale | None:
+def inspect_pid_file(
+    layout: Layout, *, pgdata: Path | None = None, wait_s: float = START_TIMEOUT_S
+) -> Running | Stale | None:
     """Decide whether postmaster.pid names our live server (§5.3, Adopt).
 
     A live pid is not enough: after a reboot or a crash the pid can belong to any process,
@@ -203,7 +205,8 @@ def inspect_pid_file(layout: Layout, *, wait_s: float = START_TIMEOUT_S) -> Runn
     reports it as running. It is ours only if the process is a postgres and a connection
     through the socket it advertises reports this data directory.
     """
-    pf = read_pid_file(layout.pgdata)
+    pgdata = pgdata or layout.pgdata
+    pf = read_pid_file(pgdata)
     if pf is None:
         return None
     if not pid_alive(pf.pid):
@@ -222,7 +225,7 @@ def inspect_pid_file(layout: Layout, *, wait_s: float = START_TIMEOUT_S) -> Runn
             check=False,
         )  # fmt: skip
         if p.returncode == 0:
-            ours = Path(p.stdout.strip()).resolve() == layout.pgdata.resolve()
+            ours = Path(p.stdout.strip()).resolve() == pgdata.resolve()
             return Running(pf) if ours else Stale(pf, f"pid {pf.pid} serves {p.stdout.strip()}")
         if not pid_alive(pf.pid):
             return Stale(pf, f"pid {pf.pid} exited while we waited for it")
@@ -238,10 +241,11 @@ def inspect_pid_file(layout: Layout, *, wait_s: float = START_TIMEOUT_S) -> Runn
 # --- lifecycle ---------------------------------------------------------------------------------
 
 
-def initdb(layout: Layout) -> None:
+def initdb(layout: Layout, target: Path | None = None) -> None:
     """First launch (§5.3). initdb into a sibling directory and rename it into place, so a
-    crash part-way never leaves a pgdata/ that looks initialised."""
-    tmp = layout.pgdata.with_name("pgdata.initdb")
+    crash part-way never leaves a pgdata/ that looks initialised. With `target`, initdb into
+    that directory and leave it there (the major-version staging cluster)."""
+    tmp = target or layout.pgdata.with_name("pgdata.initdb")
     shutil.rmtree(tmp, ignore_errors=True)
     run(
         [
@@ -249,10 +253,11 @@ def initdb(layout: Layout) -> None:
             "--auth-local=trust", "--auth-host=reject",
         ]
     )  # fmt: skip
-    tmp.rename(layout.pgdata)
+    if target is None:
+        tmp.rename(layout.pgdata)
 
 
-def start(layout: Layout) -> None:
+def start(layout: Layout, pgdata: Path | None = None) -> None:
     sock = layout.pgsocket / f".s.PGSQL.{PORT}"
     if len(str(sock).encode()) > MAX_SOCKET_PATH:
         raise PgError(f"socket path is {len(str(sock).encode())} bytes, over {MAX_SOCKET_PATH}")
@@ -265,7 +270,8 @@ def start(layout: Layout) -> None:
         opts += ["-c", f"{k}={v}"]
     run(
         [
-            layout.tool("pg_ctl"), "start", "-D", str(layout.pgdata), "-l", str(layout.log),
+            layout.tool("pg_ctl"), "start", "-D", str(pgdata or layout.pgdata),
+            "-l", str(layout.log),
             "-w", "-t", str(START_TIMEOUT_S), "-o", shlex.join(opts),
         ]
     )  # fmt: skip
@@ -278,6 +284,8 @@ def ensure_running(
     serialises them and every caller ends up on the same postmaster."""
     with locked(layout):
         notes: list[str] = []
+        if resumed := resume_upgrade(layout):
+            notes.append(resumed)
         major = binary_major(layout)
         have = data_major(layout)
         if have is None:
@@ -286,7 +294,7 @@ def ensure_running(
             create_store(layout)
             return Server(_postmaster_pid(layout), "initdb+start")
         if have != major:
-            return upgrade_major(layout, have, confirm_stale_dump)
+            return upgrade_major(layout, have, confirm_stale_dump, notes)
 
         state = inspect_pid_file(layout)
         if isinstance(state, Running):
@@ -299,6 +307,32 @@ def ensure_running(
         clear_stale_socket(layout)
         start(layout)
         return Server(_postmaster_pid(layout), "start", tuple(notes))
+
+
+def resume_upgrade(layout: Layout) -> str | None:
+    """Finish or discard a major-version move that a crash interrupted (see upgrade_major).
+
+    pgdata.upgraded/ is a complete, stopped cluster. If pgdata/ is missing, the crash came
+    after the old cluster was moved aside, so finish the swap. If pgdata/ is still the old
+    cluster, delete pgdata.upgraded/ and let the move run again from the same dump.
+    pgdata.upgrade/ is a staging cluster that never finished restoring: delete it too."""
+    done = layout.pgdata.with_name("pgdata.upgraded")
+    if done.exists():
+        if not layout.pgdata.exists():
+            done.rename(layout.pgdata)
+            return "finished an interrupted major-version move"
+        shutil.rmtree(done)
+        return "discarded a major-version cluster that was never swapped in"
+    staging = layout.pgdata.with_name("pgdata.upgrade")
+    if staging.exists():
+        # The crash may have left the staging server running.
+        state = inspect_pid_file(layout, pgdata=staging)
+        if isinstance(state, Running):
+            os.kill(state.pid_file.pid, signal.SIGQUIT)  # immediate shutdown
+            _wait_gone(state.pid_file.pid, 60)
+        shutil.rmtree(staging)
+        return "discarded an unfinished major-version staging cluster"
+    return None
 
 
 def _postmaster_pid(layout: Layout) -> int:
@@ -425,11 +459,16 @@ def dump_is_current(old_pgdata: Path, path: Path) -> tuple[bool, str]:
     return True, ""
 
 
-def upgrade_major(layout: Layout, old: int, confirm_stale_dump: Callable[[str], bool]) -> Server:
+def upgrade_major(
+    layout: Layout,
+    old: int,
+    confirm_stale_dump: Callable[[str], bool],
+    notes: list[str] | None = None,
+) -> Server:
     """§5.3, Major-version upgrades. If the old server is still running (its engine was killed
     and an app update replaced the binaries), dump it live first: pg_dump reads older majors, so
     nothing is lost. Otherwise restore the newest dump, after saying so if it is stale."""
-    notes = [f"data directory is PostgreSQL {old}"]
+    notes = [*(notes or []), f"data directory is PostgreSQL {old}"]
     state = inspect_pid_file(layout)
     if isinstance(state, Running):
         pf = state.pid_file
@@ -445,20 +484,42 @@ def upgrade_major(layout: Layout, old: int, confirm_stale_dump: Callable[[str], 
         notes.append(f"stale dump: {why}")
         if not confirm_stale_dump(why):
             raise PgError(f"upgrade cancelled: {why}")
-    aside = layout.pgdata.with_name(f"pgdata-{old}-{time.strftime('%Y%m%dT%H%M%S')}")
-    layout.pgdata.rename(aside)
+    # Build and fill the new cluster beside the old one; pgdata/ stays the old cluster until the
+    # restore has succeeded. A crash or a failed restore before the swap leaves pgdata/ as it
+    # was, so the next start tries the move again instead of finding no pgdata/ and running a
+    # first launch on an empty store.
+    staging = layout.pgdata.with_name("pgdata.upgrade")
     clear_stale_socket(layout)
-    initdb(layout)
+    initdb(layout, staging)
+    start(layout, staging)
+    try:
+        psql(layout, f"CREATE DATABASE {DATABASE}", db="postgres")
+        run(
+            [
+                layout.tool("pg_restore"), "--exit-on-error", "--single-transaction",
+                "-h", str(layout.pgsocket), "-p", str(PORT), "-U", USER, "-d", DATABASE,
+                str(path),
+            ]
+        )  # fmt: skip
+    except PgError:
+        _stop_dir(layout, staging, "immediate")
+        shutil.rmtree(staging)
+        raise
+    _stop_dir(layout, staging, "fast")
+    # Two renames. pgdata.upgraded/ marks the staging cluster complete, so resume_upgrade can
+    # finish the swap if a crash lands between moving the old one aside and moving this in.
+    done = staging.rename(layout.pgdata.with_name("pgdata.upgraded"))
+    aside = layout.pgdata.rename(
+        layout.pgdata.with_name(f"pgdata-{old}-{time.strftime('%Y%m%dT%H%M%S')}")
+    )
+    done.rename(layout.pgdata)
     start(layout)
-    psql(layout, f"CREATE DATABASE {DATABASE}", db="postgres")
-    run(
-        [
-            layout.tool("pg_restore"), "--exit-on-error", "--single-transaction",
-            "-h", str(layout.pgsocket), "-p", str(PORT), "-U", USER, "-d", DATABASE, str(path),
-        ]
-    )  # fmt: skip
     notes += [f"restored {path.name}", f"old data kept in {aside.name}"]
     return Server(_postmaster_pid(layout), "upgrade", tuple(notes))
+
+
+def _stop_dir(layout: Layout, pgdata: Path, mode: str) -> None:
+    run([layout.tool("pg_ctl"), "stop", "-D", str(pgdata), "-m", mode, "-w", "-t", "60"])
 
 
 def clear_stale_socket(layout: Layout) -> None:
