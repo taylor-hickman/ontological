@@ -1,0 +1,52 @@
+# The engine's checks on macOS arm64, the platform Ontological ships first. A macOS minute bills
+# at ten times a Linux one, so this runs only when a change can behave differently there, or by
+# hand from the Actions tab (workflow_dispatch). ci.yml runs the same checks on Linux every time.
+#
+# Paths that trigger it:
+#   - engine dependencies and Python version, which pick the native wheels (uv.lock is universal,
+#     but a macOS wheel can still break where the Linux one works)
+#   - packaging and signing: the engine runtime build and the Electron packaging config (M7).
+#     Put that work under these paths, and add its steps here, when it lands.
+#   The bundled Postgres + pgvector build has its own workflow, gated the same way (spike S4).
+#   - this file
+name: macOS
+
+on:
+  push:
+    branches: [main]
+    paths: &macos-paths
+      - engine/pyproject.toml
+      - engine/uv.lock
+      - engine/.python-version
+      - packaging/**
+      - apps/desktop/electron-builder.*
+      - .github/workflows/macos.yml
+  pull_request:
+    paths: *macos-paths
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: engine (macOS arm64)
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          working-directory: engine
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pyright
+      - run: uv run pytest
