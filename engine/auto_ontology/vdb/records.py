@@ -2,7 +2,8 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # Modified by Ontological: adds embed_rows_into_vdb, upstream's utils.embedding helper on a
-# LangChain Embeddings in place of the NIM client.
+# LangChain Embeddings in place of the NIM client, which stamps each row's metadata with the
+# model and the content_hash of the text it embedded.
 
 """Turn embedded rows into the records :meth:`PostgresVDB.run` writes.
 
@@ -19,6 +20,7 @@ indistinguishable in the store.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from pathlib import PurePosixPath
@@ -30,7 +32,7 @@ if TYPE_CHECKING:
 
     from auto_ontology.vdb.postgres import PostgresVDB
 
-__all__ = ["embed_rows_into_vdb", "to_vdb_records", "write_embedded_rows"]
+__all__ = ["content_hash", "embed_rows_into_vdb", "to_vdb_records", "write_embedded_rows"]
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +118,12 @@ def write_embedded_rows(
     return vdb.run(records) if records else 0
 
 
+def content_hash(text: str) -> str:
+    """What decides whether a text needs embedding again: int8 vectors shift slightly with their
+    batch-mates, so comparing vectors can't tell a changed text from an unchanged one."""
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
 def embed_rows_into_vdb(
     rows: list[dict[str, Any]],
     embeddings: "Embeddings",
@@ -128,21 +136,32 @@ def embed_rows_into_vdb(
     For the small, interactive writes -- one analysis, one attribute -- where a
     failure should reach the caller. Raises ``RuntimeError`` when the embedder
     fails or returns no embeddings; *what* names the rows in that message.
-    Returns the number of rows written.
+    Returns the number of rows written. Each row's metadata gets ``model`` (the
+    embedder's ``model``, or its class name) and ``content_hash`` (of its text).
     """
     if not rows:
         return 0
     before = time.time()
+    texts = [row.get("text") or "" for row in rows]
+    model = getattr(embeddings, "model", None) or type(embeddings).__name__
     try:
-        vectors = embeddings.embed_documents([row.get("text") or "" for row in rows])
+        vectors = embeddings.embed_documents(texts)
     except Exception as exc:
         raise RuntimeError(
             f"Embedding {len(rows)} {what} row(s) via {type(embeddings).__name__} "
             f"failed: {exc}"
         ) from exc
     embedded = [
-        {**row, "metadata": {**(row.get("metadata") or {}), "embedding": vector}}
-        for row, vector in zip(rows, vectors)
+        {
+            **row,
+            "metadata": {
+                **(row.get("metadata") or {}),
+                "embedding": vector,
+                "model": model,
+                "content_hash": content_hash(text),
+            },
+        }
+        for row, text, vector in zip(rows, texts, vectors)
         if vector
     ]
     if not embedded:

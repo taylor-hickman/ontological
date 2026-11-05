@@ -4,11 +4,12 @@ name: Bundled Postgres
 # minimal configure, trimmed to the shipped file list, signed with the hardened runtime, then
 # smoke-tested and run through the store lifecycle tests (§5.3 and §12: engine/tests/store, which
 # test engine/ontological/store/pg.py and its Alembic chains, and ops.llm_call through
-# engine/ontological/llm/calls.py), the engine's idle shutdown on the
-# real store (engine/tests/engine/test_engine_pg.py) and the eval cluster's tests
-# (eval/tests/test_cluster.py), and upstream's golden DAL suite on a Pagila and Chinook test cluster
-# (engine/tests/golden_dal, M2.1). Runs when the scripts, the store, the vendored chain, the
-# engine's dependencies or the eval cluster change, or by hand.
+# engine/ontological/llm/calls.py), the engine's idle shutdown on the real store
+# (engine/tests/engine/test_engine_pg.py), dense search with the embedding model
+# (engine/tests/store/test_dense_search.py), the eval cluster's tests (eval/tests/test_cluster.py)
+# and upstream's golden DAL suite on a Pagila and Chinook test cluster (engine/tests/golden_dal,
+# M2.1). Runs when the scripts, the store, the embedder, the vendored chain, the engine's
+# dependencies or the eval cluster change, or by hand.
 on:
   push:
     branches: [main]
@@ -16,6 +17,8 @@ on:
       - tools/spikes/s4_postgres/**
       - tools/spikes/s5_pg_lifecycle/**
       - engine/ontological/store/**
+      - engine/ontological/embed/**
+      - .github/actions/embedding-model/**
       - engine/ontological/llm/calls.py
       - engine/auto_ontology/**
       - engine/pyproject.toml
@@ -33,6 +36,8 @@ on:
       - tools/spikes/s4_postgres/**
       - tools/spikes/s5_pg_lifecycle/**
       - engine/ontological/store/**
+      - engine/ontological/embed/**
+      - .github/actions/embedding-model/**
       - engine/ontological/llm/calls.py
       - engine/auto_ontology/**
       - engine/pyproject.toml
@@ -82,6 +87,10 @@ jobs:
         with:
           working-directory: engine
           enable-cache: true
+      - name: Sync the engine
+        working-directory: engine
+        run: uv sync --locked
+      - uses: ./.github/actions/embedding-model
       - name: Store lifecycle tests (first launch, stop, adopt, stale pid, second engine, restore, 16 to 17, disk full), and the engine idling out on the store
         working-directory: engine
         env:

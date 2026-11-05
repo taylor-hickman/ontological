@@ -23,6 +23,17 @@ uv run ontological-engine --pg-bin <tree>/bin --headless   # detached; returns o
 
 Both print one JSON line, `{"pid", "port", "version", "started"}`, where `started` is false if an engine was already running. The engine exits after 10 idle minutes with no leases; `--idle-timeout` and `--lease-renew` (seconds) shorten that.
 
+## The embedding model
+
+The engine embeds with `snowflake-arctic-embed-m-v1.5`'s int8 ONNX file on the CPU, loaded through `onnxruntime` and `tokenizers` ([ARCHITECTURE.md §7.1](../docs/ARCHITECTURE.md#71-a-local-model-with-nothing-to-set-up)). The app will bundle it; until then, fetch it once (110 MB, pinned by revision and SHA-256) and point the engine at it with `--model-dir` (or `ONTOLOGICAL_MODEL_DIR`):
+
+```sh
+uv run python -m ontological.embed.model ~/.cache/ontological/model
+uv run ontological-engine --pg-bin <tree>/bin --model-dir ~/.cache/ontological/model
+```
+
+At start the engine times one batch and caps bulk batches at what takes about 100 ms, up to 1,024 padded tokens. Without a model directory it runs with no embedder.
+
 ## The MCP server
 
 `ontological-mcp` is the stdio MCP server for Claude Code, Claude Desktop and Cursor ([ARCHITECTURE.md §9.2](../docs/ARCHITECTURE.md#92-mcp-for-external-agents)). It answers `initialize` at once, then attaches to the running engine, or starts one with `--headless`, and holds a lease on it until the client disconnects. It passes its options to the engine it starts, and logs to stderr.
@@ -47,4 +58,6 @@ The engine process tests in `tests/engine`, and the shim's, run the real engine 
 
 The source executor tests in `tests/sources` run real executor processes on SQLite files they write. DuckDB downloads its `sqlite_scanner` extension the first time it attaches one; bundling the extensions with autoinstall off is M7.2.
 
-`ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip; `postgres.yml` sets it. The disk-full tests mount small disk images with `hdiutil`, so they run on macOS only.
+`ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip; `postgres.yml` sets it.
+
+Tests that run the embedding model (`tests/embed`, the embedder's engine tests and `tests/store/test_dense_search.py`) skip without `ONTOLOGICAL_MODEL_DIR`, and `ONTOLOGICAL_MODEL_REQUIRED=1` turns that into a failure. CI caches the model and sets both (`.github/actions/embedding-model`). The disk-full tests mount small disk images with `hdiutil`, so they run on macOS only.

@@ -1,0 +1,19 @@
+# The embedding model the engine's tests run (ARCHITECTURE.md §7.1): 110 MB from Hugging Face at
+# a pinned revision, cached across runs and checked against its pinned SHA-256s. Sets
+# ONTOLOGICAL_MODEL_DIR, and ONTOLOGICAL_MODEL_REQUIRED=1 so a test that needs the model fails
+# instead of skipping. Run it after uv is set up and the engine synced.
+name: Embedding model
+description: Cache, fetch and verify the embedding model, and point the engine's tests at it
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/ontological/model
+        key: embedding-model-${{ hashFiles('engine/ontological/embed/model.py') }}
+    - shell: bash
+      working-directory: engine
+      run: |
+        uv run --locked python -m ontological.embed.model "$HOME/.cache/ontological/model"
+        echo "ONTOLOGICAL_MODEL_DIR=$HOME/.cache/ontological/model" >>"$GITHUB_ENV"
+        echo "ONTOLOGICAL_MODEL_REQUIRED=1" >>"$GITHUB_ENV"
