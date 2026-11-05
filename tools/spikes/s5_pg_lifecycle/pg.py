@@ -258,26 +258,58 @@ def inspect_pid_file(
 # --- lifecycle ---------------------------------------------------------------------------------
 
 
-def initdb(layout: Layout, target: Path | None = None) -> None:
-    """First launch (§5.3). initdb into a sibling directory and rename it into place, so a
-    crash part-way never leaves a pgdata/ that looks initialised. With `target`, initdb into
-    that directory and leave it there (the major-version staging cluster)."""
-    tmp = target or layout.pgdata.with_name("pgdata.initdb")
-    shutil.rmtree(tmp, ignore_errors=True)
+def initdb(layout: Layout, target: Path) -> None:
+    """initdb into a staging directory (first launch or a major-version move), first
+    discarding whatever a crash left there."""
+    discard_staging(layout, target)
     run(
         [
-            layout.tool("initdb"), "-D", str(tmp), "-E", "UTF8", "--locale=C", "-U", USER,
+            layout.tool("initdb"), "-D", str(target), "-E", "UTF8", "--locale=C", "-U", USER,
             "--auth-local=trust", "--auth-host=reject",
         ]
     )  # fmt: skip
-    if target is None:
-        tmp.rename(layout.pgdata)
+
+
+def discard_staging(layout: Layout, staging: Path) -> None:
+    """Delete a staging cluster, stopping its server first if a crash left it running."""
+    if not staging.exists():
+        return
+    state = inspect_pid_file(layout, pgdata=staging)
+    if isinstance(state, Running):
+        os.kill(state.pid_file.pid, signal.SIGQUIT)  # immediate shutdown
+        _wait_gone(state.pid_file.pid, 60)
+    shutil.rmtree(staging)
+
+
+def first_launch(layout: Layout) -> None:
+    """§5.3, First launch. All of it happens in pgdata.initdb/: initdb, start, create the
+    store, stop. Only then is it renamed to pgdata/, so a crash or an error at any step leaves
+    no pgdata/, and the next start runs the first launch again from the beginning."""
+    staging = layout.pgdata.with_name("pgdata.initdb")
+    initdb(layout, staging)
+    clear_stale_socket(layout)
+    start(layout, staging)
+    try:
+        create_store(layout)
+    except PgError:
+        _stop_dir(layout, staging, "immediate")
+        shutil.rmtree(staging)
+        raise
+    _stop_dir(layout, staging, "fast")
+    staging.rename(layout.pgdata)
+
+
+def check_socket_path(layout: Layout) -> None:
+    sock = layout.pgsocket / f".s.PGSQL.{PORT}"
+    if len(str(sock).encode()) > MAX_SOCKET_PATH:
+        raise PgError(
+            f"the socket path {sock} is {len(str(sock).encode())} bytes, over macOS's "
+            f"{MAX_SOCKET_PATH}"
+        )
 
 
 def start(layout: Layout, pgdata: Path | None = None) -> None:
-    sock = layout.pgsocket / f".s.PGSQL.{PORT}"
-    if len(str(sock).encode()) > MAX_SOCKET_PATH:
-        raise PgError(f"socket path is {len(str(sock).encode())} bytes, over {MAX_SOCKET_PATH}")
+    check_socket_path(layout)
     layout.pgsocket.mkdir(mode=0o700, parents=True, exist_ok=True)
     layout.pgsocket.chmod(0o700)
     layout.log.parent.mkdir(parents=True, exist_ok=True)
@@ -299,6 +331,7 @@ def ensure_running(
 ) -> Server:
     """Start or adopt the store's server. Safe to call from several engines at once: the lock
     serialises them and every caller ends up on the same postmaster."""
+    check_socket_path(layout)  # before anything is written
     with locked(layout):
         notes: list[str] = []
         if resumed := resume_upgrade(layout):
@@ -306,10 +339,9 @@ def ensure_running(
         major = binary_major(layout)
         have = data_major(layout)
         if have is None:
-            initdb(layout)
+            first_launch(layout)
             start(layout)
-            create_store(layout)
-            return Server(_postmaster_pid(layout), "initdb+start")
+            return Server(_postmaster_pid(layout), "initdb+start", tuple(notes))
         if have != major:
             return upgrade_major(layout, have, confirm_stale_dump, notes)
 
@@ -346,12 +378,7 @@ def resume_upgrade(layout: Layout) -> str | None:
         return "discarded a major-version cluster that was never swapped in"
     staging = layout.pgdata.with_name("pgdata.upgrade")
     if staging.exists():
-        # The crash may have left the staging server running.
-        state = inspect_pid_file(layout, pgdata=staging)
-        if isinstance(state, Running):
-            os.kill(state.pid_file.pid, signal.SIGQUIT)  # immediate shutdown
-            _wait_gone(state.pid_file.pid, 60)
-        shutil.rmtree(staging)
+        discard_staging(layout, staging)
         return "discarded an unfinished major-version staging cluster"
     return None
 

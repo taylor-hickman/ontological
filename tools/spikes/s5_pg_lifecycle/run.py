@@ -4,7 +4,8 @@
 Runs the prototype `pg.py` against the S4 binaries through every lifecycle case in §12's
 "Postgres lifecycle tests", and prints `ok`/`FAIL` per check and a summary per case:
 
-  first-launch     initdb, start, the §5.3 settings, the store database and extensions
+  first-launch     initdb, start, the §5.3 settings, the store database and extensions;
+                   the engine killed part-way, and a socket path that is too long
   normal-stop      SIGTERM to the engine: quit dump, fast stop, next start needs no recovery
   kill9-adopt      kill -9 of the engine's process group; the server lives on and the next
                    engine adopts it through postmaster.pid with no data lost
@@ -256,6 +257,77 @@ def case_first_launch(ctx: Ctx) -> None:
     seed(lay, 1, 100)
     check("HNSW query works", nearest(lay) != "", "")
     e.term()
+
+    # The engine killed part-way through first launch: never a pgdata/ without a store.
+    def store_complete(lay: pg.Layout) -> bool:
+        exts = sql(lay, "SELECT string_agg(extname, ',' ORDER BY extname) FROM pg_extension")
+        return exts == "pg_trgm,plpgsql,vector" and sql(lay, "SELECT rev FROM ops.version") == "0"
+
+    lay = ctx.layout("first-crash-store")
+    code = _first_launch_until(lay, "create_store")
+    check("engine killed while creating the store", code == 9, code)
+    check("no pgdata/ yet", not lay.pgdata.exists(), "")
+    staging = pg.read_pid_file(lay.pgdata.with_name("pgdata.initdb"))
+    check(
+        "its staging server is still running", staging is not None and pg.pid_alive(staging.pid), ""
+    )
+    b = Engine(lay)
+    check("next start runs first launch again", b.action == "initdb+start", b.info)
+    check("... and the store is complete", store_complete(lay), "")
+    check("staging server stopped", staging is not None and not pg.pid_alive(staging.pid), "")
+    left = sorted(p.name for p in lay.app_data.glob("pgdata*"))
+    check("staging directory gone", left == ["pgdata"], left)
+    b.term()
+
+    lay = ctx.layout("first-crash-rename")
+    code = _first_launch_until(lay, "rename")
+    check("engine killed right after renaming pgdata.initdb/ to pgdata/", code == 9, code)
+    b = Engine(lay)
+    check("next start is a plain start", b.action == "start", b.info)
+    check("... and the store is complete", store_complete(lay), "")
+    b.term()
+
+    # A socket path over 103 bytes is refused before anything is written.
+    lay = pg.Layout(ctx.root / ("x" * 80) / "Ontological", ctx.bin17)
+    try:
+        Engine(lay)
+        raise CaseFailed("an engine started with a socket path over 103 bytes")
+    except CaseFailed as err:
+        check("a socket path over 103 bytes is refused", "before it was ready" in str(err), err)
+    check("... before anything is written", not lay.app_data.exists(), "")
+
+
+def _first_launch_until(lay: pg.Layout, step: str) -> int | None:
+    """Run ensure_running on an empty <appData> in a forked child that dies (exit 9, like
+    kill -9) at `step`: "create_store" as it creates the ops schema, "rename" right after
+    pgdata.initdb/ becomes pgdata/."""
+    proc = mp.get_context("fork").Process(target=_first_launch_die_at, args=(lay, step))
+    proc.start()
+    proc.join(120)
+    return proc.exitcode
+
+
+def _first_launch_die_at(lay: pg.Layout, step: str) -> None:
+    if step == "create_store":
+        real_psql = pg.psql
+
+        def psql(layout: pg.Layout, q: str, **kw: Any) -> str:
+            if q.startswith("CREATE SCHEMA ops"):
+                os._exit(9)
+            return real_psql(layout, q, **kw)
+
+        pg.psql = psql  # type: ignore[assignment]
+    else:
+        real_rename = Path.rename
+
+        def rename(self: Path, target: Any) -> Path:
+            moved = real_rename(self, target)
+            if self.name == "pgdata.initdb":
+                os._exit(9)
+            return moved
+
+        Path.rename = rename  # type: ignore[method-assign]
+    pg.ensure_running(lay)
 
 
 def case_normal_stop(ctx: Ctx) -> None:
