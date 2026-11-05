@@ -563,7 +563,140 @@ def case_failed_migration(ctx: Ctx) -> None:
         sql(lay, "SELECT to_regclass('app.conversation')") == "app.conversation",
         "",
     )
+
+    # restore() must never leave the store empty. The store now has revision 2's table, which
+    # the dump doesn't: it shows whether a failed or interrupted restore touched the store.
+    def store_untouched() -> bool:
+        dbs = sql(
+            lay, "SELECT string_agg(datname, ',' ORDER BY datname) FROM pg_database", "postgres"
+        )
+        return (
+            sql(lay, "SELECT to_regclass('app.conversation')") == "app.conversation"
+            and count(lay) == 500
+            and "ontological_restore" not in dbs
+        )
+
+    dump = err.restored_from
+    bad = dump.with_name("truncated.dump")
+    bad.write_bytes(dump.read_bytes()[: dump.stat().st_size // 2])
+    try:
+        pg.restore(lay, bad)
+        raise CaseFailed("restore of a truncated dump should fail")
+    except pg.PgError as failed_restore:
+        check(
+            "restore of a truncated dump fails",
+            "store is unchanged" in str(failed_restore),
+            failed_restore,
+        )
+    check("... and leaves the store untouched", store_untouched(), "")
+    try:
+        pg.restore(lay, dump.with_name("missing.dump"))
+        raise CaseFailed("restore of a missing dump should fail")
+    except pg.PgError as missing:
+        check("restore of a missing dump fails first", "missing" in str(missing), missing)
+    check("... and leaves the store untouched", store_untouched(), "")
+
+    # A migration whose restore also fails says the store was not restored.
+    real_run = pg.run
+
+    def failing_restore(cmd: Sequence[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        if Path(cmd[0]).name == "pg_restore":
+            raise pg.PgError("pg_restore failed (1): simulated")
+        return real_run(cmd, **kw)
+
+    sql(lay, "DROP TABLE app.conversation")
+    pg.run = failing_restore  # type: ignore[assignment]
+    try:
+        pg.migrate(lay, [REV1, REV2, REV3])
+        raise CaseFailed("revision 3 should have failed")
+    except pg.MigrationFailed as wrong:
+        raise CaseFailed(f"reported a restore that didn't happen: {wrong}") from wrong
+    except pg.PgError as both:
+        check("migration and restore both failing says so", "so did restoring" in str(both), both)
+    finally:
+        pg.run = real_run  # type: ignore[assignment]
+    check("store is at revision 2, as the failed revision 3 left it",
+          sql(lay, "SELECT rev FROM ops.version") == "2" and store_untouched(), "")  # fmt: skip
+
+    # The engine killed during pg_restore: the store is untouched, the next start discards
+    # the half-built database.
+    code = _restore_until(lay, dump, "pg_restore")
+    check("engine killed during pg_restore", code == 9, code)
+    b = Engine(lay)
+    notes = " ".join(map(str, b.info["notes"]))  # type: ignore[arg-type]
+    check(
+        "next start discards the unfinished restore",
+        "discarded an unfinished restore" in notes,
+        b.info,
+    )
+    check("... and the store is untouched", store_untouched(), "")
+    b.kill9()
+
+    # The engine killed between dropping the store and renaming the restored one into place:
+    # the next start finishes the rename.
+    code = _restore_until(lay, dump, "drop")
+    check("engine killed right after dropping the store", code == 9, code)
+    b = Engine(lay)
+    notes = " ".join(map(str, b.info["notes"]))  # type: ignore[arg-type]
+    check(
+        "next start finishes the interrupted restore",
+        "finished an interrupted restore" in notes,
+        b.info,
+    )
+    check(
+        "store is the dump's: version 1, no revision 2 table, 500 rows",
+        sql(lay, "SELECT rev FROM ops.version") == "1"
+        and sql(lay, "SELECT to_regclass('app.conversation')") == ""
+        and count(lay) == 500,
+        "",
+    )
+    b.kill9()
+
+    # Dump names are UTC and the dump just written is never pruned, even when the clock has
+    # gone back and ten older dumps sort after it.
+    future = [
+        lay.backups / f"ontology-20991231T0000{i:02d}.000000Z-compile.dump" for i in range(10)
+    ]
+    for f in future:
+        f.write_bytes(b"")
+    new_dump = pg.dump(lay, "compile")
+    check("dump name is UTC", new_dump.name.endswith("Z-compile.dump"), new_dump.name)
+    check("the dump just written survives pruning", new_dump.exists(), new_dump)
+    for f in future:
+        f.unlink(missing_ok=True)
     e.term()
+
+
+def _restore_until(lay: pg.Layout, dump: Path, step: str) -> int | None:
+    """Run pg.restore in a forked child that dies (exit 9, like kill -9) at `step`: "pg_restore"
+    as pg_restore starts, "drop" right after the store is dropped."""
+    proc = mp.get_context("fork").Process(target=_restore_die_at, args=(lay, dump, step))
+    proc.start()
+    proc.join(120)
+    return proc.exitcode
+
+
+def _restore_die_at(lay: pg.Layout, dump: Path, step: str) -> None:
+    if step == "pg_restore":
+        real_run = pg.run
+
+        def run(cmd: Sequence[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+            if Path(cmd[0]).name == "pg_restore":
+                os._exit(9)
+            return real_run(cmd, **kw)
+
+        pg.run = run  # type: ignore[assignment]
+    else:
+        real_psql = pg.psql
+
+        def psql(layout: pg.Layout, q: str, **kw: Any) -> str:
+            out = real_psql(layout, q, **kw)
+            if q.startswith(f"DROP DATABASE {pg.DATABASE} "):
+                os._exit(9)
+            return out
+
+        pg.psql = psql  # type: ignore[assignment]
+    pg.restore(lay, dump)
 
 
 def _old_app(ctx: Ctx, name: str) -> tuple[pg.Layout, pg.Layout]:

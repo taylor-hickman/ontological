@@ -26,10 +26,13 @@ import sys
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 USER = "ontological"
 DATABASE = "ontological"
+# restore() builds the restored store here and renames it over DATABASE only once it is complete.
+RESTORE_DATABASE = f"{DATABASE}_restore"
 # With listen_addresses='' the port only names the socket file (.s.PGSQL.<port>).
 PORT = 5432
 # macOS sockaddr_un.sun_path is 104 bytes including the terminating NUL.
@@ -40,7 +43,7 @@ SETTINGS = {
     "max_connections": "30",
 }
 START_TIMEOUT_S = 120  # pg_ctl -t: covers WAL replay after a crash
-KEEP_DUMPS = 10
+KEEP_DUMPS = 10  # §5.7 retention: the newest 10, and never the dump just written
 
 
 class PgError(RuntimeError):
@@ -312,7 +315,9 @@ def ensure_running(
 
         state = inspect_pid_file(layout)
         if isinstance(state, Running):
-            return Server(state.pid_file.pid, "adopt")
+            if resumed := resume_restore(layout):
+                notes.append(resumed)
+            return Server(state.pid_file.pid, "adopt", tuple(notes))
         if isinstance(state, Stale):
             # Postgres removes a lock file whose pid is dead, but refuses to start while that
             # pid is alive, whatever the process is.
@@ -320,6 +325,8 @@ def ensure_running(
             (layout.pgdata / "postmaster.pid").unlink()
         clear_stale_socket(layout)
         start(layout)
+        if resumed := resume_restore(layout):
+            notes.append(resumed)
         return Server(_postmaster_pid(layout), "start", tuple(notes))
 
 
@@ -397,7 +404,9 @@ def dump(layout: Layout, kind: str, *, socket_dir: str | None = None, port: int 
     """pg_dump -Fc into backups/. Written under a temporary name and renamed when complete, so
     a crash mid-dump never leaves a truncated file that looks like the newest dump."""
     layout.backups.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y%m%dT%H%M%S") + f"{time.time() % 1:.6f}"[1:]
+    # One UTC clock read: names sort in the order they were written across time-zone and DST
+    # changes, and newest_dump() and the pruning below go by name.
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     final = layout.backups / f"ontology-{ts}-{kind}.dump"
     part = final.with_suffix(".dump.part")
     run(
@@ -409,7 +418,8 @@ def dump(layout: Layout, kind: str, *, socket_dir: str | None = None, port: int 
     )  # fmt: skip
     part.rename(final)
     for old in sorted(layout.backups.glob("ontology-*.dump"))[:-KEEP_DUMPS]:
-        old.unlink()
+        if old != final:  # if the clock was set back, the new name can sort first
+            old.unlink()
     return final
 
 
@@ -419,16 +429,46 @@ def newest_dump(layout: Layout) -> Path | None:
 
 
 def restore(layout: Layout, path: Path) -> None:
-    """Put the store back to a dump. The database is dropped and recreated: `pg_restore --clean`
-    only drops objects that are in the dump, so a table a failed migration created survives it."""
-    psql(layout, f"DROP DATABASE IF EXISTS {DATABASE} WITH (FORCE)", db="postgres")
-    psql(layout, f"CREATE DATABASE {DATABASE}", db="postgres")
-    run(
-        [
-            layout.tool("pg_restore"), "--exit-on-error", "--single-transaction",
-            "-h", str(layout.pgsocket), "-p", str(PORT), "-U", USER, "-d", DATABASE, str(path),
-        ]
-    )  # fmt: skip
+    """Put the store back to a dump.
+
+    The dump goes into a new database, RESTORE_DATABASE, and replaces the store only once
+    pg_restore has succeeded: drop the store, then rename the new one. Until then the store is
+    untouched, so a failed pg_restore or a crash leaves it as it was. A crash between the drop
+    and the rename leaves only RESTORE_DATABASE, complete, and resume_restore() renames it on
+    the next start. (`pg_restore --clean` into the store won't do: it only drops objects that
+    are in the dump, so a table a failed migration created survives it.)"""
+    if not path.is_file():
+        raise PgError(f"dump {path} is missing; the store is unchanged")
+    with locked(layout):  # resume_restore() runs under the same lock
+        psql(layout, f"DROP DATABASE IF EXISTS {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
+        psql(layout, f"CREATE DATABASE {RESTORE_DATABASE}", db="postgres")
+        try:
+            run(
+                [
+                    layout.tool("pg_restore"), "--exit-on-error", "--single-transaction",
+                    "-h", str(layout.pgsocket), "-p", str(PORT), "-U", USER,
+                    "-d", RESTORE_DATABASE, str(path),
+                ]
+            )  # fmt: skip
+        except PgError as e:
+            psql(layout, f"DROP DATABASE {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
+            raise PgError(f"restoring {path.name} failed; the store is unchanged: {e}") from e
+        # DROP DATABASE can't run inside a transaction, so this is two steps; see above.
+        psql(layout, f"DROP DATABASE {DATABASE} WITH (FORCE)", db="postgres")
+        psql(layout, f"ALTER DATABASE {RESTORE_DATABASE} RENAME TO {DATABASE}", db="postgres")
+
+
+def resume_restore(layout: Layout) -> str | None:
+    """Finish or discard a restore() that a crash interrupted. Call with the server running."""
+    dbs = set(psql(layout, "SELECT datname FROM pg_database", db="postgres").split())
+    if RESTORE_DATABASE not in dbs:
+        return None
+    if DATABASE in dbs:
+        # The crash came before the store was dropped: the store is as it was. Discard.
+        psql(layout, f"DROP DATABASE {RESTORE_DATABASE} WITH (FORCE)", db="postgres")
+        return "discarded an unfinished restore"
+    psql(layout, f"ALTER DATABASE {RESTORE_DATABASE} RENAME TO {DATABASE}", db="postgres")
+    return "finished an interrupted restore"
 
 
 class MigrationFailed(PgError):
@@ -451,7 +491,13 @@ def migrate(layout: Layout, revisions: Sequence[str]) -> int:
         try:
             psql(layout, f"BEGIN; {sql}; UPDATE ops.version SET rev = {rev}; COMMIT;")
         except PgError as e:
-            restore(layout, before)
+            try:
+                restore(layout, before)
+            except PgError as r:
+                raise PgError(
+                    f"revision {rev} failed ({e}), and so did restoring the pre-migration dump. "
+                    f"The store is as revision {rev - 1} left it: {r}"
+                ) from r
             raise MigrationFailed(rev, str(e), before) from e
     return len(revisions)
 
