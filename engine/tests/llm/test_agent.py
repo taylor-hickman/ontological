@@ -5,8 +5,9 @@ SDK's own MCP bridge. The run records every tool call in order, for the post-run
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from claude_agent_sdk import SdkMcpTool, tool
 from pydantic import BaseModel
@@ -67,7 +68,9 @@ def tools(log: list[str], gateway: ClaudeGateway | None = None) -> list[SdkMcpTo
 
 
 class Harness:
-    def __init__(self, tmp_path: Path, scripts: list[list[Any]], *, concurrency: int = 3) -> None:
+    def __init__(
+        self, tmp_path: Path, scripts: list[Sequence[Any]], *, concurrency: int = 3
+    ) -> None:
         self.query = FakeQuery(scripts)
         self.calls = MemoryCalls()
         self.sandbox = tmp_path / "claude-sandbox"
@@ -114,7 +117,7 @@ def test_the_session_runs_with_the_tools_and_the_answer_schema(tmp_path: Path) -
         "mcp__ontological__boom",
         "mcp__ontological__review",
     ]
-    assert list(o.mcp_servers) == ["ontological"]
+    assert list(cast(dict[str, Any], o.mcp_servers)) == ["ontological"]
     assert o.output_format == {"type": "json_schema", "schema": Answer.model_json_schema()}
     assert (o.model, o.effort, o.fallback_model) == ("opus", "medium", "sonnet")  # §6.3
     assert o.max_turns == 16
