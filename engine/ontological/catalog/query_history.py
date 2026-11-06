@@ -48,7 +48,7 @@ from sqlalchemy import (
     distinct,
     func,
     select,
-    update,
+    text,
 )
 from sqlalchemy.dialects.postgresql import insert
 
@@ -62,8 +62,10 @@ from ontological.catalog.sql_parse import Link, ParsedQuery, Prefilter, Shape
 
 logger = logging.getLogger(__name__)
 
-#: Rows per multi-row INSERT.
+#: Rows per multi-row INSERT, for the JOIN and UNION pairs.
 BATCH = 1000
+#: Rows per array-bound statement.
+ROWS = 20_000
 
 sql_query_month = Table(
     "sql_query_month",
@@ -118,8 +120,8 @@ def ingest_query_history(
 
     def tally(q: ParsedQuery) -> Tally:
         out = Tally()
-        for text in q.texts:
-            out.merge(tallies[text])
+        for sql in q.texts:
+            out.merge(tallies[sql])
         return out
 
     with write_transaction():
@@ -182,8 +184,8 @@ def _parse(
     for chunk in pool.parse(texts, catalog, dialects):
         unmatched += chunk.unmatched
         failed += chunk.failed
-        for text, error in chunk.failures:
-            logger.info("Failed parsing query %r: %s", text, error)
+        for sql, error in chunk.failures:
+            logger.info("Failed parsing query %r: %s", sql, error)
         for q in chunk.parsed:
             shape = q.shape
             if shape is not None and shape in by_shape:
@@ -245,40 +247,46 @@ def _batches[T](items: Sequence[T]) -> Iterable[Sequence[T]]:
         yield items[i : i + BATCH]
 
 
-def _insert(table: Table, values: list[dict[str, Any]]) -> None:
-    for batch in _batches(values):
-        store().query_write(insert(table).values(list(batch)))
+def _unnest(sql: str, columns: dict[str, list[Any]]) -> None:
+    """Run `sql`, whose `:name` parameters are arrays, one per column, in chunks of `ROWS`.
+
+    One statement per chunk, its arrays bound by psycopg: SQLAlchemy compiling a many-row
+    VALUES list holds the GIL for longer than the write takes, and stalls the API meanwhile."""
+    n = len(next(iter(columns.values())))
+    for i in range(0, n, ROWS):
+        store().query_write(text(sql), {k: v[i : i + ROWS] for k, v in columns.items()})
 
 
 def _insert_statements(new: list[tuple[str, ParsedQuery, Tally]]) -> None:
     """Upstream's `add_query` for new statements: the statement, then its links."""
-    _insert(
-        s.sql_query,
-        [
-            {
-                "id": sql_id,
-                "sql_full_query": q.sql_text,
-                "total_counter": t.total,
-                "last_query_timestamp": t.last,
-                "nodes_count": q.nodes_count,
-                "join_count": q.join_count,
-                "union_count": q.union_count,
-            }
-            for sql_id, q, t in new
-        ],
+    if not new:
+        return
+    _unnest(
+        "INSERT INTO sql_query (id, sql_full_query, total_counter, last_query_timestamp, "
+        "nodes_count, join_count, union_count) SELECT * FROM unnest(CAST(:id AS text[]), "
+        "CAST(:sql AS text[]), CAST(:total AS int[]), CAST(:last AS timestamptz[]), "
+        "CAST(:nodes AS int[]), CAST(:joins AS int[]), CAST(:unions AS int[]))",
+        {
+            "id": [sql_id for sql_id, _, _ in new],
+            "sql": [q.sql_text for _, q, _ in new],
+            "total": [t.total for _, _, t in new],
+            "last": [t.last for _, _, t in new],
+            "nodes": [q.nodes_count for _, q, _ in new],
+            "joins": [q.join_count for _, q, _ in new],
+            "unions": [q.union_count for _, q, _ in new],
+        },
     )
-    _insert(
-        s.sql_query__table,
-        [{"sql_query_id": sql_id, "table_id": tid} for sql_id, q, _ in new for tid in q.table_ids],
+    links = (
+        ("sql_query__table", "table_id", [(i, x) for i, q, _ in new for x in q.table_ids]),
+        ("sql_query__column", "column_id", [(i, x) for i, q, _ in new for x in q.column_ids]),
     )
-    _insert(
-        s.sql_query__column,
-        [
-            {"sql_query_id": sql_id, "column_id": cid}
-            for sql_id, q, _ in new
-            for cid in q.column_ids
-        ],
-    )
+    for table, column, pairs in links:
+        if pairs:
+            _unnest(
+                f"INSERT INTO {table} (sql_query_id, {column}) "
+                "SELECT * FROM unnest(CAST(:sql_id AS text[]), CAST(:x AS text[]))",
+                {"sql_id": [a for a, _ in pairs], "x": [b for _, b in pairs]},
+            )
     _write_links(s.column__join, [(sql_id, link) for sql_id, q, _ in new for link in q.joins])
     _write_links(s.column__union, [(sql_id, link) for sql_id, q, _ in new for link in q.unions])
 
@@ -314,16 +322,22 @@ def _add_counts(matched: list[tuple[str, Tally]]) -> None:
     """Upstream's `update_counters_and_timestamps_for_query_and_affected_data`: the sightings
     added to the statement's total, and its timestamp moved to the latest. Upstream set the
     timestamp to the incoming one, even when it was older."""
-    q = s.sql_query
+    by_id: dict[str, Tally] = {}
     for sql_id, t in matched:
-        store().query_write(
-            update(q)
-            .where(q.c.id == sql_id)
-            .values(
-                total_counter=q.c.total_counter + t.total,
-                last_query_timestamp=func.greatest(q.c.last_query_timestamp, t.last),
-            )
-        )
+        by_id.setdefault(sql_id, Tally()).merge(t)
+    if not by_id:
+        return
+    _unnest(
+        "UPDATE sql_query q SET total_counter = q.total_counter + u.n, "
+        "last_query_timestamp = greatest(q.last_query_timestamp, u.last) "
+        "FROM unnest(CAST(:id AS text[]), CAST(:n AS int[]), CAST(:last AS timestamptz[])) "
+        "AS u(id, n, last) WHERE q.id = u.id",
+        {
+            "id": list(by_id),
+            "n": [t.total for t in by_id.values()],
+            "last": [t.last for t in by_id.values()],
+        },
+    )
 
 
 def _write_months(statements: list[tuple[str, Tally]]) -> None:
@@ -333,18 +347,19 @@ def _write_months(statements: list[tuple[str, Tally]]) -> None:
     for sql_id, t in statements:
         for month, count in t.months.items():
             counts[(sql_id, month)] = counts.get((sql_id, month), 0) + count
-    values = [
-        {"sql_query_id": sql_id, "month": month, "count": count}
-        for (sql_id, month), count in counts.items()
-    ]
-    for batch in _batches(values):
-        statement = insert(sql_query_month).values(list(batch))
-        store().query_write(
-            statement.on_conflict_do_update(
-                index_elements=["sql_query_id", "month"],
-                set_={"count": sql_query_month.c.count + statement.excluded.count},
-            )
-        )
+    if not counts:
+        return
+    _unnest(
+        "INSERT INTO app.sql_query_month (sql_query_id, month, count) "
+        "SELECT * FROM unnest(CAST(:id AS text[]), CAST(:month AS date[]), CAST(:n AS int[])) "
+        "ON CONFLICT (sql_query_id, month) "
+        "DO UPDATE SET count = app.sql_query_month.count + excluded.count",
+        {
+            "id": [sql_id for sql_id, _ in counts],
+            "month": [month for _, month in counts],
+            "n": list(counts.values()),
+        },
+    )
 
 
 def month_counts(sql_ids: Iterable[str]) -> dict[str, dict[date, int]]:

@@ -4,12 +4,13 @@ duplicate rules, over a `CatalogIndex`, in-process and in the parse pool's spawn
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 
 import pytest
 
-from ontological.catalog.parse_pool import ParsePool, chunked
+from ontological.catalog.parse_pool import NICE, ParsePool, chunked
 from ontological.catalog.parsers.catalog_index import CatalogIndex, SchemaEntry, TableEntry
 from ontological.catalog.sql_parse import Link, normalize, parse_chunk, parse_query
 
@@ -91,6 +92,15 @@ def test_chunks_spread_over_the_workers_and_stop_at_500() -> None:
     assert chunked([], 4) == []
 
 
+def worker_niceness() -> int:
+    return os.nice(0)
+
+
+def test_workers_run_at_a_lower_priority() -> None:
+    with ParsePool(workers=1) as pool:
+        assert pool._executor.submit(worker_niceness).result() == os.nice(0) + NICE  # pyright: ignore[reportPrivateUsage]
+
+
 def test_the_pool_parses_as_the_engine_would() -> None:
     texts = [JOIN, JOIN.replace("AC/DC", "Queen"), "SELECT Name FROM Artist", "SELECT 1 FROM nope"]
     with ParsePool(workers=2) as pool:
@@ -105,7 +115,9 @@ def test_the_pool_parses_as_the_engine_would() -> None:
     assert normalized == [normalize(t, DIALECTS) for t in texts]
 
 
-@pytest.mark.parametrize("module", ["ontological.catalog.sql_parse"])
+@pytest.mark.parametrize(
+    "module", ["ontological.catalog.sql_parse", "ontological.catalog.parse_pool"]
+)
 def test_a_worker_loads_nothing_that_reaches_the_store(module: str) -> None:
     """Spawned workers import the module their task lives in, and nothing of the store's."""
     script = f"import json, sys; import {module}\nprint(json.dumps(sorted(sys.modules)))\n"

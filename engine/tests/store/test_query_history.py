@@ -19,7 +19,9 @@ import pytest
 import uvicorn
 from conftest import sql
 
+from auto_ontology.dal.session import write_transaction
 from ontological.api.app import create_app
+from ontological.catalog import query_history
 from ontological.catalog.ingest import ingest
 from ontological.catalog.parse_pool import ParsePool
 from ontological.catalog.query_history import (
@@ -232,10 +234,21 @@ def serving(lifetime: Lifetime) -> Generator[str]:
         sock.close()
 
 
-def test_the_api_stays_responsive_while_a_large_history_ingests(chinook_store: pg.Layout) -> None:
+def test_the_api_stays_responsive_while_a_large_history_ingests(
+    chinook_store: pg.Layout, monkeypatch: pytest.MonkeyPatch
+) -> None:
     history = synthetic_history(LARGE)
     failed: list[BaseException] = []
     done = threading.Event()
+    writing: list[float] = []  # when the ingest's write began, to split the report by phase
+
+    @contextmanager
+    def timed_write() -> Generator[None]:
+        writing.append(time.perf_counter())
+        with write_transaction():
+            yield
+
+    monkeypatch.setattr(query_history, "write_transaction", timed_write)
 
     def run(pool: ParsePool) -> None:
         try:
@@ -246,7 +259,7 @@ def test_the_api_stays_responsive_while_a_large_history_ingests(chinook_store: p
         finally:
             done.set()
 
-    latencies: list[float] = []
+    latencies: list[tuple[float, float]] = []  # (when sent, how long)
     with (
         serving(Lifetime()) as base,
         httpx.Client(base_url=base, headers={"Authorization": f"Bearer {TOKEN}"}) as client,
@@ -259,18 +272,30 @@ def test_the_api_stays_responsive_while_a_large_history_ingests(chinook_store: p
         while not done.is_set():
             t0 = time.perf_counter()
             assert client.get("/health").status_code == 200
-            latencies.append(time.perf_counter() - t0)
+            latencies.append((t0, time.perf_counter() - t0))
             time.sleep(0.01)
         job.join()
         took = time.perf_counter() - started
 
     assert not failed, failed
-    p95 = statistics.quantiles(latencies, n=20)[-1]
-    report = (
-        f"{len(latencies)} requests over a {took:.1f} s ingest: median "
-        f"{statistics.median(latencies) * 1000:.1f} ms, p95 {p95 * 1000:.1f} ms, "
-        f"max {max(latencies) * 1000:.1f} ms"
-    )
+    every = [d for _, d in latencies]
+    p95 = statistics.quantiles(every, n=20)[-1]
+    report = f"{len(every)} requests over a {took:.1f} s ingest: {summary(every)}"
+    for phase, ds in (
+        ("parsing", [d for t, d in latencies if t < writing[0]]),
+        ("writing", [d for t, d in latencies if t >= writing[0]]),
+    ):
+        report += f"; while {phase}, {len(ds)}: {summary(ds)}"
     print(report)
-    assert len(latencies) >= 50, f"too short an ingest to measure: {report}"
-    assert p95 < P95_S and max(latencies) < MAX_S, report
+    assert len(every) >= 50, f"too short an ingest to measure: {report}"
+    assert p95 < P95_S and max(every) < MAX_S, report
+
+
+def summary(ds: list[float]) -> str:
+    if len(ds) < 2:
+        return "-"
+    p95 = statistics.quantiles(ds, n=20)[-1]
+    return (
+        f"median {statistics.median(ds) * 1000:.1f} ms, p95 {p95 * 1000:.1f} ms, "
+        f"max {max(ds) * 1000:.1f} ms"
+    )

@@ -3,7 +3,9 @@
 sqlglot is pure Python and holds the GIL, so parsing a large history in the engine would stall
 the API and chat for as long as it ran. The pool's workers are processes, started with `spawn`
 so they inherit none of the engine's threads, connections or locks, and there are at most
-`min(cores - 1, 4)` of them, leaving a core to the engine. They get statement texts and a
+`min(cores - 1, 4)` of them, leaving a core to the engine. They run at a lower priority
+(`NICE`), so on a machine with few cores the scheduler still runs the engine's API threads, and
+the app's, as soon as they wake. They get statement texts and a
 `CatalogIndex`, and return `ParsedQuery` structures and normalized SQL. They never connect to the
 store; the engine writes what they return (`query_history.py`).
 
@@ -23,10 +25,16 @@ from ontological.catalog.sql_parse import ChunkResult, normalize_many, parse_chu
 
 #: Upstream's chunk of history: a task's worth of statements.
 CHUNK = 500
+#: How much a worker's priority is lowered: parsing is background work.
+NICE = 10
 
 
 def default_workers() -> int:
     return max(1, min((os.cpu_count() or 2) - 1, 4))
+
+
+def _lower_priority() -> None:
+    os.nice(NICE)
 
 
 def chunked[T](items: Sequence[T], workers: int, most: int = CHUNK) -> list[Sequence[T]]:
@@ -41,7 +49,9 @@ class ParsePool:
     def __init__(self, workers: int | None = None) -> None:
         self.workers = workers or default_workers()
         self._executor = ProcessPoolExecutor(
-            max_workers=self.workers, mp_context=multiprocessing.get_context("spawn")
+            max_workers=self.workers,
+            mp_context=multiprocessing.get_context("spawn"),
+            initializer=_lower_priority,
         )
 
     def __enter__(self) -> ParsePool:
