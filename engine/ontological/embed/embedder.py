@@ -1,7 +1,9 @@
 """The local embedder behind LangChain's `Embeddings` (ARCHITECTURE.md §5.6, §7.1, spike S7).
 
-It loads the int8 ONNX file through onnxruntime on the CPU provider and the tokenizer through
-`tokenizers`, runs the graph, takes the CLS vector and L2-normalizes it.
+It loads a model's ONNX file (`ontological.embed.model`, the default unless a spec is given)
+through onnxruntime on the CPU provider and its tokenizer through `tokenizers`, runs the graph,
+pools the token vectors as the model card says (the CLS vector, or the mean over the real tokens)
+and L2-normalizes the result.
 
 - Bulk texts are sorted by length and batched by padded tokens (batch size x longest text), at
   most `cap_tokens` a batch. Cost is linear in padded tokens, so the cap costs no throughput and
@@ -92,25 +94,38 @@ def open_session(path: Path, threads: int = 0) -> Session:
 
 
 class LocalEmbedder(Embeddings):
-    model: str = files.MODEL_ID
-    dim: int = files.DIM
-
-    def __init__(self, model_dir: Path, *, cap_tokens: int = CAP_TOKENS, threads: int = 0) -> None:
+    def __init__(
+        self,
+        model_dir: Path,
+        *,
+        spec: files.ModelSpec = files.DEFAULT,
+        cap_tokens: int = CAP_TOKENS,
+        threads: int = 0,
+    ) -> None:
+        self.spec = spec
+        self.model: str = spec.id
+        self.dim: int = spec.dim
         self.cap_tokens = cap_tokens
-        self.tokenizer = Tokenizer.from_file(str(model_dir / files.TOKENIZER_FILE))
+        self.tokenizer = Tokenizer.from_file(str(model_dir / spec.tokenizer_file))
         self.tokenizer.no_padding()
-        self.tokenizer.enable_truncation(max_length=files.MAX_LENGTH)  # pyright: ignore[reportUnknownMemberType]
-        self.session = open_session(model_dir / files.MODEL_FILE, threads)
+        self.tokenizer.enable_truncation(max_length=spec.max_length)  # pyright: ignore[reportUnknownMemberType]
+        self.session = open_session(model_dir / spec.model_file, threads)
 
     # --- the graph -----------------------------------------------------------------------------
 
     def run(self, ids: Tokens, mask: Tokens) -> Vectors:
-        """One batch through the graph: CLS vectors, L2-normalized."""
-        (tokens,) = self.session.run(
-            ["token_embeddings"], {"input_ids": ids, "attention_mask": mask}
-        )
-        cls = np.asarray(tokens, dtype=np.float32)[:, 0]
-        return cls / np.linalg.norm(cls, axis=1, keepdims=True)
+        """One batch through the graph: pooled vectors, L2-normalized."""
+        feed = {"input_ids": ids, "attention_mask": mask}
+        if self.spec.token_type_ids:
+            feed["token_type_ids"] = np.zeros_like(ids)
+        (tokens,) = self.session.run([self.spec.output], feed)
+        tokens = np.asarray(tokens, dtype=np.float32)
+        if self.spec.pooling == "cls":
+            pooled = tokens[:, 0]
+        else:
+            weights = mask[:, :, None].astype(np.float32)
+            pooled = (tokens * weights).sum(axis=1) / weights.sum(axis=1)
+        return pooled / np.linalg.norm(pooled, axis=1, keepdims=True)
 
     def _encode(self, texts: Sequence[str]) -> list[list[int]]:
         return [e.ids for e in self.tokenizer.encode_batch(list(texts))]
@@ -130,7 +145,7 @@ class LocalEmbedder(Embeddings):
     def embed_batches(self, texts: Sequence[str]) -> Iterator[tuple[list[int], Vectors]]:
         """Embed `texts` as passages, one capped batch at a time: yields each batch's indices into
         `texts` and its vectors, so a job can report progress and stop between batches."""
-        encoded = self._encode([files.PASSAGE_PREFIX + t for t in texts])
+        encoded = self._encode([self.spec.passage_prefix + t for t in texts])
         for batch in token_batches([len(e) for e in encoded], self.cap_tokens):
             yield batch, self.run(*self._pad([encoded[i] for i in batch]))
 
@@ -144,7 +159,7 @@ class LocalEmbedder(Embeddings):
 
     def embed_query(self, text: str) -> list[float]:
         """One query, alone in its batch, so its vector doesn't depend on what else is running."""
-        return self.run(*self._pad(self._encode([files.QUERY_PREFIX + text])))[0].tolist()
+        return self.run(*self._pad(self._encode([self.spec.query_prefix + text])))[0].tolist()
 
     # --- calibration ---------------------------------------------------------------------------
 

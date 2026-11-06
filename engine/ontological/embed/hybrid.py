@@ -42,6 +42,17 @@ CERTIFIED_BONUS = 0.002
 
 _NAME = sql.SQL("(langchain_metadata ->> 'name')")
 
+RANKINGS = ("dense", "bm25", "trgm")  # all three fuse; the retrieval benchmark runs each alone
+
+_DENSE = sql.SQL(
+    "SELECT langchain_id::text FROM {t} WHERE {keep} "
+    "ORDER BY embedding <=> %(v)s::vector LIMIT %(n)s"
+)
+_TRGM = sql.SQL(
+    "SELECT langchain_id::text FROM {t} WHERE {keep} AND {name} %% %(q)s "
+    "ORDER BY similarity({name}, %(q)s) DESC, langchain_id LIMIT %(n)s"
+)
+
 Hit = dict[str, Any]
 
 
@@ -135,35 +146,31 @@ class HybridSearch:
     # --- search --------------------------------------------------------------------------------
 
     def search(
-        self, query: str, *, k: int = 10, where: Mapping[str, Any] | None = None
+        self,
+        query: str,
+        *,
+        k: int = 10,
+        where: Mapping[str, Any] | None = None,
+        rankings: Sequence[str] = RANKINGS,
     ) -> list[Hit]:
-        """The `k` best rows for `query` that `where` keeps, best first."""
+        """The `k` best rows for `query` that `where` keeps, best first. `rankings` picks which
+        of dense, BM25 and trigram are fused (all three unless the benchmark asks otherwise)."""
+        if unknown := set(rankings) - set(RANKINGS):
+            raise ValueError(f"unknown rankings: {sorted(unknown)}")
         f = W.parse(where)
         vector = _vector(self.vdb.embeddings.embed_query(query))
-        bm25 = [id_ for id_, _ in self.bm25.search(query, self.candidates, f)]
+        lists: list[list[str]] = []
+        if "bm25" in rankings:
+            lists.append([id_ for id_, _ in self.bm25.search(query, self.candidates, f)])
         keep = W.to_sql(f)
         params = {"v": vector, "q": query, "n": self.candidates}
         try:
             with self._connect() as conn:
-                dense = self._ids(
-                    conn,
-                    sql.SQL(
-                        "SELECT langchain_id::text FROM {t} WHERE {keep} "
-                        "ORDER BY embedding <=> %(v)s::vector LIMIT %(n)s"
-                    ),
-                    keep,
-                    params,
-                )
-                trgm = self._ids(
-                    conn,
-                    sql.SQL(
-                        "SELECT langchain_id::text FROM {t} WHERE {keep} AND {name} %% %(q)s "
-                        "ORDER BY similarity({name}, %(q)s) DESC, langchain_id LIMIT %(n)s"
-                    ),
-                    keep,
-                    params,
-                )
-                fused = rrf([dense, bm25, trgm])
+                if "dense" in rankings:
+                    lists.append(self._ids(conn, _DENSE, keep, params))
+                if "trgm" in rankings:
+                    lists.append(self._ids(conn, _TRGM, keep, params))
+                fused = rrf(lists)
                 rows = self._rows(conn, list(fused), keep, vector)
         except psycopg.errors.UndefinedTable:
             return []  # nothing written to the collection yet

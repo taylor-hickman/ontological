@@ -8,6 +8,8 @@
     ingest [wwi | <bird db> ...]   ingest the eval databases into the eval store (default: all)
     sets freeze [--force]   choose eval/sets/{dev,heldout,smoke}.json with the fixed seed
     sets check        run every set's gold SQL: each must run and return rows (needs `cluster up`)
+    retrieval [--layer semantic|data] [--set dev] [--models <key> ...]
+                      the retrieval benchmark: recall@k per model and configuration, no Claude
 
 The data, the cluster and the eval store live under ONTOLOGICAL_EVAL_HOME (default
 ~/Library/Application Support/Ontological Eval). The cluster and the store run the bundled
@@ -22,9 +24,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from ontological.embed import model as models
 from ontological.store import pg
 
-from . import cluster, fetch, ingest, questions, sets
+from . import cluster, fetch, ingest, questions, retrieval, sets
 from .home import eval_home, wwi_dir
 
 
@@ -53,6 +56,13 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("sets", help="the frozen question sets in eval/sets/")
     s.add_argument("action", choices=["freeze", "check"])
     s.add_argument("--force", action="store_true", help="freeze: rewrite existing set files")
+    r = sub.add_parser("retrieval", help="the retrieval benchmark (no Claude calls)")
+    r.add_argument("--layer", choices=retrieval.LAYERS, default="semantic")
+    r.add_argument("--set", default="dev", choices=sets.NAMES, dest="set_name")
+    r.add_argument(
+        "--models", nargs="+", choices=list(models.CANDIDATES), default=list(models.CANDIDATES)
+    )
+    r.add_argument("--pg-bin", help="the bundled Postgres's bin/ (default: $ONTOLOGICAL_PG_BIN)")
     args = parser.parse_args(argv)
     home = eval_home()
 
@@ -68,6 +78,18 @@ def main(argv: list[str] | None = None) -> int:
         pg_bin = _pg_bin(args.pg_bin)
         if args.command == "ingest":
             return _ingest(home, pg_bin, args.databases or list(ingest.DATABASES))
+        if args.command == "retrieval":
+            report, out = retrieval.bench(
+                home,
+                pg_bin,
+                args.layer,
+                args.set_name,
+                args.models,
+                progress=lambda m: print(m, file=sys.stderr),
+            )
+            print(retrieval.markdown(report))
+            print(f"written to {out}")
+            return 0
         lay = cluster.layout(home, pg_bin)
         if args.action == "up":
             server = cluster.up(home, pg_bin)
@@ -86,7 +108,15 @@ def main(argv: list[str] | None = None) -> int:
             cluster.down(home, pg_bin)
             print("eval cluster stopped")
         return 0
-    except (fetch.FetchError, pg.PgError, sets.SetsError, ingest.IngestError, OSError) as e:
+    except (
+        fetch.FetchError,
+        pg.PgError,
+        sets.SetsError,
+        ingest.IngestError,
+        retrieval.BenchmarkError,
+        models.ModelError,
+        OSError,
+    ) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
