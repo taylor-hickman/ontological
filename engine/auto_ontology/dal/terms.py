@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by Ontological: `upsert_table_term` keeps a Term's description when it is certified,
+# where upstream overwrote it (ARCHITECTURE.md §1.3, BUILD_PLAN.md M3.2).
 
 """Term reads and writes.
 
@@ -485,7 +487,15 @@ def upsert_table_term(
                 store().query_write(
                     update(s.term)
                     .where(s.term.c.id == term_id)
-                    .values(description=description, synonyms=synonyms or [])
+                    .values(
+                        # A certified description is a person's; compile never
+                        # overwrites it (ARCHITECTURE.md §1.3).
+                        description=case(
+                            (s.term.c.description_certified, s.term.c.description),
+                            else_=description,
+                        ),
+                        synonyms=synonyms or [],
+                    )
                 )
                 return term_id, candidate_name
             if existing:

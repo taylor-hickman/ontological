@@ -11,10 +11,19 @@ stage 3, §6.3)."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import Any, cast
 
+from ontological.compile import packed
 from ontological.compile.gateway import Structured, ask
-from ontological.compile.models import FkAndPkResult, PotentialFkSuggestion, TableKeys
+from ontological.compile.models import (
+    FkAndPkResult,
+    PackedTableKeys,
+    PotentialFkSuggestion,
+    TableKeys,
+    TableKeysEntry,
+)
 from ontological.compile.samples import format_sample_values
 
 TASK = "table_keys"
@@ -122,8 +131,7 @@ def build_prompt(
     if not candidates and len(columns) <= 2:
         return None
 
-    schema_name = table.get("schema_name") or ""
-    table_header = f"{schema_name}.{table['name']}" if schema_name else table["name"]
+    table_header = heading(table)
     known_fk_block = ", ".join(sorted(known_fk_names)) if known_fk_names else "(none)"
     pk_block = ", ".join(sorted(pk_names)) if pk_names else "(none)"
 
@@ -175,7 +183,57 @@ async def suggest_keys(
     result = await ask(gateway, TASK, SYSTEM, prompt, FkAndPkResult, PROMPT_VERSION)
     if result is None:
         return TableKeys()
+    return _sanitize(result, candidates, profiling)
 
+
+@dataclass(frozen=True)
+class KeysRequest:
+    """One table of a pack: the table with its declared PK, its context, and its profile."""
+
+    table: dict[str, Any]
+    ctx: dict[str, Any]
+    profiling: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
+
+
+def heading(table: dict[str, Any]) -> str:
+    schema_name = table.get("schema_name") or ""
+    return f"{schema_name}.{table['name']}" if schema_name else table["name"]
+
+
+async def suggest_keys_pack(
+    gateway: Structured, requests: Sequence[KeysRequest]
+) -> list[TableKeys]:
+    """`suggest_keys` for each table of a pack, in one call for the tables with something to
+    ask (`compile.packed`)."""
+    built = [build_prompt(r.table, r.ctx, r.profiling) for r in requests]
+    asked = [i for i, b in enumerate(built) if b is not None]
+    out = [TableKeys() for _ in requests]
+    found: dict[str, TableKeysEntry] = {}
+    if len(asked) > 1:
+        sections: list[tuple[str, str]] = []
+        for i in asked:
+            prompt, _ = built[i] or ("", [])
+            sections.append((heading(requests[i].table), prompt))
+        found = await packed.ask_pack(
+            gateway, TASK, SYSTEM, sections, PackedTableKeys, lambda r: r.tables
+        )
+    for i in asked:
+        r, (_, candidates) = requests[i], built[i] or ("", [])
+        entry = found.get(heading(r.table))
+        if entry is None:
+            out[i] = await suggest_keys(gateway, r.table, r.ctx, r.profiling)
+        else:
+            out[i] = _sanitize(entry, candidates, r.profiling)
+    return out
+
+
+def _sanitize(
+    result: FkAndPkResult,
+    candidates: list[dict[str, Any]],
+    profiling: dict[str, dict[str, Any]],
+) -> TableKeys:
+    """Keep suggestions for candidates only, once each, and add a repeated UUID column the
+    answer left out (upstream's clean-up)."""
     llm_pk_names = {
         name
         for raw_name in result.pk_column_names
