@@ -22,7 +22,10 @@ export type ShellCommand =
   | { type: 'toggle-rail' }
   | { type: 'theme'; theme: ThemeSource }
 
-/** Read synchronously by the preload, so the first paint already has the right screen and theme. */
+/**
+ * Read synchronously by the preload on every document load, so the first paint already has the
+ * right screen and theme, and a reload keeps the ones open now rather than those from launch.
+ */
 export interface InitialShellState {
   screen: ScreenId
   theme: ThemeSource
@@ -65,8 +68,6 @@ export const IPC = {
   notify: 'notify',
   engine: 'engine:get',
   engineState: 'engine:state',
-  reconnectEngine: 'engine:reconnect'
+  reconnectEngine: 'engine:reconnect',
+  initialState: 'shell:initial-state'
 } as const
-
-/** The argv prefix main uses to hand the preload its initial state. */
-export const INITIAL_STATE_ARG = '--ontological-initial='
