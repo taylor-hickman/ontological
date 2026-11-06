@@ -18,22 +18,10 @@ from ontological.catalog.ingest import AlreadyIngested, ingest
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.store import pg
 
-CHINOOK_SQL = Path(__file__).parents[1] / "upstream_fixtures/dev_tools/fixtures/sql/chinook.sql"
 TABLES = [
     "Album", "Artist", "Customer", "Employee", "Genre", "Invoice", "InvoiceLine", "MediaType",
     "Playlist", "PlaylistTrack", "Track",
 ]  # fmt: skip
-
-
-@pytest.fixture(scope="module")
-def chinook(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    path = tmp_path_factory.mktemp("src") / "chinook.sqlite"
-    con = sqlite3.connect(path)
-    try:
-        con.executescript(CHINOOK_SQL.read_text(encoding="utf-8-sig"))  # the script has a BOM
-    finally:
-        con.close()
-    return path
 
 
 @pytest.fixture

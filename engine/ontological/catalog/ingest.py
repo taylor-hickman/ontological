@@ -4,13 +4,18 @@
 # Modified by Ontological: ported from upstream's auto_ontology/catalog/ingest.py, extract.py,
 # write.py, parsers/schemas_parser.py and services/schema.py. It reads a source executor's extract
 # in place of a connector, writes a first load only (no diff, no query history), sequentially and
-# in one transaction.
+# in one transaction, and profiles the catalog before it embeds the data layer.
 
-"""Minimal ingest: a source's catalog, extracted by its executor and written through the DAL.
+"""Minimal ingest: a source's catalog, extracted by its executor and written through the DAL,
+then profiled through the executor, then embedded as the data layer.
 
-This is the first-load branch of upstream's `write.populate_db`, then `populate_fks` and
+The write is the first-load branch of upstream's `write.populate_db`, then `populate_fks` and
 `populate_pks`, over upstream's vendored catalog store. A database the store already holds is
 refused: updating it needs the catalog diff, which M2.3 ports. Query history (M2.4) isn't read.
+
+Profiling (`ontological/profile/`) runs before the data layer is built, so each column's text
+carries its sample values (§7.1). Upstream embedded the data layer at ingest and profiled at
+compile, so its texts never had them.
 
 Upstream writes each schema, the keys and the `pulled` stamp in separate transactions, and a
 failure part way is repaired by the next ingest's diff. With no diff a half-written catalog would
@@ -24,7 +29,7 @@ be stuck, so here the whole write is one transaction: the catalog lands complete
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -43,6 +48,9 @@ from auto_ontology.catalog.store.schemas import (
     merge_schema_nodes,
 )
 from auto_ontology.dal.session import write_transaction
+from ontological.catalog.data_layer import embed_data_layer
+from ontological.embed.embedder import LocalEmbedder
+from ontological.profile.run import Profiled, profile_catalog
 from ontological.sources.executor import Catalog, Record, SourceExecutor
 
 logger = logging.getLogger(__name__)
@@ -59,11 +67,27 @@ class Ingested:
     tables: int
     columns: int
     skipped: list[Record]  # relations the executor couldn't read, which weren't written
+    profiled: Profiled | None = None  # None when nothing was written
+    data_layer_rows: int = 0  # rows embedded into `data_objects_layer`
 
 
-def ingest(executor: SourceExecutor, *, timeout_s: float | None = None) -> Ingested:
-    """Extract the executor's source and write its catalog to the store."""
-    return write_catalog(executor.extract(timeout_s=timeout_s))
+def ingest(
+    executor: SourceExecutor,
+    *,
+    embedder: LocalEmbedder | None = None,
+    timeout_s: float | None = None,
+    probe_distinct_values: bool = True,
+) -> Ingested:
+    """Extract the executor's source, write its catalog to the store, profile it, and, given an
+    embedder, embed its data layer from the profiled catalog."""
+    ingested = write_catalog(executor.extract(timeout_s=timeout_s))
+    if ingested.database_id is None:
+        return ingested
+    profiled = profile_catalog(
+        executor, ingested.database_name, probe_distinct_values=probe_distinct_values
+    )
+    rows = embed_data_layer(ingested.database_name, embedder) if embedder is not None else 0
+    return replace(ingested, profiled=profiled, data_layer_rows=rows)
 
 
 def write_catalog(catalog: Catalog) -> Ingested:
