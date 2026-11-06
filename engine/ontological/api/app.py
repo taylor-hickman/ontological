@@ -27,6 +27,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine.lifetime import Closing, Lease, Lifetime
+from ontological.jobs.active import ActiveJobs
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +99,7 @@ def create_app(
     pid: int,
     version: str,
     embedder: LocalEmbedder | None = None,
+    jobs: ActiveJobs | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Ontological engine",
@@ -108,6 +110,9 @@ def create_app(
     )
     # The one embedder, calibrated at start. Routes call it concurrently, with no queue (§5.6).
     app.state.embedder = embedder
+    # The jobs running now, paused ones included: the count idle shutdown reads (§4.4). A job
+    # started from a route runs under it.
+    app.state.jobs = jobs or ActiveJobs()
 
     @app.get("/health")
     async def health() -> Health:  # pyright: ignore[reportUnusedFunction]
