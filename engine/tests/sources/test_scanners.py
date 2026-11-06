@@ -300,8 +300,9 @@ def test_the_password_stays_in_memory_and_out_of_sight(pg_ex: SourceExecutor) ->
     assert PASSWORD not in shown
     with pytest.raises(SourceQueryError, match="disabled"):
         pg_ex.run_sql("SELECT secret_string FROM duckdb_secrets(redact = false)")
+    # -ww: procps (Linux) cuts piped output at 80 columns, before the spawn arguments.
     args = subprocess.run(
-        ["ps", "-o", "args=", "-p", str(pg_ex.pid)], capture_output=True, text=True
+        ["ps", "-ww", "-o", "args=", "-p", str(pg_ex.pid)], capture_output=True, text=True
     ).stdout
     assert "spawn" in args and PASSWORD not in args
 
