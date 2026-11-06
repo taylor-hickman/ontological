@@ -5,12 +5,13 @@
     cluster check     compare each WWI table's row count with its CSV
     cluster status    whether it's running, and how to connect
     cluster down      stop it
+    ingest [wwi | <bird db> ...]   ingest the eval databases into the eval store (default: all)
     sets freeze [--force]   choose eval/sets/{dev,heldout,smoke}.json with the fixed seed
     sets check        run every set's gold SQL: each must run and return rows (needs `cluster up`)
 
-The data and the cluster live under ONTOLOGICAL_EVAL_HOME (default ~/Library/Application
-Support/Ontological Eval). The cluster runs the bundled Postgres binaries in ONTOLOGICAL_PG_BIN
-or --pg-bin.
+The data, the cluster and the eval store live under ONTOLOGICAL_EVAL_HOME (default
+~/Library/Application Support/Ontological Eval). The cluster and the store run the bundled
+Postgres binaries in ONTOLOGICAL_PG_BIN or --pg-bin.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from ontological.store import pg
 
-from . import cluster, fetch, questions, sets
+from . import cluster, fetch, ingest, questions, sets
 from .home import eval_home, wwi_dir
 
 
@@ -44,6 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("cluster", help="the eval Postgres cluster that holds WWI")
     c.add_argument("action", choices=["up", "check", "status", "down"])
     c.add_argument("--pg-bin", help="the bundled Postgres's bin/ (default: $ONTOLOGICAL_PG_BIN)")
+    i = sub.add_parser("ingest", help="ingest WWI and the BIRD databases into the eval store")
+    i.add_argument(
+        "databases", nargs="*", help=f"any of {', '.join(ingest.DATABASES)} (default: all)"
+    )
+    i.add_argument("--pg-bin", help="the bundled Postgres's bin/ (default: $ONTOLOGICAL_PG_BIN)")
     s = sub.add_parser("sets", help="the frozen question sets in eval/sets/")
     s.add_argument("action", choices=["freeze", "check"])
     s.add_argument("--force", action="store_true", help="freeze: rewrite existing set files")
@@ -60,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
             return _sets(args.action, home, force=args.force)
 
         pg_bin = _pg_bin(args.pg_bin)
+        if args.command == "ingest":
+            return _ingest(home, pg_bin, args.databases or list(ingest.DATABASES))
         lay = cluster.layout(home, pg_bin)
         if args.action == "up":
             server = cluster.up(home, pg_bin)
@@ -78,9 +86,19 @@ def main(argv: list[str] | None = None) -> int:
             cluster.down(home, pg_bin)
             print("eval cluster stopped")
         return 0
-    except (fetch.FetchError, pg.PgError, sets.SetsError, OSError) as e:
+    except (fetch.FetchError, pg.PgError, sets.SetsError, ingest.IngestError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+
+
+def _ingest(home: Path, pg_bin: Path, names: list[str]) -> int:
+    for r in ingest.run(home, pg_bin, names):
+        got = r.ingested
+        print(f"{r.name}: {got.tables} tables, {got.columns} columns as {got.database_name}")
+        for s in got.skipped:
+            print(f"  skipped {s['table_schema']}.{s['table_name']}: {s['error']}")
+    print(f"the eval store is {ingest.layout(home, pg_bin).app_data}")
+    return 0
 
 
 def _sets(action: str, home: Path, *, force: bool) -> int:

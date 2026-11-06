@@ -24,9 +24,11 @@ Upstream's `alembic.ini` isn't vendored. `ontological/store/chains.py` configure
 | `dal/custom_analyses.py` | Modified: takes `SqlParseError` from `server/sql_errors.py`; `embed_custom_analyses` takes a LangChain `Embeddings` in place of `EmbedParams` |
 | `dal/pql_analyses.py` | Modified: `embed_pql_analyses` takes a LangChain `Embeddings` in place of `EmbedParams` |
 | `dal/sql_attributes.py` | Modified: takes `SqlParseError` from `server/sql_errors.py` |
-| `catalog/store/*.py` | Unchanged |
+| `catalog/store/*.py` except the two below | Unchanged |
+| `catalog/store/db.py` | Modified: re-exports the diff from `ontological/catalog/diff.py`, the port of upstream's `catalog/diff.py` (M2.3) |
+| `catalog/store/schemas.py` | Modified: imports `normalize_tables` and `normalize_columns` from `ontological/catalog/normalize.py`, the port of upstream's `catalog/normalize.py` (M2.3) |
 | `catalog/__init__.py`, `catalog/constants.py`, `catalog/model/*.py` | Unchanged |
-| `catalog/diff.py`, `catalog/normalize.py`, `catalog/query_stats.py` | Unchanged, for now: `catalog/store/` imports them. M2.3 (diff, normalize) and M2.4 (query stats) port them with fixes, and the store then imports the ports |
+| `catalog/query_stats.py` | Unchanged, for now: `catalog/store/queries.py` imports it. M2.4 ports it with the month-counter fix, and the store then imports the port |
 | `infra/postgres.py` | Modified: a `POSTGRES_HOST` that is a socket directory builds `postgresql://user@/db?host=<dir>`, with no password |
 | `semantic/__init__.py`, `semantic/constants.py` | Unchanged |
 | `server/__init__.py`, `server/zones/__init__.py`, `server/zones/constants.py`, `server/zones/utils.py` | Unchanged |
@@ -34,6 +36,7 @@ Upstream's `alembic.ini` isn't vendored. `ontological/store/chains.py` configure
 | `utils/__init__.py` | Modified: empty. Upstream's imports `utils.embedding` (the OpenAI client) |
 | `vdb/__init__.py` | Modified: `get_vdb`, `get_data_vdb` and `get_semantic_vdb` pass `embeddings` and `vector_size` through |
 | `vdb/postgres.py` | Modified: a `vector_size` up to 2,000 is indexed as `vector` with `vector_cosine_ops`, with no `halfvec` conversion (§5.4); `on_change` registers a listener that every write and delete calls with the collection it changed, so the engine's BM25 index rebuilds whichever `PostgresVDB` made the change (§7.3) |
+| `catalog/diff.py`, `catalog/normalize.py` | Not vendored: ported to `ontological/catalog/` (M2.3). The golden seed's copy of `normalize.py` is test-only (`engine/tests/upstream_fixtures/`) |
 | `vdb/records.py` | Modified: adds `embed_rows_into_vdb`, upstream's `utils.embedding` helper on an `Embeddings`, which stores `model` and `content_hash` in each row's metadata (§7.1), and `content_hash` |
 
 Added by Ontological, in upstream's layout so the vendored imports stay one-line edits:

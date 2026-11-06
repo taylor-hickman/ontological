@@ -1,7 +1,8 @@
-"""Minimal ingest (BUILD_PLAN.md M1.3): Chinook's catalog, extracted by a real source executor and
-written through upstream's DAL to the bundled store. A first load only: no diff, no query history.
+"""Ingest of Chinook's catalog (BUILD_PLAN.md M1.3, M2.3), extracted by a real source executor and
+written through upstream's DAL to the bundled store, then re-ingested through the catalog diff. No
+query history.
 
-Chinook is upstream's fixture SQL (MIT, THIRD_PARTY_NOTICES.md), built into a SQLite file here.
+Chinook is upstream's fixture SQL, built into a SQLite file by conftest.py.
 """
 
 from __future__ import annotations
@@ -14,26 +15,14 @@ import pytest
 from conftest import sql
 
 from ontological.catalog import ingest as ingest_mod
-from ontological.catalog.ingest import AlreadyIngested, ingest
+from ontological.catalog.ingest import ingest
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.store import pg
 
-CHINOOK_SQL = Path(__file__).parents[1] / "upstream_fixtures/dev_tools/fixtures/sql/chinook.sql"
 TABLES = [
     "Album", "Artist", "Customer", "Employee", "Genre", "Invoice", "InvoiceLine", "MediaType",
     "Playlist", "PlaylistTrack", "Track",
 ]  # fmt: skip
-
-
-@pytest.fixture(scope="module")
-def chinook(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    path = tmp_path_factory.mktemp("src") / "chinook.sqlite"
-    con = sqlite3.connect(path)
-    try:
-        con.executescript(CHINOOK_SQL.read_text(encoding="utf-8-sig"))  # the script has a BOM
-    finally:
-        con.close()
-    return path
 
 
 @pytest.fixture
@@ -55,6 +44,16 @@ def catalog(lay: pg.Layout) -> list[str]:
         "FROM catalog_database d JOIN catalog_schema s ON s.database_id = d.id "
         "JOIN catalog_table t ON t.schema_id = s.id JOIN catalog_column c ON c.table_id = t.id "
         "ORDER BY 1, 2, 3, 4",
+    )
+
+
+def keys(lay: pg.Layout) -> list[str]:
+    """Every table's primary key and every foreign key, by id."""
+    return rows(
+        lay, "SELECT id || '|' || array_to_string(pk, ',') FROM catalog_table ORDER BY 1"
+    ) + rows(
+        lay,
+        "SELECT source_column_id || '->' || target_column_id FROM column__foreign_key ORDER BY 1",
     )
 
 
@@ -133,15 +132,20 @@ def test_ingest_reads_no_query_history(store: pg.Layout, executor: SourceExecuto
         assert rows(store, f"SELECT count(*) FROM {table}") == ["0"], table
 
 
-def test_a_second_ingest_is_refused_and_changes_nothing(
+def test_re_ingesting_an_unchanged_source_changes_nothing(
     store: pg.Layout, executor: SourceExecutor
 ) -> None:
-    ingest(executor)
-    before = catalog(store)
+    """Re-ingest is idempotent (ARCHITECTURE.md §12, M2): the second ingest diffs against the
+    first and finds nothing to do, so every row keeps its id and the keys stay as they were."""
+    first = ingest(executor)
+    before = catalog(store), keys(store)
 
-    with pytest.raises(AlreadyIngested, match="chinook"):
-        ingest(executor)
-    assert catalog(store) == before
+    second = ingest(executor)
+
+    assert (second.database_id, second.tables, second.columns) == (
+        first.database_id, first.tables, first.columns,
+    )  # fmt: skip
+    assert (catalog(store), keys(store)) == before
 
 
 def test_a_failed_write_leaves_no_catalog_and_can_be_retried(

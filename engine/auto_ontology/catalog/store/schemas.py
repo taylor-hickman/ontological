@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by Ontological: imports normalize from ontological.catalog.normalize, the port of
+# upstream's catalog/normalize.py (M2.3).
 
 """Reading and writing one schema's tables and columns.
 
@@ -27,7 +29,7 @@ from sqlalchemy.dialects.postgresql import insert
 from auto_ontology.catalog.constants import Labels
 from auto_ontology.catalog.model.node import CatalogNode
 from auto_ontology.catalog.model.schema import Schema
-from auto_ontology.catalog.normalize import normalize_columns, normalize_tables
+from ontological.catalog.normalize import normalize_columns, normalize_tables
 from auto_ontology.catalog.store.registry import entity_spec
 from auto_ontology.catalog.store.rows import upsert_row
 from auto_ontology.dal import schema as s

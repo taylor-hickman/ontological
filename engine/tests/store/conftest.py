@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -301,3 +302,18 @@ def store(apps: Apps, monkeypatch: pytest.MonkeyPatch) -> Iterator[pg.Layout]:
     finally:
         dal.close()
         pg.stop(lay, quit_dump=False)
+
+
+CHINOOK_SQL = Path(__file__).parents[1] / "upstream_fixtures/dev_tools/fixtures/sql/chinook.sql"
+
+
+@pytest.fixture(scope="module")
+def chinook(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Chinook as a SQLite file, built from upstream's fixture SQL (MIT, THIRD_PARTY_NOTICES.md)."""
+    path = tmp_path_factory.mktemp("src") / "chinook.sqlite"
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(CHINOOK_SQL.read_text(encoding="utf-8-sig"))  # the script has a BOM
+    finally:
+        con.close()
+    return path

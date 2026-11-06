@@ -1,12 +1,19 @@
-"""Stand-ins the vendored-DAL tests share: an embedder and a keychain."""
+"""Stand-ins tests share: an embedder, a keychain, and a Claude gateway for compile."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
-from typing import ClassVar
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any, ClassVar
 
 from keyring.backend import KeyringBackend
 from langchain_core.embeddings import Embeddings
+from pydantic import BaseModel
+
+from ontological.llm.calls import Outcome
+from ontological.llm.gateway import GatewayStatus, State
 
 
 class HashEmbeddings(Embeddings):
@@ -45,3 +52,79 @@ class MemoryKeyring(KeyringBackend):
 
     def delete_password(self, service: str, username: str) -> None:
         del self.items[(service, username)]
+
+
+@dataclass(frozen=True)
+class StructuredCall:
+    task: str
+    system: str
+    user: str
+    schema: type[BaseModel]
+    prompt_version: str
+
+
+@dataclass(frozen=True)
+class NoAnswer:
+    """What a scripted call returns when Claude didn't answer: the call's outcome, and the state
+    the gateway is left in."""
+
+    outcome: Outcome = "limited"
+    state: State = "limited"
+
+
+# The model's JSON, None for an answer that failed validation, or NoAnswer
+Answer = Callable[[str, str], dict[str, Any] | NoAnswer | None]
+
+
+@dataclass
+class ScriptedGateway:
+    """`ClaudeGateway.structured()` for compile tests: `answer(task, user)` gives the model's
+    JSON, None for an invalid answer, or `NoAnswer`. Records every call, and the most that were
+    in flight at once."""
+
+    answer: Answer
+    calls: list[StructuredCall] = field(default_factory=list[StructuredCall])
+    in_flight: int = 0
+    peak: int = 0
+    last_outcome: Outcome | None = None
+    state: State = "ready"
+
+    @property
+    def status(self) -> GatewayStatus:
+        return GatewayStatus(
+            state=self.state,
+            cli_path=None,
+            installed=self.state != "not_installed",
+            version=None,
+            logged_in=self.state != "needs_login",
+            rate_limit=None,
+            limited_until=None,
+            error=None if self.state == "ready" else self.state,
+        )
+
+    async def structured[M: BaseModel](
+        self,
+        task: str,
+        system: str,
+        user: str,
+        schema: type[M],
+        cache_key_extra: str = "",
+        *,
+        prompt_version: str = "",
+    ) -> M | None:
+        self.calls.append(StructuredCall(task, system, user, schema, prompt_version))
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        try:
+            await asyncio.sleep(0)  # let anything else that could run, run
+            output = self.answer(task, user)
+        finally:
+            self.in_flight -= 1
+        if isinstance(output, NoAnswer):
+            self.last_outcome, self.state = output.outcome, output.state
+            return None
+        self.last_outcome = "invalid" if output is None else "ok"
+        return None if output is None else schema.model_validate(output)
+
+    def tasks(self) -> list[str]:
+        return [c.task for c in self.calls]
