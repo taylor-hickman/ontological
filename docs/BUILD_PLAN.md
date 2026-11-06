@@ -136,6 +136,15 @@ Produces: `ontological ask "<question>" --source chinook` and `ontological eval 
 
 The smoke score in M1 only needs to exist. It will be low, because BIRD and WWI need M2's Postgres source and M3's full compile.
 
+**M1.4 decided (2026-11-06): the minimal compile.** `engine/ontological/compile/` runs one table at a time in upstream's canonical order and awaits each Claude call before the next. `table_keys`, `column_descriptions` (15 columns to a call) and `table_terms` send upstream's system prompts and JSON schemas unchanged, with `prompt_version` set to upstream's commit, `2a24f5d`. Three things differ from upstream on purpose:
+- The keys prompt names the table's declared primary key. Upstream reads it from a work list that never carries it, so its prompt always says "(none)".
+- The keys prompt reads the columns after profiling has stored their samples, so it has them on a first compile. Upstream reads them before profiling.
+- The terms prompt lists every candidate column. Upstream stops at 40, and chunking stays M3.2's.
+
+Profiling sends its queries through the executor's `probe` and computes the statistics in the engine. JSON key paths, the mixed-date-shape warnings and the move into the executor wait for M2.5. Synonyms (`table_synonyms`) wait for M3.2, and Chinook has no table descriptions for them to read anyway. Semantic FKs come from declared FKs only. Where a table has several FKs to the same attribute, the join default is upstream's deterministic fallback, the first column by name. Upstream embeds each table's Terms as it writes them, and nothing here embeds: M1.6 builds dense retrieval over Terms and attributes, so it writes those vectors.
+
+Upstream's fallbacks only cover an answer that fails validation. When Claude doesn't answer at all (a rate limit, an overload, a logged-out or missing `claude`, a failed spawn), compile stops before writing the table it is on. That table and the rest stay in the work list, and the next run resumes there. Otherwise a fallback Term would be committed and the table would never be compiled again. M3.1 adds the pause until `resets_at`.
+
 ### M2: Catalog depth and the Electron shell
 
 Produces: every v1 source type, a correct and idempotent catalog, the golden DAL suite as a conformance gate, and an Electron app that onboards the user and shows the catalog.

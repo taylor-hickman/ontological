@@ -1,7 +1,7 @@
 """Minimal ingest (BUILD_PLAN.md M1.3): Chinook's catalog, extracted by a real source executor and
 written through upstream's DAL to the bundled store. A first load only: no diff, no query history.
 
-Chinook is upstream's fixture SQL (MIT, THIRD_PARTY_NOTICES.md), built into a SQLite file here.
+Chinook is upstream's fixture SQL, built into a SQLite file by conftest.py.
 """
 
 from __future__ import annotations
@@ -18,22 +18,10 @@ from ontological.catalog.ingest import AlreadyIngested, ingest
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.store import pg
 
-CHINOOK_SQL = Path(__file__).parents[1] / "upstream_fixtures/dev_tools/fixtures/sql/chinook.sql"
 TABLES = [
     "Album", "Artist", "Customer", "Employee", "Genre", "Invoice", "InvoiceLine", "MediaType",
     "Playlist", "PlaylistTrack", "Track",
 ]  # fmt: skip
-
-
-@pytest.fixture(scope="module")
-def chinook(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    path = tmp_path_factory.mktemp("src") / "chinook.sqlite"
-    con = sqlite3.connect(path)
-    try:
-        con.executescript(CHINOOK_SQL.read_text(encoding="utf-8-sig"))  # the script has a BOM
-    finally:
-        con.close()
-    return path
 
 
 @pytest.fixture
