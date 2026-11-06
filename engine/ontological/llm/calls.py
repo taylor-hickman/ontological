@@ -2,14 +2,21 @@
 §5.2, §6.4).
 
 Each spawn writes one row. A structured call's key is `cache_key(...)`; a later call with the same
-key is answered from the newest row that holds a valid answer from the route's own model. Text
-calls are logged but never served from the cache.
+key is answered from the newest row that holds a valid answer from the route's own model, and
+writes a `cached` row of its own with no output, so a job's log shows its cache hits. Text calls
+are logged but never served from the cache.
+
+A row names the job and table it was for when the caller set them with `call_scope`, as compile
+does for each table; the Jobs screen reads a job's calls by them.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -50,6 +57,32 @@ def cache_key(
 
 
 @dataclass(frozen=True)
+class CallScope:
+    """What a call is for: the job and the table, for the job's call log."""
+
+    job_id: int | None = None
+    table_name: str | None = None
+
+
+_scope: ContextVar[CallScope | None] = ContextVar("call_scope", default=None)
+
+
+@contextmanager
+def call_scope(job_id: int | None, table_name: str | None) -> Generator[None]:
+    """Calls made inside, in this task or a thread it starts, are logged under this job and
+    table."""
+    token = _scope.set(CallScope(job_id, table_name))
+    try:
+        yield
+    finally:
+        _scope.reset(token)
+
+
+def current_scope() -> CallScope:
+    return _scope.get() or CallScope()
+
+
+@dataclass(frozen=True)
 class LlmCall:
     """One row of ops.llm_call: one spawn of `claude`."""
 
@@ -71,12 +104,20 @@ class LlmCall:
     duration_ms: int | None = None
     num_turns: int | None = None
     session_id: str | None = None
+    cached: bool = False  # answered from the cache: no spawn, and no output of its own
+    job_id: int | None = None
+    table_name: str | None = None
 
     @property
     def cacheable(self) -> bool:
         """A valid structured answer from the route's own model. A fallback answer isn't served
         again, so the next run asks the route's model."""
-        return self.kind == "structured" and self.outcome == "ok" and not self.fallback
+        return (
+            self.kind == "structured"
+            and self.outcome == "ok"
+            and not self.fallback
+            and not self.cached
+        )
 
 
 class CallLog(Protocol):
@@ -95,11 +136,12 @@ _INSERT = text(
     INSERT INTO ops.llm_call (
         task, kind, prompt_version, cache_key, model, effort, attempt, outcome, output, error,
         resolved_model, answered_model, fallback, usage, cost_usd, duration_ms, num_turns,
-        session_id
+        session_id, cached, job_id, table_name
     ) VALUES (
         :task, :kind, :prompt_version, :cache_key, :model, :effort, :attempt, :outcome,
         CAST(:output AS jsonb), :error, :resolved_model, :answered_model, :fallback,
-        CAST(:usage AS jsonb), :cost_usd, :duration_ms, :num_turns, :session_id
+        CAST(:usage AS jsonb), :cost_usd, :duration_ms, :num_turns, :session_id, :cached,
+        :job_id, :table_name
     )
     """
 )
@@ -108,6 +150,7 @@ _LOOKUP = text(
     """
     SELECT output FROM ops.llm_call
     WHERE cache_key = :cache_key AND kind = 'structured' AND outcome = 'ok' AND NOT fallback
+        AND NOT cached
     ORDER BY id DESC
     LIMIT 1
     """
@@ -149,6 +192,9 @@ class PgCallLog:
             "duration_ms": call.duration_ms,
             "num_turns": call.num_turns,
             "session_id": call.session_id,
+            "cached": call.cached,
+            "job_id": call.job_id,
+            "table_name": call.table_name,
         }
         with self._engine.begin() as conn:
             conn.execute(_INSERT, params)

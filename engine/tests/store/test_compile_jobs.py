@@ -20,6 +20,7 @@ from ontological.compile.split import RESUME_MARGIN_S, RETRY_WITHOUT_RESET_S, co
 from ontological.engine.lifetime import Lifetime
 from ontological.jobs import store as jobs
 from ontological.jobs.active import ActiveJobs
+from ontological.llm.calls import CallScope, current_scope
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.store import pg
 
@@ -162,6 +163,68 @@ def test_a_logged_out_claude_stops_the_job_and_the_next_run_resumes_it(
     assert jobs.job(done.job_id).state == "done"
     counts = "SELECT count(*) FROM term UNION ALL SELECT count(*) FROM column__semantic_fk"
     assert rows(store, counts) == ["10", "10"]
+
+
+def test_a_person_pausing_stops_the_job_before_its_next_table(
+    store: pg.Layout, executor: SourceExecutor
+) -> None:
+    hold = asyncio.Event()
+
+    def pause_at_artist(task: str, user: str) -> Any:
+        if task == "table_terms" and table_of(user) == "Artist":
+            hold.set()
+        return claude(task, user)
+
+    gateway = ScriptedGateway(pause_at_artist)
+    held = asyncio.run(compile_database("chinook", executor, gateway, hold=hold))
+
+    # Artist was under way, so it finished; nothing after it started
+    assert held.held and not held.complete and held.stopped is None
+    assert [t.name for t in held.tables] == ["Album", "Artist"]
+    asked = {table_of(c.user) for c in gateway.calls if c.task != "column_descriptions"}
+    assert asked == {"Album", "Artist"}
+    job = jobs.job(held.job_id)
+    assert (job.state, job.paused_until, job.error) == ("held", None, None)
+
+    done = asyncio.run(compile_database("chinook", executor, ScriptedGateway(claude)))
+    assert done.job_id == held.job_id and done.complete
+    assert [t.name for t in done.tables] == ORDER[2:]
+    assert jobs.job(done.job_id).state == "done"
+
+
+def test_a_person_pausing_during_a_usage_pause_holds_the_job_at_once(
+    executor: SourceExecutor,
+) -> None:
+    hold = asyncio.Event()
+    clock = FakeClock(on_sleep=lambda _: hold.set())  # "Don't resume", while it waits
+    gateway = ScriptedGateway(once_at_employee(NoAnswer("limited", "limited", RESETS_AT)))
+
+    held = asyncio.run(compile_database("chinook", executor, gateway, clock=clock, hold=hold))
+
+    assert held.held
+    assert [t.name for t in held.tables] == ["Album", "Artist", "Customer"]
+    job = jobs.job(held.job_id)
+    assert (job.state, job.paused_until) == ("held", None)
+    # The last call was Employee's that hit the limit: nothing was asked after it
+    assert (gateway.calls[-1].task, table_of(gateway.calls[-1].user)) == ("table_terms", "Employee")
+
+
+def test_each_tables_calls_are_made_under_its_job_and_table(executor: SourceExecutor) -> None:
+    scopes: list[tuple[int | None, str | None, str | None]] = []
+
+    def note(task: str, user: str) -> Any:
+        scope = current_scope()
+        # A description call's prompt names only columns
+        asked = None if task == "column_descriptions" else table_of(user)
+        scopes.append((scope.job_id, scope.table_name, asked))
+        return claude(task, user)
+
+    got = asyncio.run(compile_database("chinook", executor, ScriptedGateway(note)))
+
+    assert scopes and all(job == got.job_id for job, _, _ in scopes)
+    assert all(scoped == asked for _, scoped, asked in scopes if asked is not None)
+    assert all(scoped is not None for _, scoped, _ in scopes)
+    assert current_scope() == CallScope()
 
 
 class Crash(Exception):
