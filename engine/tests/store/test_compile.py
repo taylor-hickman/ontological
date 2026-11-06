@@ -335,4 +335,9 @@ def test_a_recompile_keeps_certified_descriptions(
         store,
         "SELECT source_column || '|' || description FROM column_attribute "
         "WHERE term_name = 'Invoice' AND source_column IN ('BillingCity', 'Total') ORDER BY 1",
-    ) == ["BillingCity|About BillingCity.", "Total|Curated total."]
+    ) == [
+        # The column reads its attribute's description as its own, so it isn't asked again,
+        # and the write appends its samples; the certified one is left exactly as it was
+        "BillingCity|Stale city. — samples: Berlin, Paris, London, Mountain View, São Paulo",
+        "Total|Curated total.",
+    ]
