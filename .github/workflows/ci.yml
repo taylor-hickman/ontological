@@ -1,6 +1,9 @@
-# The engine's checks on every pull request and push to main. Linux covers them: a macOS minute
-# bills at ten times a Linux one, so macos.yml runs the same checks on macOS arm64 only for the
-# changes that need it.
+# The engine's and eval's checks on every pull request and push to main. Linux covers them: a macOS
+# minute bills at ten times a Linux one, so macos.yml runs the same checks on macOS arm64 only when
+# started by hand. The tests that need Postgres (the store, the engine on the real store,
+# dense search, the catalog ingest, upstream's golden DAL suite and the eval cluster) run here on
+# PGDG's PostgreSQL 17 and 16; postgres.yml runs them on the bundled macOS tree when its build
+# changes.
 name: CI
 
 on:
@@ -30,16 +33,25 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - uses: ./.github/actions/embedding-model
+      - uses: ./.github/actions/postgres-linux
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pyright
       # The runner ships MySQL 8 stopped, with root's password set to root. The source executor
       # tests read it through DuckDB's mysql_scanner (engine/tests/sources/test_scanners.py).
       - run: sudo systemctl start mysql.service
-      - run: uv run pytest
+      - run: uv run pytest -ra
         env:
+          ONTOLOGICAL_GOLDEN_REPORTS: ${{ runner.temp }}/golden
           ONTOLOGICAL_MYSQL_URL: mysql://root:root@127.0.0.1:3306
           ONTOLOGICAL_MYSQL_REQUIRED: "1"
+      - name: Upload the golden DAL suite's reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-dal-reports
+          path: ${{ runner.temp }}/golden
+          if-no-files-found: ignore
 
   eval:
     name: eval (Linux)
@@ -54,8 +66,8 @@ jobs:
           working-directory: eval
           enable-cache: true
       - run: uv sync --locked
+      - uses: ./.github/actions/postgres-linux
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pyright
-      # The cluster tests skip here: they need the bundled binaries, so postgres.yml runs them.
-      - run: uv run pytest
+      - run: uv run pytest -ra

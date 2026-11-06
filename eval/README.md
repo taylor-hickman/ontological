@@ -34,7 +34,7 @@ A separate Postgres 17 cluster on the bundled binaries, run by the store's lifec
 
 On its first launch the cluster creates the `wideworldimporters` database and loads it in one transaction: the DDL, a server-side `COPY` per CSV, then the foreign keys and views. It then checks each table's row count against its CSV. A load that fails or comes up short leaves no cluster, and the next `up` starts again. To reload, `cluster down` and delete `<home>/cluster`.
 
-`cluster` needs the bundled Postgres's `bin/` in `ONTOLOGICAL_PG_BIN` (or `--pg-bin`). The quickest way to get one is the tree that `postgres.yml` builds and uploads on every push to main:
+`cluster` needs the bundled Postgres's `bin/` in `ONTOLOGICAL_PG_BIN` (or `--pg-bin`). The quickest way to get one is the tree that `postgres.yml` builds and uploads when its build changes on main (or run it by hand with `gh workflow run postgres.yml`):
 
 ```sh
 gh run download <run-id> -n postgres-17.11-pgvector-0.8.7-darwin-arm64 -D <dir>
@@ -72,4 +72,4 @@ uv run ruff check . && uv run ruff format --check . && uv run pyright
 ONTOLOGICAL_PG_BIN=<tree>/bin uv run pytest
 ```
 
-`tests/test_sets.py` chooses sets from synthetic questions shaped like Mini-Dev and checks gold SQL on a small SQLite file. `tests/test_fetch.py` runs `fetch` against a local HTTP server that answers range requests. `tests/test_cluster.py` drives the bundled binaries on a small WWI-shaped dataset, and skips without `ONTOLOGICAL_PG_BIN` unless `ONTOLOGICAL_PG_REQUIRED=1`, which `postgres.yml` sets.
+`tests/test_sets.py` chooses sets from synthetic questions shaped like Mini-Dev and checks gold SQL on a small SQLite file. `tests/test_fetch.py` runs `fetch` against a local HTTP server that answers range requests. `tests/test_cluster.py` drives the bundled binaries on a small WWI-shaped dataset, and skips without `ONTOLOGICAL_PG_BIN` unless `ONTOLOGICAL_PG_REQUIRED=1`, which CI sets (`ci.yml` on Linux, `postgres.yml` on the bundled tree).

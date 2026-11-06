@@ -1,28 +1,15 @@
 # The engine's checks on macOS arm64, the platform Ontological ships first. A macOS minute bills
-# at ten times a Linux one, so this runs only when a change can behave differently there, or by
-# hand from the Actions tab (workflow_dispatch). ci.yml runs the same checks on Linux every time.
+# at ten times a Linux one, so this runs only by hand from the Actions tab (workflow_dispatch, or
+# `gh workflow run macos.yml --ref <branch>`). ci.yml runs the same checks on Linux every time.
 #
-# Paths that trigger it:
+# Run it when a change can behave differently on macOS:
 #   - engine dependencies and Python version, which pick the native wheels (uv.lock is universal,
 #     but a macOS wheel can still break where the Linux one works)
-#   - packaging and signing: the engine runtime build and the Electron packaging config (M7).
-#     Put that work under these paths, and add its steps here, when it lands.
-#   The bundled Postgres + pgvector build has its own workflow, gated the same way (spike S4).
-#   - this file
+#   - packaging and signing: the engine runtime build and the Electron packaging config (M7)
+# The bundled Postgres + pgvector build has its own workflow (postgres.yml, spike S4).
 name: macOS
 
 on:
-  push:
-    branches: [main]
-    paths: &macos-paths
-      - engine/pyproject.toml
-      - engine/uv.lock
-      - engine/.python-version
-      - packaging/**
-      - apps/desktop/electron-builder.*
-      - .github/workflows/macos.yml
-  pull_request:
-    paths: *macos-paths
   workflow_dispatch:
 
 concurrency:

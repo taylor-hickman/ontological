@@ -264,7 +264,8 @@ def backends(postmaster: int) -> list[int]:
 
 
 def postmasters_for(lay: pg.Layout) -> list[str]:
-    out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+    # -ww: procps (Linux) cuts piped output at 80 columns, which drops the -D path.
+    out = subprocess.run(["ps", "-axwwo", "pid=,command="], capture_output=True, text=True).stdout
     return [ln for ln in out.splitlines() if f"-D {lay.pgdata}" in ln and "pg_ctl" not in ln]
 
 

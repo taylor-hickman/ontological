@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import type { EngineState } from '../../src/shared/engine'
 import { pidAlive, readEngineJson } from '../../src/main/engine/io'
-import { freshUserData, launch, startHeadless } from './app'
+import { clickMenuItem, freshUserData, launch, startHeadless } from './app'
 
 type Running = Extract<EngineState, { status: 'running' }>
 
@@ -163,6 +163,40 @@ test('restarts an engine it started when that engine crashes', async () => {
     await expect(page.getByTestId('engine-banner')).toHaveCount(0)
     // The new engine has a new port; the window reloaded with it in its CSP.
     expect(await healthFromRenderer(page, state)).toEqual({ status: 200, pid: second.pid })
+  } finally {
+    await app.close()
+  }
+})
+
+test('the reload for a restarted engine’s new port keeps the screen and theme open now', async () => {
+  const userData = freshUserData()
+  const { app, page } = await launch(userData)
+  try {
+    await running(page)
+    const first = readEngineJson(userData)!.pid
+    started.push(first)
+    await clickMenuItem(app, 'screen-jobs')
+    await clickMenuItem(app, 'theme-dark')
+    await expect(page.locator('h1')).toHaveText('Jobs')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+    // Gone once the window has reloaded.
+    await page.evaluate(() => Object.assign(window, { __beforeRestart: true }))
+
+    process.kill(first, 'SIGKILL')
+    await expect
+      .poll(() => readEngineJson(userData)?.pid, { timeout: 20_000, message: 'a new engine writes engine.json' })
+      .not.toBe(first)
+    started.push(readEngineJson(userData)!.pid)
+    await expect
+      .poll(() => page.evaluate(() => '__beforeRestart' in window).catch(() => true), {
+        timeout: 20_000,
+        message: 'the window reloads for the new port'
+      })
+      .toBe(false)
+    await running(page)
+
+    await expect(page.locator('h1')).toHaveText('Jobs')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   } finally {
     await app.close()
   }

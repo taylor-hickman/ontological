@@ -1,0 +1,26 @@
+# PostgreSQL 17 and 16 with pgvector from the PGDG apt repository, so the store, golden DAL and
+# eval cluster tests run on Linux runners instead of macOS ones (a macOS minute bills at ten times
+# a Linux one). These are stock packages, not the trimmed, signed tree the app ships: postgres.yml
+# still builds and tests that tree on macOS when its build scripts change.
+#
+# Sets ONTOLOGICAL_PG_BIN, ONTOLOGICAL_PG16_BIN and ONTOLOGICAL_PG_REQUIRED=1, so a test that needs
+# the binaries fails instead of skipping.
+name: PostgreSQL (Linux)
+description: Install PostgreSQL 17 and 16 with pgvector and point the tests at their bin/ directories
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        # The tests initdb their own clusters, so don't create and start a default one.
+        sudo install -d /etc/postgresql-common
+        echo 'create_main_cluster = false' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+        sudo apt-get install -y --no-install-recommends postgresql-common
+        sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+        sudo apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold \
+          postgresql-17 postgresql-17-pgvector postgresql-16 postgresql-16-pgvector
+        echo "ONTOLOGICAL_PG_BIN=/usr/lib/postgresql/17/bin" >>"$GITHUB_ENV"
+        echo "ONTOLOGICAL_PG16_BIN=/usr/lib/postgresql/16/bin" >>"$GITHUB_ENV"
+        echo "ONTOLOGICAL_PG_REQUIRED=1" >>"$GITHUB_ENV"

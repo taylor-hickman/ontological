@@ -2,62 +2,26 @@ name: Bundled Postgres
 
 # Builds the PostgreSQL 17 + pgvector binaries the app bundles (ARCHITECTURE.md §10, spike S4):
 # minimal configure, trimmed to the shipped file list, signed with the hardened runtime, then
-# smoke-tested and run through the store lifecycle tests (§5.3 and §12: engine/tests/store, which
-# test engine/ontological/store/pg.py and its Alembic chains, and ops.llm_call through
-# engine/ontological/llm/calls.py, and Chinook's catalog ingest through
-# engine/ontological/catalog/ and a source executor), the engine's idle shutdown on the real
-# store (engine/tests/engine/test_engine_pg.py), dense search with the embedding model
-# (engine/tests/store/test_dense_search.py), the eval cluster's tests (eval/tests/test_cluster.py),
-# upstream's golden DAL suite on a Pagila and Chinook test cluster (engine/tests/golden_dal,
-# M2.1) and the Postgres source executor (engine/tests/sources/test_scanners.py, M2.2). Runs when
-# the scripts, the store, the embedder, the catalog ingest, the source executors, the vendored
-# chain, the engine's dependencies or the eval cluster change, or by hand.
+# smoke-tested and run through every test that needs Postgres on that tree: the store lifecycle
+# tests (engine/tests/store, including the macOS-only disk-full tests), the engine's idle shutdown
+# on the real store, upstream's golden DAL suite (M2.1), the Postgres source executor (M2.2) and
+# the eval cluster's tests.
+#
+# A macOS minute bills at ten times a Linux one, so this runs only when the bundled build or the
+# macOS-specific store code changes, or by hand from the Actions tab. ci.yml runs the same tests on
+# Linux against PGDG's packages on every change. Rerun this by hand before relying on its artifact
+# if the last run is older than the artifact retention period.
 on:
   push:
     branches: [main]
-    paths:
+    paths: &postgres-paths
       - tools/spikes/s4_postgres/**
       - tools/spikes/s5_pg_lifecycle/**
-      - engine/ontological/store/**
-      - engine/ontological/embed/**
-      - .github/actions/embedding-model/**
-      - engine/ontological/catalog/**
-      - engine/ontological/sources/**
-      - engine/ontological/llm/calls.py
-      - engine/auto_ontology/**
-      - engine/pyproject.toml
-      - engine/uv.lock
-      - engine/tests/store/**
-      - engine/tests/golden_dal/**
-      - engine/tests/upstream_fixtures/**
-      - engine/tests/engine/test_engine_pg.py
-      - engine/tests/sources/**
-      - eval/ontological_eval/cluster.py
-      - eval/ontological_eval/home.py
-      - eval/tests/test_cluster.py
+      - engine/ontological/store/pg.py
+      - engine/tests/store/test_pg_disk.py
       - .github/workflows/postgres.yml
   pull_request:
-    paths:
-      - tools/spikes/s4_postgres/**
-      - tools/spikes/s5_pg_lifecycle/**
-      - engine/ontological/store/**
-      - engine/ontological/embed/**
-      - .github/actions/embedding-model/**
-      - engine/ontological/catalog/**
-      - engine/ontological/sources/**
-      - engine/ontological/llm/calls.py
-      - engine/auto_ontology/**
-      - engine/pyproject.toml
-      - engine/uv.lock
-      - engine/tests/store/**
-      - engine/tests/golden_dal/**
-      - engine/tests/upstream_fixtures/**
-      - engine/tests/engine/test_engine_pg.py
-      - engine/tests/sources/**
-      - eval/ontological_eval/cluster.py
-      - eval/ontological_eval/home.py
-      - eval/tests/test_cluster.py
-      - .github/workflows/postgres.yml
+    paths: *postgres-paths
   workflow_dispatch:
 
 concurrency:

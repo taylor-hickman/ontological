@@ -56,7 +56,7 @@ ONTOLOGICAL_PG_BIN=<tree>/bin ONTOLOGICAL_PG16_BIN=<work>/postgres/bin uv run py
 
 The engine process tests in `tests/engine`, and the shim's, run the real engine with a fake store and need no binaries, except `test_engine_pg.py`, which runs it on the bundled Postgres with `ONTOLOGICAL_PG_BIN` set.
 
-The source executor tests in `tests/sources` run real executor processes on the SQLite, DuckDB, Parquet, CSV and JSON files they write. The Postgres and MySQL tests in `test_scanners.py` need servers, and skip without them. Postgres runs in a cluster of its own on the bundled binaries (`ONTOLOGICAL_PG_BIN`); MySQL is any server you name with a user that can create databases and users (`ci.yml` starts the runner's own). With Docker:
+The source executor tests in `tests/sources` run real executor processes on the SQLite, DuckDB, Parquet, CSV and JSON files they write. The Postgres and MySQL tests in `test_scanners.py` need servers, and skip without them. Postgres runs in a cluster of its own on the binaries `ONTOLOGICAL_PG_BIN` names (the bundled tree, or PGDG's packages in `ci.yml`); MySQL is any server you name with a user that can create databases and users (`ci.yml` starts the runner's own). With Docker:
 
 ```sh
 docker run -d --rm --name src-mysql -e MYSQL_ROOT_PASSWORD=pw -p 53306:3306 mysql:8.4
@@ -67,6 +67,6 @@ ONTOLOGICAL_PG_BIN=<tree>/bin ONTOLOGICAL_MYSQL_URL=mysql://root:pw@127.0.0.1:53
 
 The catalog ingest tests in `tests/store/test_ingest.py` build Chinook from upstream's fixture SQL (`tests/upstream_fixtures/dev_tools/fixtures/sql/chinook.sql`), extract it through a real source executor and write it to the bundled Postgres, so they need `ONTOLOGICAL_PG_BIN` like the rest of `tests/store`.
 
-`ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip; `postgres.yml` sets it.
+`ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip. CI sets it in two places: `ci.yml` runs these tests on every change on Linux, against PGDG's PostgreSQL 17 and 16 with pgvector (`.github/actions/postgres-linux`), and `postgres.yml` runs them on the bundled macOS tree when its build changes.
 
 Tests that run the embedding model (`tests/embed`, the embedder's engine tests and `tests/store/test_dense_search.py`) skip without `ONTOLOGICAL_MODEL_DIR`, and `ONTOLOGICAL_MODEL_REQUIRED=1` turns that into a failure. CI caches the model and sets both (`.github/actions/embedding-model`). The disk-full tests mount small disk images with `hdiutil`, so they run on macOS only.
