@@ -6,7 +6,9 @@
 # in upstream's canonical commit order, and so do the Claude calls. A table's terms and
 # attributes are written in one transaction. The FK stage reads the table's columns after
 # profiling has stored their samples, where upstream reads them before, so its prompt has
-# samples on a first compile. Embedding, the SQL-attribute and bridge stages are later work.
+# samples on a first compile. The Terms and attributes are embedded once the compile ends, not as
+# each table commits (ontological/embed/semantic.py). The SQL-attribute and bridge stages are
+# later work.
 
 """The minimal split compile (BUILD_PLAN.md M1.4; ARCHITECTURE.md §1.3, §6.4).
 
@@ -18,11 +20,13 @@ For each table with no Term yet, in canonical order:
 4. `table_terms`: propose its Terms and assign every non-FK column to one;
 5. write the Terms and their attributes.
 
-Then semantic FKs from the declared foreign keys. Every Claude call goes through the gateway,
-one at a time. An answer that fails validation takes upstream's deterministic fallback. When
-Claude doesn't answer at all (a rate limit, an overload, a logged-out or missing `claude`), the
-compile stops before writing that table, so it and the tables after it stay in the work list for
-the next run, which resumes there.
+Then semantic FKs from the declared foreign keys, and, given an embedder, the Terms' and
+attributes' vectors in the semantic layer (`ontological.embed.semantic`), for retrieval. Every
+Claude call goes through the gateway, one at a time. An answer that fails validation takes
+upstream's deterministic fallback. When Claude doesn't answer at all (a rate limit, an overload, a
+logged-out or missing `claude`), the compile stops before writing that table, so it and the tables
+after it stay in the work list for the next run, which resumes there. A stopped compile still
+embeds the tables it wrote.
 Packing small tables, chunking wide ones, checkpoints and the `merged` option are M3's.
 """
 
@@ -55,6 +59,9 @@ from ontological.compile.keys import fk_source_columns, suggest_keys
 from ontological.compile.models import ColumnAttributeSpec, TermProposal
 from ontological.compile.semantic_fk import SemanticFks, resolve_declared_fks
 from ontological.compile.terms import extract_terms
+from ontological.embed.embedder import LocalEmbedder
+from ontological.embed.search import semantic_vdb
+from ontological.embed.semantic import Synced, sync_database
 from ontological.profile.sample import TableProfile, profile_table
 from ontological.sources.executor import SourceExecutor
 
@@ -77,6 +84,7 @@ class Compiled:
     tables: list[CompiledTable]  # the tables written, or skipped, before any stop
     semantic_fks: SemanticFks | None  # None when the compile stopped
     stopped: ClaudeUnavailable | None = None  # why it stopped; the rest is left for the next run
+    vectors: Synced | None = None  # the semantic layer's sync; None without an embedder
 
     @property
     def complete(self) -> bool:
@@ -96,10 +104,12 @@ async def compile_database(
     gateway: Structured,
     *,
     probe_distinct_values: bool = True,
+    embedder: LocalEmbedder | None = None,
 ) -> Compiled:
-    """Compile every table of `database_name` that has no Term yet, then its semantic FKs.
-    `executor` holds the database's source. When Claude stops answering, returns what was done,
-    with `stopped` set, and writes nothing for the table it was on."""
+    """Compile every table of `database_name` that has no Term yet, then its semantic FKs, then,
+    given an `embedder`, sync the database's vectors in the semantic layer. `executor` holds the
+    database's source. When Claude stops answering, returns what was done, with `stopped` set,
+    and writes nothing for the table it was on."""
     tables = sorted(
         await asyncio.to_thread(fetch_all_tables_without_term, database_name),
         key=lambda t: commit_key(database_name, t),
@@ -120,10 +130,25 @@ async def compile_database(
                 len(tables) - position + 1,
                 e,
             )
-            return Compiled(database_name, done, None, stopped=e)
+            vectors = await _embed(database_name, embedder)
+            return Compiled(database_name, done, None, stopped=e, vectors=vectors)
         done.append(compiled)
     fks = await asyncio.to_thread(resolve_declared_fks, database_name)
-    return Compiled(database_name, done, fks)
+    return Compiled(database_name, done, fks, vectors=await _embed(database_name, embedder))
+
+
+async def _embed(database_name: str, embedder: LocalEmbedder | None) -> Synced | None:
+    if embedder is None:
+        return None
+
+    def sync() -> Synced:
+        vdb = semantic_vdb(embedder)
+        try:
+            return sync_database(vdb, database_name)
+        finally:
+            vdb.close()
+
+    return await asyncio.to_thread(sync)
 
 
 async def compile_table(
