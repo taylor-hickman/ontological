@@ -12,7 +12,8 @@ is down or a file that moved, is logged and left for the next start; the others 
 engine cancels the check before it stops the store.
 
 A refresh that finds new tables doesn't compile them: Jobs shows "N new tables, compile?" and
-waits (M3.8), and auto-compile, a setting that is off by default, comes with the job runner.
+waits (M3.8). Auto-compile, a setting that is off by default, would start the compile job (M3.1)
+for them; it waits for `app.setting`.
 """
 
 from __future__ import annotations

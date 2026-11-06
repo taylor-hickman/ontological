@@ -1,1 +1,2 @@
-"""Background jobs the engine runs (ARCHITECTURE.md §6, §9.1)."""
+"""Background jobs: their checkpoints in ops.job and ops.job_step, the ones running now, and the
+staleness check on engine start (ARCHITECTURE.md §9.1)."""

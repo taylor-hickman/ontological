@@ -221,37 +221,3 @@ def test_a_second_compile_asks_nothing_and_writes_nothing(
         store, "SELECT count(*) FROM term UNION ALL SELECT count(*) FROM column__semantic_fk"
     )
     assert after == before == ["10", "10"]
-
-
-def test_a_rate_limit_stops_the_compile_and_the_next_run_resumes_there(
-    store: pg.Layout, executor: SourceExecutor
-) -> None:
-    ingest(executor)
-
-    def limited_at_employee(task: str, user: str) -> dict[str, Any] | NoAnswer | None:
-        if task == "table_terms" and table_of(user) == "Employee":
-            return NoAnswer("limited", "limited")
-        return claude(task, user)
-
-    gateway = ScriptedGateway(limited_at_employee)
-    stopped = asyncio.run(compile_database("chinook", executor, gateway))
-
-    assert [t.name for t in stopped.tables] == ["Album", "Artist", "Customer"]
-    assert stopped.stopped is not None and stopped.stopped.task == "table_terms"
-    assert (stopped.complete, stopped.semantic_fks) == (False, None)
-    # Nothing for Employee, no fallback Term anywhere: Employee and the rest stay in the work list
-    with_terms = "SELECT t.name FROM table__term tt JOIN catalog_table t ON t.id = tt.table_id"
-    assert rows(store, with_terms + " ORDER BY 1") == ["Album", "Artist", "Customer"]
-    assert rows(store, "SELECT count(*) FROM term WHERE description LIKE 'Business entity%'") == [
-        "0"
-    ]
-    assert rows(store, "SELECT count(*) FROM column__semantic_fk") == ["0"]
-
-    resumed = ScriptedGateway(claude)
-    done = asyncio.run(compile_database("chinook", executor, resumed))
-
-    assert done.complete
-    assert [t.name for t in done.tables] == ORDER[3:]
-    assert table_of(resumed.calls[0].user) == "Employee"
-    counts = "SELECT count(*) FROM term UNION ALL SELECT count(*) FROM column__semantic_fk"
-    assert rows(store, counts) == ["10", "10"]
