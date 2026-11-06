@@ -58,6 +58,8 @@ The engine process tests in `tests/engine`, and the shim's, run the real engine 
 
 The source executor tests in `tests/sources` run real executor processes on SQLite files they write. DuckDB downloads its `sqlite_scanner` extension the first time it attaches one; bundling the extensions with autoinstall off is M7.2.
 
+The catalog ingest tests in `tests/store/test_ingest.py` build Chinook from upstream's fixture SQL (`tests/upstream_fixtures/dev_tools/fixtures/sql/chinook.sql`), extract it through a real source executor and write it to the bundled Postgres, so they need `ONTOLOGICAL_PG_BIN` like the rest of `tests/store`.
+
 `ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip; `postgres.yml` sets it.
 
 Tests that run the embedding model (`tests/embed`, the embedder's engine tests and `tests/store/test_dense_search.py`) skip without `ONTOLOGICAL_MODEL_DIR`, and `ONTOLOGICAL_MODEL_REQUIRED=1` turns that into a failure. CI caches the model and sets both (`.github/actions/embedding-model`). The disk-full tests mount small disk images with `hdiutil`, so they run on macOS only.

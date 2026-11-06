@@ -25,7 +25,7 @@ Run these from `apps/desktop/`, with Node 24 and pnpm 11. The end-to-end tests a
 
 ## The engine
 
-At launch, main attaches to the engine `engine.json` names, or starts one, and takes a lease; quitting releases it and leaves the engine to idle out. The preload hands the renderer `engine()` and `onEngine()`, whose state carries `{engineUrl, token}` while the engine runs, and the status bar shows it.
+At launch, main attaches to the engine `engine.json` names, or starts one, and takes a lease; quitting releases it and leaves the engine to idle out. The preload hands the renderer `engine()` and `onEngine()`, whose state carries `{engineUrl, token}` while the engine runs, and the status bar shows it. While the engine is restarting or has stopped, every screen shows the Engine crashed banner (DESIGN.md §6); for an engine the app attached to, its Reconnect button calls `reconnectEngine()`, which runs attach-or-start again.
 
 From the repo, the app runs the engine with `uv run --project ../../engine ontological-engine`, which needs the bundled Postgres: set `ONTOLOGICAL_PG_BIN` to a `bin/` folder from `tools/spikes/s4_postgres` before `pnpm dev`. Without it the status bar says the engine failed to start, and its tooltip says why. `ONTOLOGICAL_ENGINE_CMD`, a JSON array, replaces the command; the end-to-end tests use it to run the engine with a fake store (`engine/tests/engine/serve_stub.py`). The engine's log is `logs/engine.log` in the userData folder, which Help → Open logs folder opens.
 

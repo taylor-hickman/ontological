@@ -318,6 +318,11 @@ function registerIpc(): void {
     return engineState
   })
 
+  ipcMain.handle(IPC.reconnectEngine, async (event) => {
+    fromMainWindow(event)
+    await supervisor?.reconnect()
+  })
+
   ipcMain.handle(IPC.notify, (event, title: unknown, body: unknown) => {
     const win = fromMainWindow(event)
     const n = parseNotification(title, body)

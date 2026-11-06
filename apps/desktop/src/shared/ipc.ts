@@ -51,6 +51,11 @@ export interface OntologicalApi {
   engine(): Promise<EngineState>
   /** Subscribes to engine state changes; returns the unsubscribe function. */
   onEngine(listener: (state: EngineState) => void): () => void
+  /**
+   * Once an engine the app attached to has stopped: attaches to a live engine or starts one.
+   * Resolves when that attempt ends; `onEngine` reports how it went. Does nothing in other states.
+   */
+  reconnectEngine(): Promise<void>
 }
 
 export const IPC = {
@@ -63,5 +68,6 @@ export const IPC = {
   notify: 'notify',
   engine: 'engine:get',
   engineState: 'engine:state',
+  reconnectEngine: 'engine:reconnect',
   initialState: 'shell:initial-state'
 } as const
