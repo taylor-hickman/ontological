@@ -12,6 +12,9 @@ from keyring.backend import KeyringBackend
 from langchain_core.embeddings import Embeddings
 from pydantic import BaseModel
 
+from ontological.llm.calls import Outcome
+from ontological.llm.gateway import GatewayStatus, State
+
 
 class HashEmbeddings(Embeddings):
     """Deterministic unit vectors from a text's hash, `dim` wide. The local embedder is M1.5."""
@@ -60,19 +63,44 @@ class StructuredCall:
     prompt_version: str
 
 
-Answer = Callable[[str, str], dict[str, Any] | None]
+@dataclass(frozen=True)
+class NoAnswer:
+    """What a scripted call returns when Claude didn't answer: the call's outcome, and the state
+    the gateway is left in."""
+
+    outcome: Outcome = "limited"
+    state: State = "limited"
+
+
+# The model's JSON, None for an answer that failed validation, or NoAnswer
+Answer = Callable[[str, str], dict[str, Any] | NoAnswer | None]
 
 
 @dataclass
 class ScriptedGateway:
     """`ClaudeGateway.structured()` for compile tests: `answer(task, user)` gives the model's
-    JSON, or None for a failed call. Records every call, and the most that were in flight at
-    once."""
+    JSON, None for an invalid answer, or `NoAnswer`. Records every call, and the most that were
+    in flight at once."""
 
     answer: Answer
     calls: list[StructuredCall] = field(default_factory=list[StructuredCall])
     in_flight: int = 0
     peak: int = 0
+    last_outcome: Outcome | None = None
+    state: State = "ready"
+
+    @property
+    def status(self) -> GatewayStatus:
+        return GatewayStatus(
+            state=self.state,
+            cli_path=None,
+            installed=self.state != "not_installed",
+            version=None,
+            logged_in=self.state != "needs_login",
+            rate_limit=None,
+            limited_until=None,
+            error=None if self.state == "ready" else self.state,
+        )
 
     async def structured[M: BaseModel](
         self,
@@ -92,6 +120,10 @@ class ScriptedGateway:
             output = self.answer(task, user)
         finally:
             self.in_flight -= 1
+        if isinstance(output, NoAnswer):
+            self.last_outcome, self.state = output.outcome, output.state
+            return None
+        self.last_outcome = "invalid" if output is None else "ok"
         return None if output is None else schema.model_validate(output)
 
     def tasks(self) -> list[str]:

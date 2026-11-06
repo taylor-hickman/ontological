@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from ontological.compile.gateway import Structured
+from ontological.compile.gateway import Structured, ask
 from ontological.compile.models import FkAndPkResult, PotentialFkSuggestion, TableKeys
 from ontological.compile.samples import format_sample_values
 
@@ -165,15 +165,14 @@ async def suggest_keys(
 ) -> TableKeys:
     """Ask which columns that aren't a PK or a declared FK may be foreign keys, and whether the
     table is a junction. Columns that declared FKs point at aren't candidates: they identify rows
-    in this table. A failed call gives no suggestions (upstream's fallback)."""
+    in this table. An invalid answer gives no suggestions (upstream's fallback); no answer
+    raises `ClaudeUnavailable`."""
     profiling = profiling or {}
     built = build_prompt(table, ctx, profiling)
     if built is None:
         return TableKeys()
     prompt, candidates = built
-    result = await gateway.structured(
-        TASK, SYSTEM, prompt, FkAndPkResult, prompt_version=PROMPT_VERSION
-    )
+    result = await ask(gateway, TASK, SYSTEM, prompt, FkAndPkResult, PROMPT_VERSION)
     if result is None:
         return TableKeys()
 

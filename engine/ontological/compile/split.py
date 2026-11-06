@@ -19,7 +19,10 @@ For each table with no Term yet, in canonical order:
 5. write the Terms and their attributes.
 
 Then semantic FKs from the declared foreign keys. Every Claude call goes through the gateway,
-one at a time; a failed call takes upstream's deterministic fallback, so a table always compiles.
+one at a time. An answer that fails validation takes upstream's deterministic fallback. When
+Claude doesn't answer at all (a rate limit, an overload, a logged-out or missing `claude`), the
+compile stops before writing that table, so it and the tables after it stay in the work list for
+the next run, which resumes there.
 Packing small tables, chunking wide ones, checkpoints and the `merged` option are M3's.
 """
 
@@ -47,7 +50,7 @@ from auto_ontology.dal.datasources import (
 from auto_ontology.dal.session import write_transaction
 from auto_ontology.dal.terms import upsert_table_term
 from ontological.compile.descriptions import column_attribute_specs
-from ontological.compile.gateway import Structured
+from ontological.compile.gateway import ClaudeUnavailable, Structured
 from ontological.compile.keys import fk_source_columns, suggest_keys
 from ontological.compile.models import ColumnAttributeSpec, TermProposal
 from ontological.compile.semantic_fk import SemanticFks, resolve_declared_fks
@@ -71,8 +74,13 @@ class CompiledTable:
 @dataclass(frozen=True)
 class Compiled:
     database_name: str
-    tables: list[CompiledTable]
-    semantic_fks: SemanticFks
+    tables: list[CompiledTable]  # the tables written, or skipped, before any stop
+    semantic_fks: SemanticFks | None  # None when the compile stopped
+    stopped: ClaudeUnavailable | None = None  # why it stopped; the rest is left for the next run
+
+    @property
+    def complete(self) -> bool:
+        return self.stopped is None
 
 
 def commit_key(database_name: str, table: dict[str, Any]) -> tuple[str, ...]:
@@ -90,7 +98,8 @@ async def compile_database(
     probe_distinct_values: bool = True,
 ) -> Compiled:
     """Compile every table of `database_name` that has no Term yet, then its semantic FKs.
-    `executor` holds the database's source."""
+    `executor` holds the database's source. When Claude stops answering, returns what was done,
+    with `stopped` set, and writes nothing for the table it was on."""
     tables = sorted(
         await asyncio.to_thread(fetch_all_tables_without_term, database_name),
         key=lambda t: commit_key(database_name, t),
@@ -99,11 +108,20 @@ async def compile_database(
     done: list[CompiledTable] = []
     for position, table in enumerate(tables, start=1):
         logger.info("[%d/%d] %s", position, len(tables), table["name"])
-        done.append(
-            await compile_table(
+        try:
+            compiled = await compile_table(
                 table, executor, gateway, probe_distinct_values=probe_distinct_values
             )
-        )
+        except ClaudeUnavailable as e:
+            logger.warning(
+                "compile of %s stopped at %s, %d table(s) left: %s",
+                database_name,
+                table["name"],
+                len(tables) - position + 1,
+                e,
+            )
+            return Compiled(database_name, done, None, stopped=e)
+        done.append(compiled)
     fks = await asyncio.to_thread(resolve_declared_fks, database_name)
     return Compiled(database_name, done, fks)
 

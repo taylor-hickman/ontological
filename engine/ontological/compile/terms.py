@@ -17,7 +17,7 @@ import re
 from typing import Any
 
 from ontological.compile.descriptions import to_term_name
-from ontological.compile.gateway import Structured
+from ontological.compile.gateway import Structured, ask
 from ontological.compile.models import (
     ColumnAttributeSpec,
     RawTableTermsResult,
@@ -77,7 +77,7 @@ def apply_display_names(terms: list[TermProposal], specs: list[ColumnAttributeSp
 
 
 def fallback_terms(table: dict[str, Any], specs: list[ColumnAttributeSpec]) -> list[TermProposal]:
-    """One Term named after the table, holding every column: what a failed call gives."""
+    """One Term named after the table, holding every column: what an invalid answer gives."""
     terms = [
         TermProposal(
             name=to_term_name(table["name"]),
@@ -141,15 +141,11 @@ async def extract_terms(
     gateway: Structured, table: dict[str, Any], specs: list[ColumnAttributeSpec]
 ) -> list[TermProposal]:
     """One or more Terms for the table, every spec assigned to one; the fallback Term when the
-    call fails."""
+    answer is invalid. Raises `ClaudeUnavailable` when Claude doesn't answer."""
     if not specs:
         return fallback_terms(table, specs)
-    result = await gateway.structured(
-        TASK,
-        SYSTEM,
-        build_prompt(table, specs),
-        RawTableTermsResult,
-        prompt_version=PROMPT_VERSION,
+    result = await ask(
+        gateway, TASK, SYSTEM, build_prompt(table, specs), RawTableTermsResult, PROMPT_VERSION
     )
     if result is None:
         return fallback_terms(table, specs)

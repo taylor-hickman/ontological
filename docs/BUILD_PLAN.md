@@ -143,6 +143,8 @@ The smoke score in M1 only needs to exist. It will be low, because BIRD and WWI 
 
 Profiling sends its queries through the executor's `probe` and computes the statistics in the engine. JSON key paths, the mixed-date-shape warnings and the move into the executor wait for M2.5. Synonyms (`table_synonyms`) wait for M3.2, and Chinook has no table descriptions for them to read anyway. Semantic FKs come from declared FKs only. Where a table has several FKs to the same attribute, the join default is upstream's deterministic fallback, the first column by name. Upstream embeds each table's Terms as it writes them, and nothing here embeds: M1.6 builds dense retrieval over Terms and attributes, so it writes those vectors.
 
+Upstream's fallbacks only cover an answer that fails validation. When Claude doesn't answer at all (a rate limit, an overload, a logged-out or missing `claude`, a failed spawn), compile stops before writing the table it is on. That table and the rest stay in the work list, and the next run resumes there. Otherwise a fallback Term would be committed and the table would never be compiled again. M3.1 adds the pause until `resets_at`.
+
 ### M2: Catalog depth and the Electron shell
 
 Produces: every v1 source type, a correct and idempotent catalog, the golden DAL suite as a conformance gate, and an Electron app that onboards the user and shows the catalog.

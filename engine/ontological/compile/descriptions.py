@@ -18,7 +18,7 @@ import logging
 import re
 from typing import Any
 
-from ontological.compile.gateway import Structured
+from ontological.compile.gateway import Structured, ask
 from ontological.compile.keys import fk_source_columns
 from ontological.compile.models import ColumnAttributeSpec, ColumnDescriptionResult
 from ontological.profile.date_format import is_date_type
@@ -108,13 +108,15 @@ def build_prompt(columns: list[dict[str, Any]], profiling: dict[str, dict[str, A
 async def describe_batch(
     gateway: Structured, columns: list[dict[str, Any]], profiling: dict[str, dict[str, Any]]
 ) -> dict[str, str]:
-    """`{column_name: description}` for one batch; empty when the call fails."""
-    result = await gateway.structured(
+    """`{column_name: description}` for one batch; empty when the answer is invalid. Raises
+    `ClaudeUnavailable` when Claude doesn't answer."""
+    result = await ask(
+        gateway,
         TASK,
         SYSTEM,
         build_prompt(columns, profiling),
         ColumnDescriptionResult,
-        prompt_version=PROMPT_VERSION,
+        PROMPT_VERSION,
     )
     if result is None:
         logger.warning("column description batch failed; proceeding without them")
@@ -143,8 +145,8 @@ async def describe_batch(
 async def describe_columns(
     gateway: Structured, columns: list[dict[str, Any]], profiling: dict[str, dict[str, Any]]
 ) -> dict[str, str]:
-    """Descriptions for `columns`, in batches of `BATCH_SIZE`, one call at a time. A failed
-    batch is skipped."""
+    """Descriptions for `columns`, in batches of `BATCH_SIZE`, one call at a time. A batch with
+    an invalid answer is skipped."""
     descriptions: dict[str, str] = {}
     for i in range(0, len(columns), BATCH_SIZE):
         descriptions.update(await describe_batch(gateway, columns[i : i + BATCH_SIZE], profiling))

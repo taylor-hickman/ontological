@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from typing import Any
 
-from fakes import ScriptedGateway
+import pytest
+from fakes import Answer, NoAnswer, ScriptedGateway
 
 from ontological.compile import descriptions, keys, terms
+from ontological.compile.gateway import ClaudeUnavailable
 from ontological.compile.models import ColumnAttributeSpec
 
 INVOICE = {"id": "t-1", "name": "Invoice", "schema_name": "main", "description": None}
@@ -117,7 +119,7 @@ def test_keys_skip_the_call_for_a_two_column_table_with_no_candidates() -> None:
     assert (got.suggestions, got.is_junction_table, gateway.calls) == ([], False, [])
 
 
-def test_a_failed_keys_call_suggests_nothing() -> None:
+def test_an_invalid_keys_answer_suggests_nothing() -> None:
     gateway = ScriptedGateway(lambda task, user: None)
     got = run(keys.suggest_keys(gateway, INVOICE, INVOICE_CTX, PROFILING))
     assert (got.suggestions, got.is_junction_table) == ([], False)
@@ -195,7 +197,7 @@ def test_specs_leave_out_fk_columns_and_describe_only_undescribed_ones() -> None
     ]
 
 
-def test_a_failed_description_batch_leaves_its_columns_undescribed() -> None:
+def test_an_invalid_description_batch_leaves_its_columns_undescribed() -> None:
     gateway = ScriptedGateway(lambda task, user: None)
     columns = [{"name": "Total", "data_type": "DOUBLE"}]
 
@@ -263,7 +265,7 @@ def test_terms_keep_each_known_column_once_and_give_leftovers_to_the_first_term(
     assert [c.task for c in gateway.calls] == ["table_terms"]
 
 
-def test_a_failed_terms_call_names_one_term_after_the_table() -> None:
+def test_an_invalid_terms_answer_names_one_term_after_the_table() -> None:
     gateway = ScriptedGateway(lambda task, user: None)
 
     [term] = run(terms.extract_terms(gateway, {"name": "invoice_line"}, specs()))
@@ -273,3 +275,42 @@ def test_a_failed_terms_call_names_one_term_after_the_table() -> None:
         "Business entity represented by table invoice_line",
     )
     assert [a.source_column for a in term.attributes] == ["InvoiceId", "Total", "BillingCity"]
+
+
+# --- no answer ---------------------------------------------------------------------------------
+
+NO_ANSWERS = [
+    pytest.param(NoAnswer("limited", "limited"), id="rate-limited"),
+    pytest.param(NoAnswer("limited", "ready"), id="overloaded"),
+    pytest.param(NoAnswer("error", "needs_login"), id="logged-out"),
+    pytest.param(NoAnswer("error", "not_installed"), id="no-claude"),
+    pytest.param(NoAnswer("error", "ready"), id="spawn-failed"),
+]
+
+
+@pytest.mark.parametrize("no_answer", NO_ANSWERS)
+def test_no_answer_raises_instead_of_falling_back(no_answer: NoAnswer) -> None:
+    """A fallback is for a model that answered badly. Committed for a Claude that didn't answer,
+    it would stand as the table's ontology for good."""
+    columns = [{"name": "Total", "data_type": "DOUBLE"}]
+    stages: list[Callable[[ScriptedGateway], Coroutine[Any, Any, object]]] = [
+        lambda g: keys.suggest_keys(g, INVOICE, INVOICE_CTX, PROFILING),
+        lambda g: descriptions.column_attribute_specs(g, columns, [], profiling=PROFILING),
+        lambda g: terms.extract_terms(g, INVOICE, specs()),
+    ]
+    for stage in stages:
+        gateway = ScriptedGateway(lambda task, user: no_answer)
+        with pytest.raises(ClaudeUnavailable) as raised:
+            run(stage(gateway))
+        assert raised.value.outcome == no_answer.outcome
+        assert raised.value.status.state == no_answer.state
+
+
+def test_descriptions_stop_at_the_batch_claude_does_not_answer() -> None:
+    columns = [{"name": f"c{i}", "data_type": "INTEGER"} for i in range(20)]
+    answers: list[Answer] = [describe_all, lambda task, user: NoAnswer()]
+    gateway = ScriptedGateway(lambda task, user: answers[len(gateway.calls) - 1](task, user))
+
+    with pytest.raises(ClaudeUnavailable):
+        run(descriptions.describe_columns(gateway, columns, {}))
+    assert len(gateway.calls) == 2

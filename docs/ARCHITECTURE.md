@@ -441,7 +441,7 @@ Callers name a task, never a model. The route table (§6.3) picks the model and 
 
 `status.state` is one of `unknown` (nothing has run yet), `ready`, `not_installed`, `outdated` (older than the `claude` the contract tests last passed on, 2.1.318), `needs_login` or `limited` (a `rejected` rate-limit event whose `resets_at` hasn't passed). The calls update it as they go, and `check()` re-resolves the binary, reads `claude --version` and pings on the `ping` route.
 
-`structured()` keeps upstream's contract: return `None` on failure so the caller falls back deterministically. That lets the upstream stage code port with minimal changes. `agent()` is new; the answer path uses it (§8). `AgentRun` records every tool call in order, which the post-run check in §8.1 reads.
+`structured()` keeps upstream's contract: return `None` on failure so the caller falls back deterministically. That lets the upstream stage code port with minimal changes. `last_outcome` tells the two kinds of `None` apart: `invalid` means the model answered badly, so the caller falls back; `limited` or `error` means Claude didn't answer, so compile stops before writing the table instead of committing a fallback that would stand for good. `agent()` is new; the answer path uses it (§8). `AgentRun` records every tool call in order, which the post-run check in §8.1 reads.
 
 ### 6.2 How a call is made
 
