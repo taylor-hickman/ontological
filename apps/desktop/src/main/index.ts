@@ -268,7 +268,7 @@ function registerIpc(): void {
   // Each document load asks, so a reload gets the screen and theme open now. A sync message must
   // always answer, so an unknown sender gets null and the preload's defaults.
   ipcMain.on(IPC.initialState, (event) => {
-    const initial: InitialShellState = { screen: state.screen, theme: state.theme }
+    const initial: InitialShellState = { screen: state.screen, theme: state.theme, setupClosed: state.setupClosed }
     event.returnValue = isMainWindowSender(event) ? initial : null
   })
 
@@ -276,6 +276,12 @@ function registerIpc(): void {
   ipcMain.on(IPC.setScreen, (event, screenId: unknown) => {
     if (!isMainWindowSender(event) || !isScreenId(screenId)) return
     state.screen = screenId
+    saveStateSoon()
+  })
+
+  ipcMain.on(IPC.closeSetup, (event) => {
+    if (!isMainWindowSender(event)) return
+    state.setupClosed = true
     saveStateSoon()
   })
 

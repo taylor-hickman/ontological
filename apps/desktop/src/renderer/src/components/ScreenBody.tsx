@@ -1,5 +1,7 @@
 import type { ScreenId, ThemeSource } from '@shared/shell'
+import type { ComponentProps } from 'react'
 import type { ScreenFrame } from '../screens'
+import { Catalog } from '../screens/Catalog'
 import { EngineBanner } from './EngineBanner'
 import { Settings } from './Settings'
 
@@ -8,10 +10,11 @@ interface ScreenBodyProps {
   frame: ScreenFrame
   theme: ThemeSource
   onThemeChange(theme: ThemeSource): void
+  catalog: ComponentProps<typeof Catalog>
 }
 
-/** The main column. Until the engine exists, each screen is an empty frame that says what will go here. */
-export function ScreenBody({ screen, frame, theme, onThemeChange }: ScreenBodyProps) {
+/** The main column. Screens not built yet are an empty frame that says what will go here. */
+export function ScreenBody({ screen, frame, theme, onThemeChange, catalog }: ScreenBodyProps) {
   return (
     <section
       aria-label={frame.main}
@@ -21,6 +24,8 @@ export function ScreenBody({ screen, frame, theme, onThemeChange }: ScreenBodyPr
       <EngineBanner />
       {screen === 'settings' ? (
         <Settings theme={theme} onThemeChange={onThemeChange} />
+      ) : screen === 'catalog' ? (
+        <Catalog {...catalog} />
       ) : (
         <div className="flex flex-col gap-1 rounded-xl border border-dashed border-text-faint px-6 py-8">
           <p className="m-0 font-medium">{frame.placeholder}</p>

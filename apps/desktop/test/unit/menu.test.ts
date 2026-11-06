@@ -54,12 +54,14 @@ describe('buildMenuTemplate', () => {
     click('toggle-rail')
     click('search')
     click('new-question')
+    click('add-source')
     expect(vi.mocked(actions.send).mock.calls.map(([c]) => c)).toEqual([
       { type: 'navigate', screen: 'ontology' },
       { type: 'navigate', screen: 'settings' },
       { type: 'toggle-rail' },
       { type: 'focus-search' },
-      { type: 'new-question' }
+      { type: 'new-question' },
+      { type: 'add-source' }
     ])
   })
 
@@ -71,9 +73,10 @@ describe('buildMenuTemplate', () => {
     expect(actions.setTheme).toHaveBeenCalledWith('light')
   })
 
-  it('lists the engine actions disabled until the engine exists', () => {
+  it('lists Import and Export disabled until they exist', () => {
     const { byId } = build()
-    for (const id of ['add-source', 'import', 'export']) expect(byId(id).enabled, id).toBe(false)
+    for (const id of ['import', 'export']) expect(byId(id).enabled, id).toBe(false)
+    expect(byId('add-source').enabled).not.toBe(false)
   })
 
   it('keeps macOS-only roles off other platforms', () => {

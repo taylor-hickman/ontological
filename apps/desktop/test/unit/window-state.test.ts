@@ -14,9 +14,15 @@ describe('parseState', () => {
 
   it('keeps valid fields and drops invalid ones', () => {
     expect(
-      parseState({ bounds: { x: 10, y: 20, width: 1000.4, height: 700 }, maximized: true, screen: 'jobs', theme: 'dark' })
-    ).toEqual({ bounds: { x: 10, y: 20, width: 1000, height: 700 }, maximized: true, screen: 'jobs', theme: 'dark' })
-    expect(parseState({ bounds: { width: 'wide' }, screen: 'admin', theme: 'sepia' })).toEqual(DEFAULT_STATE)
+      parseState({
+        bounds: { x: 10, y: 20, width: 1000.4, height: 700 },
+        maximized: true,
+        screen: 'jobs',
+        theme: 'dark',
+        setupClosed: true
+      })
+    ).toEqual({ bounds: { x: 10, y: 20, width: 1000, height: 700 }, maximized: true, screen: 'jobs', theme: 'dark', setupClosed: true })
+    expect(parseState({ bounds: { width: 'wide' }, screen: 'admin', theme: 'sepia', setupClosed: 'yes' })).toEqual(DEFAULT_STATE)
   })
 
   it('accepts Settings as the open screen', () => {

@@ -1,10 +1,13 @@
+import type { Source } from '@shared/api'
 import { SCREENS, type ScreenId } from '@shared/shell'
 import { shortcut } from '../shortcut'
 import { ChevronDownIcon, DatabaseIcon, Logo, ScreenIcon, SettingsIcon } from './icons'
 
 interface SidebarProps {
   screen: ScreenId
+  sources: Source[] | undefined
   onNavigate(screen: ScreenId): void
+  onAddSource(): void
 }
 
 function NavItem({
@@ -37,7 +40,8 @@ function NavItem({
 }
 
 /** DESIGN.md §3.3: 232 px, window controls, wordmark, source switcher, navigation, screen context, Settings. */
-export function Sidebar({ screen, onNavigate }: SidebarProps) {
+export function Sidebar({ screen, sources, onNavigate, onAddSource }: SidebarProps) {
+  const first = sources?.[0]
   return (
     <nav aria-label="Main" className="flex w-[232px] shrink-0 flex-col border-r border-border bg-chrome px-2.5 pb-3">
       {/* The traffic lights sit in this 52 px band (titleBarStyle hiddenInset). */}
@@ -46,18 +50,22 @@ export function Sidebar({ screen, onNavigate }: SidebarProps) {
         <Logo />
         <span className="text-[15px] font-semibold tracking-[-0.01em]">Ontological</span>
       </div>
-      {/* The source switcher has nothing to switch until the engine can add sources. */}
+      {/* Switching between sources waits for Ask; for now it names them, or adds the first. */}
       <button
         type="button"
-        disabled
+        data-testid="source-switcher"
+        disabled={first !== undefined}
+        onClick={onAddSource}
         className="mb-3.5 flex min-h-11 w-full items-center gap-2.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-left text-text"
       >
         <span className="text-text-muted">
           <DatabaseIcon />
         </span>
         <span className="flex flex-1 flex-col leading-[1.2]">
-          <span className="font-medium">No sources</span>
-          <span className="text-xs text-text-muted">Add one to start</span>
+          <span className="font-medium">{first ? first.name : 'No sources'}</span>
+          <span className="text-xs text-text-muted">
+            {first ? (sources!.length > 1 ? `and ${sources!.length - 1} more` : `${first.tables} tables`) : 'Add one to start'}
+          </span>
         </span>
         <span className="text-text-muted">
           <ChevronDownIcon />

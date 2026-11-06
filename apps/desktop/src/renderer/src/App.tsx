@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
+import type { Source } from '@shared/api'
 import type { ScreenId, ThemeSource } from '@shared/shell'
+import { useEngineGet } from './api/engine'
 import { Header } from './components/Header'
 import { Rail } from './components/Rail'
 import { ScreenBody } from './components/ScreenBody'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
 import { FRAMES } from './screens'
+import { TablePanel } from './screens/Catalog'
+import { Onboarding, type Step } from './screens/onboarding/Onboarding'
 import { applyTheme } from './theme'
 import { useMediaQuery } from './useMediaQuery'
 
@@ -22,6 +26,18 @@ export function App(): React.JSX.Element {
   const searchRef = useRef<HTMLInputElement>(null)
   const narrowRef = useRef(narrow)
   narrowRef.current = narrow
+  const [sourcesKey, setSourcesKey] = useState(0)
+  const sources = useEngineGet<Source[]>('/sources', sourcesKey)
+  // Onboarding opens by itself while there are no sources, until the user leaves it; File → Add
+  // source opens it at its source step.
+  const [onboarding, setOnboarding] = useState<Step | null>(null)
+  const [onboardingDismissed, setOnboardingDismissed] = useState(api.initial.setupClosed)
+  const [catalogTable, setCatalogTable] = useState<string | null>(null)
+  const noSources = sources.data?.length === 0
+
+  useEffect(() => {
+    if (noSources && !onboardingDismissed) setOnboarding((step) => step ?? 'claude')
+  }, [noSources, onboardingDismissed])
 
   const changeTheme = (next: ThemeSource): void => {
     setTheme(next)
@@ -44,6 +60,9 @@ export function App(): React.JSX.Element {
           case 'new-question':
             navigate('ask')
             break
+          case 'add-source':
+            setOnboarding('source')
+            break
           case 'focus-search':
             searchRef.current?.focus()
             break
@@ -63,12 +82,39 @@ export function App(): React.JSX.Element {
   const frame = FRAMES[screen]
   const showRail = frame.rail !== null && (narrow ? sheetOpen : railOpen)
 
+  if (onboarding !== null) {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="min-h-0 flex-1">
+          <Onboarding
+            start={onboarding}
+            sources={sources.data ?? []}
+            onSourcesChanged={() => setSourcesKey((n) => n + 1)}
+            onDone={() => {
+              setOnboarding(null)
+              setOnboardingDismissed(true)
+              api.closeSetup()
+              if (sources.data?.length) navigate('catalog')
+            }}
+          />
+        </div>
+        <StatusBar />
+      </div>
+    )
+  }
+
+  const selectTable = (id: string): void => {
+    setCatalogTable(id)
+    if (narrowRef.current) setSheetOpen(true)
+    else setRailOpen(true)
+  }
+
   return (
     <div className="flex h-full flex-col" data-screen={screen}>
       <div className="flex min-h-0 flex-1">
-        <Sidebar screen={screen} onNavigate={navigate} />
+        <Sidebar screen={screen} sources={sources.data} onNavigate={navigate} onAddSource={() => setOnboarding('source')} />
         <div className="flex min-w-0 flex-1 flex-col">
-          <Header title={frame.title} screen={screen} searchRef={searchRef} />
+          <Header title={frame.title} screen={screen} searchRef={searchRef} onAddSource={() => setOnboarding('source')} />
           <div className="relative flex min-h-0 flex-1 flex-wrap overflow-auto">
             <ScreenBody
               screen={screen}
@@ -78,9 +124,18 @@ export function App(): React.JSX.Element {
                 changeTheme(next)
                 void api.setTheme(next)
               }}
+              catalog={{
+                sources: sources.data,
+                sourcesError: sources.error,
+                selected: catalogTable,
+                onSelect: selectTable,
+                onAddSource: () => setOnboarding('source')
+              }}
             />
             {showRail && frame.rail !== null && (
-              <Rail label={frame.rail} sheet={narrow} onClose={() => setSheetOpen(false)} />
+              <Rail label={frame.rail} sheet={narrow} onClose={() => setSheetOpen(false)}>
+                {screen === 'catalog' ? <TablePanel tableId={catalogTable} /> : undefined}
+              </Rail>
             )}
           </div>
         </div>

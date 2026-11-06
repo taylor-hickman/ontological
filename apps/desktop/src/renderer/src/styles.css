@@ -49,6 +49,16 @@
   /* Not in §2.1's table: the hover fill on sidebar rows, from the mockups. */
   --nav-hover: #e0e3e9;
   --shadow-float: 0 6px 20px rgba(20, 24, 33, 0.06);
+  /* Not in §2.1's table: onboarding's step rail, dark in both themes (DESIGN.md §5.1). */
+  --onboard-rail: #151821;
+  --onboard-text: #ffffff;
+  --onboard-text-2: #c9cdd5;
+  --onboard-muted: #a9afbb;
+  --onboard-line: #5c6270;
+  --onboard-accent: #8a96ea;
+  --onboard-done: #0a7259;
+  /* The current onboarding step's raised card. */
+  --shadow-step: 0 10px 30px rgba(52, 70, 212, 0.08);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -83,6 +93,7 @@
     --queued: #2a2f38;
     --nav-hover: #1f232b;
     --shadow-float: none;
+    --shadow-step: none;
   }
 }
 
@@ -117,6 +128,7 @@
   --queued: #2a2f38;
   --nav-hover: #1f232b;
   --shadow-float: none;
+  --shadow-step: none;
 }
 
 @theme inline {
@@ -139,6 +151,18 @@
   --color-accent-soft: var(--accent-soft);
   --color-accent-border: var(--accent-border);
   --color-verified: var(--verified);
+  --color-verified-text: var(--verified-text);
+  --color-verified-soft: var(--verified-soft);
+  --color-verified-border: var(--verified-border);
+  --color-accent-muted: var(--accent-muted);
+  --color-meter-warn: var(--meter-warn);
+  --color-onboard-rail: var(--onboard-rail);
+  --color-onboard-text: var(--onboard-text);
+  --color-onboard-text-2: var(--onboard-text-2);
+  --color-onboard-muted: var(--onboard-muted);
+  --color-onboard-line: var(--onboard-line);
+  --color-onboard-accent: var(--onboard-accent);
+  --color-onboard-done: var(--onboard-done);
   --color-attention: var(--attention);
   --color-attention-text: var(--attention-text);
   --color-attention-soft: var(--attention-soft);
@@ -146,6 +170,7 @@
   --color-queued: var(--queued);
   --color-nav-hover: var(--nav-hover);
   --shadow-float: var(--shadow-float);
+  --shadow-step: var(--shadow-step);
 }
 
 @layer base {
