@@ -66,7 +66,6 @@ def test_ingest_writes_wwi_and_a_bird_database_to_the_eval_store(
     results = ingest.run(home, pg_bin, ["wwi", "financial"])
 
     got = {r.name: r.ingested for r in results}
-    assert got["wwi"] is not None and got["financial"] is not None
     assert (got["wwi"].database_name, got["wwi"].tables, got["wwi"].skipped) == (
         "wideworldimporters",
         3,
@@ -122,12 +121,18 @@ def test_ingest_leaves_running_the_servers_it_found_running(home: Path, pg_bin: 
 
 
 def test_a_second_ingest_leaves_the_store_as_it_is(home: Path, pg_bin: Path, bird: Path) -> None:
-    ingest.run(home, pg_bin, ["wwi", "financial"])
+    """The second ingest diffs against the first (M2.3) and, with nothing changed, writes
+    nothing new."""
+    first = ingest.run(home, pg_bin, ["wwi", "financial"])
     before = catalog(home, pg_bin)
 
     again = ingest.run(home, pg_bin, ["financial", "wwi"])
 
-    assert [(r.name, r.ingested) for r in again] == [("financial", None), ("wwi", None)]
+    ids = {r.name: r.ingested.database_id for r in first}
+    assert [(r.name, r.ingested.database_id) for r in again] == [
+        ("financial", ids["financial"]),
+        ("wwi", ids["wwi"]),
+    ]
     assert catalog(home, pg_bin) == before
 
 

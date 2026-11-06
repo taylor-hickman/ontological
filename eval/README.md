@@ -54,7 +54,7 @@ psql -h "<home>/cluster/pgsocket" -p 5432 -U ontological -d wideworldimporters
 
 It goes through the engine's own source executor and catalog ingest, as a user's source would. WWI is read from the eval cluster as a Postgres source, through DuckDB's `postgres_scanner`; each BIRD database is attached as its `.sqlite` file. BIRD's `database_description/*.csv` files aren't read, so the score measures Ontological's own compile.
 
-`ingest` starts the eval cluster and the store's Postgres if they aren't running and stops whichever it started. It refuses while an engine serves `<home>/app`, which wouldn't see the change. A database the store already holds is reported and left as it is: updating one needs the catalog diff (M2.3). To start over, delete `<home>/app`.
+`ingest` starts the eval cluster and the store's Postgres if they aren't running and stops whichever it started. It refuses while an engine serves `<home>/app`, which wouldn't see the change. A database the store already holds is re-ingested through the catalog diff (M2.3), so an unchanged source leaves its catalog as it is. To start over, delete `<home>/app`.
 
 ## The sets
 
