@@ -560,7 +560,7 @@ The runtime is ONNX Runtime (the macOS arm64 wheel is 20.9 MB) on the CPU provid
 
 - Upstream embeds asymmetrically (`input_type=query|passage`). Use the model's query/passage prefixes where it defines them.
 - Every vector's metadata stores `model` and `content_hash`. Changing the embedding model triggers a re-embed job; vectors from different models are never compared.
-- **Fix upstream's ordering bug**: build data-layer texts *after* profiling so that `sample_values` are included.
+- **Fix upstream's ordering bug**: build data-layer texts *after* profiling so that `sample_values` are included. Ingest profiles each table through its executor, writes the result to the store, and then builds the texts from the store (`catalog/data_layer.py`, M2.5).
 
 ### 7.2 Choosing the model
 
@@ -804,7 +804,7 @@ Upstream is Apache-2.0. Vendored files keep upstream's package name and paths in
 | `dev_tools/fixtures/seed_graph_fixture.py`, `capture_dal_golden.py`, upstream's Postgres and SQLite connectors, `server/sql_attributes/service.py`, `server/custom_analyses/service.py` | **Vendor as test-only code** under `engine/tests/upstream_fixtures/`, used only to seed the golden fixture (§5.4). Never imported by the engine. Spike S6 found the seed also needs, unchanged, upstream's catalog ingest (`catalog/ingest.py`, `extract.py`, `write.py`, `table_filter.py`, `parsers/`, `services/schema.py`, `sql_parse.py`), `server/sql_utils.py` and `retrieval/data_access/graph_schemas.py`. The edits: `connectors/__init__.py` and `registry.py` keep only Postgres and SQLite; `server/sql_utils.py` takes `SqlParseError` from the DAL's one-class module; `server/sql_attributes/service.py` drops its LLM and embedding imports, and both services stub `get_embed_params`, which the engine's empty `utils/__init__.py` lacks; `test_migration_revision.py` finds the vendored chain and drops the Helm-chart test; `dal_surface.json` is regenerated. `test_model_interchange.py` waits for M6.4. Upstream's catalog-store tests run too. `engine/tests/upstream_fixtures/UPSTREAM.md` lists every file |
 | `connectors/base.py`, `connectors/duckdb.py`, `connectors/sqlite.py` | Port; complete PK/FK/table_type for DuckDB; run inside the source executor |
 | `catalog/extract.py`, `normalize.py`, `diff.py`, `sql_parse.py`, `parsers/*`, `query_stats.py` | Port; fix the month-counter key; query-history parsing runs in the parse pool |
-| `semantic/visit_enter.py` (profiling), `date_format.py` | Port as-is; run inside the source executor |
+| `semantic/visit_enter.py` (profiling), `date_format.py` | Port as-is; run inside the source executor. Done in M2.5 as `profile/`: `date_format.py` unchanged, and `calculate_columns_profiling` returning what it wrote, which the engine writes through the DAL (`profile/run.py`). `utils/embedding_rows.py` is vendored unchanged for the data layer's texts |
 | `semantic/*` prompts + Pydantic schemas | Port the content. Keep the four per-table prompts for `split`, and combine them as sections for `merged` (`TableSemantics`); chunk past 40 columns |
 | `semantic/semantic_fk.py`, `bridge_tables.py`, `sql_attribute_suggester.py` | Port the deterministic parts; batch the LLM parts; fix `_usage_score` |
 | `pii_detection/rules.py` | Port as-is; batch the LLM fallback |

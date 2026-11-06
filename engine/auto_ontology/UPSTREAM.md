@@ -31,6 +31,7 @@ Upstream's `alembic.ini` isn't vendored. `ontological/store/chains.py` configure
 | `semantic/__init__.py`, `semantic/constants.py` | Unchanged |
 | `server/__init__.py`, `server/zones/__init__.py`, `server/zones/constants.py`, `server/zones/utils.py` | Unchanged |
 | `utils/sample_values.py` | Unchanged |
+| `utils/embedding_rows.py` | Unchanged. `ontological/catalog/data_layer.py` builds the data layer's texts with it, and its templates are the retrieval contract (M2.5) |
 | `utils/__init__.py` | Modified: empty. Upstream's imports `utils.embedding` (the OpenAI client) |
 | `vdb/__init__.py` | Modified: `get_vdb`, `get_data_vdb` and `get_semantic_vdb` pass `embeddings` and `vector_size` through |
 | `vdb/postgres.py` | Modified: a `vector_size` up to 2,000 is indexed as `vector` with `vector_cosine_ops`, with no `halfvec` conversion (§5.4) |

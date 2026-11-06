@@ -4,7 +4,7 @@ Ontological includes the following third-party material.
 
 ## Auto Ontology
 
-- Files: `engine/auto_ontology/`, and the test-only `engine/tests/upstream_fixtures/`, vendored from [NVIDIA/auto-ontology](https://github.com/NVIDIA/auto-ontology) at commit `2a24f5d`. The `UPSTREAM.md` in each lists the files and which ones Ontological modified; each modified file says so under its SPDX header.
+- Files: `engine/auto_ontology/`, and the test-only `engine/tests/upstream_fixtures/`, vendored from [NVIDIA/auto-ontology](https://github.com/NVIDIA/auto-ontology) at commit `2a24f5d`. The `UPSTREAM.md` in each lists the files and which ones Ontological modified; each modified file says so under its SPDX header. Files under `engine/ontological/` and `engine/tests/` ported from it (the catalog ingest, `profile/` and their tests) keep upstream's SPDX header and say what Ontological changed.
 - Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES.
 - License: Apache License, Version 2.0. The full text is in `engine/auto_ontology/LICENSE`.
 
