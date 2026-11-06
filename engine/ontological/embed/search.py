@@ -1,8 +1,9 @@
 """Dense search through upstream's PostgresVDB with the local embedder (ARCHITECTURE.md §5.4, §7.1).
 
 The VDBs are built with the embedder and its dimension, so the vector column is `vector(768)`
-and every write and query goes through the same model. Hybrid search (§7.3) fuses this ranking
-with BM25 and trigram ones later; this is the dense one alone.
+and every write and query goes through the same model. Hybrid search (§7.3,
+ontological.embed.hybrid) fuses this ranking with BM25 and trigram ones; this is the dense one
+alone.
 """
 
 from __future__ import annotations
