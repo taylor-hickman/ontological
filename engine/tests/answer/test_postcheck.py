@@ -16,8 +16,8 @@ from ontological.llm.gateway import ToolCall
 SQL = "SELECT COUNT(*) AS n FROM Album"
 
 
-def call(name: str, *, error: bool = False, **data: Any) -> ToolCall:
-    return ToolCall(name=name, args={}, is_error=error, text="", data=data)
+def call(name: str, *, failed: bool = False, **data: Any) -> ToolCall:
+    return ToolCall(name=name, args={}, is_error=failed, text="", data=data)
 
 
 def plan(plan_id: str = "plan-1", intent: str = "calculation") -> ToolCall:
@@ -76,9 +76,9 @@ def test_the_sql_is_compared_without_surrounding_space_or_a_trailing_semicolon()
 def test_repairs_along_the_way_are_fine_when_the_last_sql_went_through_every_step() -> None:
     log = [
         plan(),
-        call("validate_sql", error=True, ok=False, issues=["unknown column"]),
+        call("validate_sql", failed=True, ok=False, issues=["unknown column"]),
         validated("val-1", "SELECT Titel FROM Album"),
-        call("run_sql", error=True, ok=False, error="Binder Error"),
+        call("run_sql", failed=True, ok=False, error="Binder Error"),
         validated("val-2"),
         ran("val-2"),
         reviewed("rev-1", "val-2", passed=False),
@@ -123,7 +123,7 @@ def test_sql_that_never_ran_is_unverified() -> None:
 
 
 def test_a_failed_run_is_not_a_run() -> None:
-    log = [plan(), validated(), call("run_sql", error=True, validation_id="val-1"), reviewed()]
+    log = [plan(), validated(), call("run_sql", failed=True, validation_id="val-1"), reviewed()]
     unverified(check(log, answer()), "run_sql")
 
 
