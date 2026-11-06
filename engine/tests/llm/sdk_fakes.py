@@ -2,7 +2,9 @@
 `--version`, and `ops.llm_call`.
 
 `FakeQuery` plays back a script of real SDK message objects, one script per spawn, and records
-each spawn's prompt and options. The message builders give the shapes Claude Code 2.1.318 sends
+each spawn's prompt and options. A `Call` in a script calls one of the session's SDK MCP tools
+the way Claude Code does, through the SDK's own JSON-RPC bridge, so the tool's input schema and
+result shaping are the SDK's. The message builders give the shapes Claude Code 2.1.318 sends
 (spike S1).
 """
 
@@ -18,12 +20,16 @@ from typing import Any, cast
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    McpSdkServerConfig,
     Message,
     RateLimitEvent,
     RateLimitInfo,
     ResultMessage,
     SystemMessage,
     TextBlock,
+)
+from claude_agent_sdk._internal.sdk_mcp_bridge import (  # pyright: ignore[reportPrivateUsage]
+    SdkMcpBridge,
 )
 from claude_agent_sdk.types import (
     AssistantMessageError,
@@ -115,6 +121,16 @@ def answered(structured: Any = None, text: str | None = None, model: str = HAIKU
     ]
 
 
+@dataclass(frozen=True)
+class Call:
+    """A script item: the model calls `tool` with `args`. FakeQuery appends what the tool sent
+    back, as the CLI receives it (`content`, `isError`), to `FakeQuery.results`."""
+
+    tool: str
+    args: dict[str, Any] = field(default_factory=dict[str, Any])
+    server: str = "ontological"
+
+
 @dataclass
 class Spawn:
     prompt: str
@@ -125,21 +141,25 @@ class Spawn:
 class FakeQuery:
     """`query()` for a script per spawn. A script item that is an exception is raised there,
     the way the SDK raises ResultError after yielding an error result; a float is a pause of that
-    many seconds. `peak` is the most spawns that were in flight at once."""
+    many seconds; a `Call` calls a tool. `peak` is the most spawns that were in flight at once."""
 
     scripts: list[Sequence[Any]]
     spawns: list[Spawn] = field(default_factory=list[Spawn])
+    results: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     in_flight: int = 0
     peak: int = 0
 
     def __call__(self, *, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[Message]:
         assert self.scripts, f"an unexpected spawn: {prompt!r}"
         self.spawns.append(Spawn(prompt, options))
-        return self._play(self.scripts.pop(0))
+        return self._play(self.scripts.pop(0), options)
 
-    async def _play(self, script: Sequence[Any]) -> AsyncIterator[Message]:
+    async def _play(
+        self, script: Sequence[Any], options: ClaudeAgentOptions
+    ) -> AsyncIterator[Message]:
         self.in_flight += 1
         self.peak = max(self.peak, self.in_flight)
+        bridges: dict[str, SdkMcpBridge] = {}
         try:
             for item in script:
                 if isinstance(item, BaseException):
@@ -147,9 +167,50 @@ class FakeQuery:
                 if isinstance(item, float):
                     await asyncio.sleep(item)
                     continue
+                if isinstance(item, Call):
+                    self.results.append(await self._call(item, options, bridges))
+                    continue
                 yield item
         finally:
             self.in_flight -= 1
+            for bridge in bridges.values():
+                await bridge.aclose()
+
+    async def _call(
+        self, call: Call, options: ClaudeAgentOptions, bridges: dict[str, SdkMcpBridge]
+    ) -> dict[str, Any]:
+        servers = cast(dict[str, McpSdkServerConfig], options.mcp_servers)
+        if call.server not in bridges:
+            bridge = bridges[call.server] = SdkMcpBridge(
+                call.server, servers[call.server]["instance"]
+            )
+            await bridge.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 0,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "fake-claude", "version": "0"},
+                    },
+                }
+            )
+            await bridge.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        name = f"mcp__{call.server}__{call.tool}"
+        if name not in (options.allowed_tools or []):
+            # Claude Code denies it under dontAsk; the handler never runs (spike S1)
+            return {"denied": name}
+        reply = await bridges[call.server].handle(
+            {
+                "jsonrpc": "2.0",
+                "id": len(self.results) + 1,
+                "method": "tools/call",
+                "params": {"name": call.tool, "arguments": call.args},
+            }
+        )
+        assert reply is not None and "result" in reply, reply
+        return cast(dict[str, Any], reply["result"])
 
 
 @dataclass
