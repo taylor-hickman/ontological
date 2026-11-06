@@ -167,6 +167,18 @@ def test_an_information_answer_needs_only_a_plan() -> None:
     assert check(log, ans).verified
 
 
+@pytest.mark.parametrize(
+    "log",
+    [
+        [plan(intent="information")],
+        [plan(intent="information"), validated(), ran(), reviewed()],
+    ],
+)
+def test_an_information_answer_with_sql_is_unverified(log: list[ToolCall]) -> None:
+    # The model picks the intent: an information plan can't vouch for SQL, checked or not
+    unverified(check(log, answer()), "information", "SQL")
+
+
 def test_an_information_answer_still_needs_its_plan() -> None:
     ans = answer(sql=None, validation_id=None, review_id=None)
     unverified(check([plan("plan-2", intent="information")], ans), "plan-1")

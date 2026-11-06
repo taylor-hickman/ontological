@@ -5,7 +5,7 @@ silently accepted.
 
 What the sequence must hold depends on the session:
 - a `calculation` (or any intent but `information`) needs all four steps for the final SQL;
-- an `information` answer needs only its plan;
+- an `information` answer needs only its plan, and no SQL;
 - with the critic off, no review is needed;
 - an `answerable=false` answer needs its plan and no SQL.
 
@@ -47,6 +47,9 @@ def post_run_check(log: Sequence[ToolCall], answer: AnswerModel | None, *, criti
             return _unverified("an answer with answerable=false carries SQL; it should carry none")
         return VERIFIED
     if intent == "information":
+        # The model picks the intent, so an information plan can't vouch for SQL
+        if sql:
+            return _unverified("an information answer carries SQL; it should carry none")
         return VERIFIED
 
     if not sql:
