@@ -536,7 +536,7 @@ Upstream was written for a cheap, fast HTTP endpoint and makes many small calls.
 - `claude` not found: onboarding links to Claude Code installation.
 
 **Resumability.**
-- Compile is checkpointed per table in `ops.job_step`. A paused or crashed compile resumes where it stopped.
+- Compile is checkpointed per table in `ops.job_step`, in the transaction that writes the table. A paused, stopped or crashed compile resumes where it stopped, on the plan and packs it started with, so a resumed run's prompts and cache keys match an uninterrupted one's.
 - **A pre-compile estimate** is shown before starting: calls ≈ ⌈tables / packing⌉ + ⌈unresolved FK columns / 25⌉ + …, so the user can scope to schemas or tables first.
 - The estimate shows both `split` and `merged`, with calls, estimated quota and estimated time, so the user can pick `merged` for a very large run.
 - A rough guide, unverified until measured: a 200-table database needs about 600–900 compile calls with `split` (the same order as upstream) and about 120–220 with `merged`. Split's quota is estimated at about 1.5–2 times merged's, because most of its extra calls run on Haiku. Starting and closing the `claude` process adds 0.53 s to each call at p50 (spike S2, the same on every model), so at the default concurrency of 3, split's 480–680 extra calls add about 1.5–2 minutes of process overhead. The model's own time per call, which grows with the prompt, is most of the difference. Compile runs in the background, and results are cached, so only new or changed tables pay again.
