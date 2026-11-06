@@ -2,7 +2,7 @@
 
 The frozen question-set IDs (`sets/{dev,heldout,smoke}.json`), the runner, the verifier and the control arm. The sets are frozen in M0.8 and the runner arrives in M1.9. See [BUILD_PLAN.md, Eval set](../docs/BUILD_PLAN.md#eval-set).
 
-So far it holds the eval's data: a download script, a Postgres cluster of its own that holds Wide World Importers (M0.7), and the frozen question sets (M0.8). It's a uv project on Python 3.12 that uses the engine's `ontological.store.pg` for the cluster. From this directory:
+So far it holds the eval's data: a download script, a Postgres cluster of its own that holds Wide World Importers (M0.7), the frozen question sets (M0.8), and the ingest of all five eval databases into a store of the eval's own (M2.9). It's a uv project on Python 3.12 that uses the engine's `ontological.store.pg` for the cluster. From this directory:
 
 ```sh
 uv sync
@@ -11,6 +11,7 @@ uv run python -m ontological_eval cluster up      # start or adopt the cluster; 
 uv run python -m ontological_eval cluster check   # each WWI table's row count against its CSV
 uv run python -m ontological_eval cluster status  # running or not, and the psql line to connect
 uv run python -m ontological_eval cluster down
+uv run python -m ontological_eval ingest          # WWI and the four BIRD databases into the eval store
 uv run python -m ontological_eval sets check      # every set's gold SQL runs and returns rows
 ```
 
@@ -47,6 +48,14 @@ Then connect with the line `cluster status` prints:
 psql -h "<home>/cluster/pgsocket" -p 5432 -U ontological -d wideworldimporters
 ```
 
+## The eval store
+
+`ingest` writes the catalogs of WWI and the four BIRD databases to `<home>/app`, an engine `<appData>` that only the eval uses, so they never show up in your own catalog. The eval runner (M1.9) starts its engine there with `--app-data`. Name databases to ingest some of them: `wwi`, `financial`, `california_schools`, `formula_1`, `debit_card_specializing`.
+
+It goes through the engine's own source executor and catalog ingest, as a user's source would. WWI is read from the eval cluster as a Postgres source, through DuckDB's `postgres_scanner`; each BIRD database is attached as its `.sqlite` file. BIRD's `database_description/*.csv` files aren't read, so the score measures Ontological's own compile.
+
+`ingest` starts the eval cluster and the store's Postgres if they aren't running and stops whichever it started. It refuses while an engine serves `<home>/app`, which wouldn't see the change. A database the store already holds is reported and left as it is: updating one needs the catalog diff (M2.3). To start over, delete `<home>/app`.
+
 ## The sets
 
 `sets/{dev,heldout,smoke}.json` hold question IDs only, by source: `{"wwi": [...], "bird": [...]}`. WWI's IDs are `question_id` in `evaluation.json` and BIRD's are `question_id` in `mini_dev_sqlite.jsonl`. [`ontological_eval/sets.py`](ontological_eval/sets.py) chose them with a fixed seed (`sets freeze`):
@@ -72,4 +81,4 @@ uv run ruff check . && uv run ruff format --check . && uv run pyright
 ONTOLOGICAL_PG_BIN=<tree>/bin uv run pytest
 ```
 
-`tests/test_sets.py` chooses sets from synthetic questions shaped like Mini-Dev and checks gold SQL on a small SQLite file. `tests/test_fetch.py` runs `fetch` against a local HTTP server that answers range requests. `tests/test_cluster.py` drives the bundled binaries on a small WWI-shaped dataset, and skips without `ONTOLOGICAL_PG_BIN` unless `ONTOLOGICAL_PG_REQUIRED=1`, which CI sets (`ci.yml` on Linux, `postgres.yml` on the bundled tree).
+`tests/test_sets.py` chooses sets from synthetic questions shaped like Mini-Dev and checks gold SQL on a small SQLite file. `tests/test_fetch.py` runs `fetch` against a local HTTP server that answers range requests. `tests/test_cluster.py` drives the bundled binaries on a small WWI-shaped dataset, and `tests/test_ingest.py` ingests that dataset and a small BIRD-shaped SQLite file into an eval store. Both skip without `ONTOLOGICAL_PG_BIN` unless `ONTOLOGICAL_PG_REQUIRED=1`, which CI sets: `ci.yml` runs both on Linux, and `postgres.yml` runs the cluster's on the bundled tree.
