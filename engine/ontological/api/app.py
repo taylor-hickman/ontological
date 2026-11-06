@@ -5,6 +5,9 @@ processes can't reach the API; there are no open routes, docs included. Authoris
 as activity for idle shutdown, for as long as they are in flight (an SSE stream keeps the engine
 up). Unauthorised ones don't.
 
+Onboarding and the catalog screen read the routes in `setup.py`: Claude Code's install and login,
+and the sources and their catalogs.
+
 Leases: `POST /leases` takes one, `PUT /leases/{id}` renews it, `DELETE /leases/{id}` releases
 it. A renewal of an expired lease is 404, and the client takes a new one. A closing engine
 refuses new leases with 503, and the client starts a new engine.
@@ -25,9 +28,12 @@ from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ontological.api.setup import add_setup_routes
+from ontological.catalog.sources import Sources
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine.lifetime import Closing, Lease, Lifetime
 from ontological.jobs.active import ActiveJobs
+from ontological.llm.install import Claude
 
 log = logging.getLogger(__name__)
 
@@ -100,6 +106,8 @@ def create_app(
     version: str,
     embedder: LocalEmbedder | None = None,
     jobs: ActiveJobs | None = None,
+    claude: Claude | None = None,
+    sources: Sources | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Ontological engine",
@@ -141,6 +149,8 @@ def create_app(
             raise HTTPException(404, "no such lease")
         log.info("lease %s released", lease_id[:6])
         return Response(status_code=204)
+
+    add_setup_routes(app, claude=claude, sources=sources)
 
     app.add_middleware(BearerAuth, token=token, lifetime=lifetime)
     # Added last, so it runs first: a preflight is answered before BearerAuth sees it.

@@ -257,7 +257,7 @@ class ClaudeGateway:
         """Find `claude`, read its version, and ping it: a round trip on the `ping` route that
         shows whether the user is logged in (§6.5)."""
         self.cli_path = resolve_cli(self._cli_override)
-        version = None if self.cli_path is None else await _cli_version(self.cli_path)
+        version = None if self.cli_path is None else await cli_version(self.cli_path)
         self._installed = version is not None
         self._version = version
         if version is not None:
@@ -275,7 +275,7 @@ class ClaudeGateway:
         state: State
         if self._installed is False:
             state = "not_installed"
-        elif self._version is not None and _version_tuple(self._version) < MIN_CLAUDE_VERSION:
+        elif self._version is not None and version_tuple(self._version) < MIN_CLAUDE_VERSION:
             state = "outdated"
         elif self._logged_in is False:
             state = "needs_login"
@@ -464,7 +464,7 @@ def _text(session: _Session) -> _Verdict:
     return _Verdict("ok", output=result.result)
 
 
-async def _cli_version(cli: Path) -> str | None:
+async def cli_version(cli: Path) -> str | None:
     """`claude --version`'s version number, or None if it doesn't run or say one."""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -487,7 +487,7 @@ async def _cli_version(cli: Path) -> str | None:
     return match.group(1) if proc.returncode == 0 and match else None
 
 
-def _version_tuple(version: str) -> tuple[int, ...]:
+def version_tuple(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))
 
 

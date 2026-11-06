@@ -6,7 +6,8 @@ It runs `ontological.engine.main.main` with the same arguments, but in place of 
 Postgres the store appends what it was asked to do to <appData>/store.log: `start` when the
 engine starts it, `quit-dump` and `stop` when the engine stops it. If <appData>/slow-start exists,
 the store takes that many seconds to start; if <appData>/slow-stop exists, it takes that many
-between `quit-dump` and `stop`. `--headless` relaunches this file, so the detached engine has the
+between `quit-dump` and `stop`. Its sources live in memory (`fake_sources.py`), and the test call
+answers without spawning `claude`. `--headless` relaunches this file, so the detached engine has the
 fake store too.
 """
 
@@ -16,7 +17,11 @@ import sys
 import time
 from pathlib import Path
 
+from fake_sources import FakeClaude, FakeSources
+
+from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import main
+from ontological.jobs.active import ActiveJobs
 from ontological.jobs.staleness import StalenessCheck
 
 
@@ -44,6 +49,12 @@ class FakeStore:
 
     def staleness_check(self) -> StalenessCheck:
         return StalenessCheck(find=lambda: [])  # no catalog, so no sources to refresh
+
+    def sources(self, jobs: ActiveJobs, embedder: LocalEmbedder | None) -> FakeSources:
+        return FakeSources()
+
+    def claude(self, config: main.Config) -> FakeClaude:
+        return FakeClaude(config.claude_cli)
 
 
 if __name__ == "__main__":
