@@ -13,9 +13,11 @@ import uuid
 from collections.abc import Iterator
 from typing import Any
 
+import psycopg
 import pytest
 from fakes import HashEmbeddings
 from langchain_core.embeddings import Embeddings
+from psycopg import sql
 
 from auto_ontology.vdb import get_vdb
 from auto_ontology.vdb.postgres import PostgresVDB, on_change
@@ -105,6 +107,19 @@ def names(hits: list[dict[str, Any]]) -> list[str]:
     return [h["metadata"]["name"] for h in hits]
 
 
+def langchain_id(vdb: PostgresVDB, metadata_id: str) -> str:
+    """The row id the BM25 index keys documents by."""
+    with psycopg.connect(vdb.connection_string) as conn:
+        row = conn.execute(
+            sql.SQL(
+                "SELECT langchain_id::text FROM {} WHERE langchain_metadata ->> 'id' = %s"
+            ).format(sql.Identifier(vdb.schema_name, vdb.collection_name)),
+            (metadata_id,),
+        ).fetchone()
+    assert row is not None
+    return str(row[0])
+
+
 def test_rrf_sums_reciprocal_ranks() -> None:
     scores = rrf([["a", "b"], ["b", "c"], []], k=60)
     assert scores == pytest.approx({"a": 1 / 61, "b": 1 / 62 + 1 / 61, "c": 1 / 62})
@@ -115,9 +130,16 @@ def test_an_empty_collection_finds_nothing(search: HybridSearch) -> None:
 
 
 def test_an_identifier_query_finds_its_column(hashed: PostgresVDB, search: HybridSearch) -> None:
-    write(hashed, CATALOG)
-    for query in ("cust_acct_no", "customer account number", "CustAcctNo"):
-        assert names(ready(search).search(query, k=3))[0] == "billing_master.cust_acct_no"
+    ids = write(hashed, CATALOG)
+    column = "billing_master.cust_acct_no"
+    # BM25 and the trigram ranking both put it first.
+    assert names(ready(search).search("cust_acct_no", k=3))[0] == column
+    # Only BM25 has these first: the table `customer` is second in it and the trigram ranking's
+    # first for the words, so with noise for a dense ranking either can win the fusion.
+    for query in ("customer account number", "CustAcctNo"):
+        [(first, _), *_] = search.bm25.search(query, 5)
+        assert first == langchain_id(hashed, ids[column])
+        assert column in names(search.search(query, k=3))
 
 
 def test_a_misspelt_name_finds_its_row_by_trigrams(
@@ -194,8 +216,9 @@ def test_every_change_rebuilds_the_index_whichever_vdb_made_it(
         assert names(ready(search).search("cust_acct_no", k=1)) == ["billing_master.cust_acct_no"]
         assert search.bm25.rebuilds > before
 
+        assert len(search.bm25.snapshot.ids) == len(CATALOG)
         other.delete_by_id(ids["billing_master.cust_acct_no"])
-        assert ready(search).bm25.search("cust_acct_no", 5) == []
+        assert len(ready(search).bm25.snapshot.ids) == len(CATALOG) - 1
 
         other.delete_by_database("chinook")
         assert ready(search).search("invoice") == []
@@ -210,7 +233,7 @@ def test_a_deleted_row_is_gone_before_the_rebuild_finishes(
     ready(search)
     monkeypatch.setattr(search.bm25, "invalidate", lambda: None)  # the index stays a write behind
     hashed.delete_by_id(ids["billing_master.cust_acct_no"])
-    assert search.bm25.search("cust_acct_no", 5) != []
+    assert len(search.bm25.snapshot.ids) == len(CATALOG)
     assert "billing_master.cust_acct_no" not in names(search.search("cust_acct_no"))
 
 
