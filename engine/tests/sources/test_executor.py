@@ -390,6 +390,25 @@ def test_a_process_that_dies_while_idle_is_replaced(executor: SourceExecutor) ->
     assert executor.run_sql("SELECT count(*) FROM artist").rows == [(300,)]
 
 
+def test_a_child_that_died_but_still_looks_alive_is_replaced(
+    executor: SourceExecutor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Linux a killed child whose threads are still exiting is a zombie `waitpid` can't reap
+    yet, so `is_alive()` says yes and the operation's send is what finds it gone."""
+    proc = executor._proc  # pyright: ignore[reportPrivateUsage]
+    assert proc is not None and proc.pid is not None
+    executor.run_sql("SELECT 1")
+    os.kill(proc.pid, signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    while not is_zombie(proc.pid):
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    monkeypatch.setattr(proc, "is_alive", lambda: True)
+
+    assert executor.run_sql("SELECT 1").rows == [(1,)]
+    assert executor.pid != proc.pid
+
+
 # Lifecycle
 
 

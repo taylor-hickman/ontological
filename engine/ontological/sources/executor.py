@@ -273,7 +273,16 @@ class SourceExecutor:
                 try:
                     self._conn.send((self._op_id, op, args))
                 except OSError:
-                    raise self._died() from None
+                    # The child died while idle, after `_ensure_ready` saw it alive: on Linux a
+                    # killed process with threads still exiting can't be reaped yet. Nothing
+                    # reached it, so a new child can take the operation.
+                    self._stop(kill=True)
+                    self._ensure_ready()
+                    assert self._conn is not None
+                    try:
+                        self._conn.send((self._op_id, op, args))
+                    except OSError:
+                        raise self._died() from None
                 return self._await(self._op_id, timeout_s)
             finally:
                 self._busy = False
