@@ -230,22 +230,16 @@ def sync_database(vdb: PostgresVDB, database_name: str) -> Synced:
     model = str(getattr(vdb.embeddings, "model", None) or type(vdb.embeddings).__name__)
     wanted = {_key(row["metadata"], content_hash(row["text"]), model): row for row in rows}
 
-    vectors = vdb._get_store()  # pyright: ignore[reportPrivateUsage]
-    assert vectors is not None  # the VDB has a vector size, so the store exists
-    stored = vectors.get(
-        where={"database_name": database_name, "label": {"$in": list(LABELS)}},
-        include=["metadatas"],
-    )
+    stored = vdb.row_metadata({"database_name": database_name, "label": {"$in": list(LABELS)}})
     kept: set[Key] = set()
     stale: list[str] = []
-    for row_id, metadata in zip(stored["ids"], stored["metadatas"], strict=True):
+    for row_id, metadata in stored:
         key = _key(metadata, str(metadata.get("content_hash")), str(metadata.get("model")))
         if key in wanted and key not in kept:
             kept.add(key)
         else:
-            stale.append(str(row_id))
-    if stale:
-        vectors.delete(ids=stale)
+            stale.append(row_id)
+    vdb.delete_rows(stale)
 
     missing = [row for key, row in wanted.items() if key not in kept]
     embedded = (

@@ -18,7 +18,8 @@ upstream's `_select_candidate_database` picks it, and entities it doesn't cover 
 The subject searches that database only, where upstream searches every database and drops the
 other databases' tables later.
 Hits keep upstream's `{text, id, label, score, ...}` shape, `score` being cosine distance (lower
-is nearer). Hybrid search (M3.6) replaces the dense search under `search_by_label`.
+is nearer). M4.3 puts hybrid search (`ontological.embed.hybrid`) under `search_by_label` in place
+of the dense one.
 """
 
 from __future__ import annotations

@@ -16,7 +16,7 @@ from conftest import sql
 from fakes import NoAnswer, ScriptedGateway
 from test_compile import claude, table_of
 
-from auto_ontology.vdb.postgres import PostgresVDB
+from auto_ontology.vdb.postgres import PostgresVDB, on_change
 from ontological.answer.pack import build_pack
 from ontological.catalog.ingest import ingest
 from ontological.compile.split import Compiled, compile_database
@@ -111,8 +111,7 @@ def test_a_sync_embeds_only_what_changed_and_drops_what_is_gone(
     total = chinook_compiled.vectors.embedded
     assert sync_database(vdb, "chinook") == Synced(embedded=0, deleted=0, current=total)
 
-    sql(store, "UPDATE term SET description = 'One sale.' WHERE name = 'Invoice'")
-    genre = int(
+    genre = int(  # the Term's row and its attributes'
         sql(
             store,
             "SELECT 1 + count(*) FROM column_attribute__term at JOIN term ON term.id = at.term_id "
@@ -120,10 +119,19 @@ def test_a_sync_embeds_only_what_changed_and_drops_what_is_gone(
         )
     )
     sql(store, "DELETE FROM term WHERE name = 'Genre'")
+    heard: list[tuple[str, str]] = []
+    stop = on_change(lambda schema, collection: heard.append((schema, collection)))
+    try:
+        # Nothing to embed: the delete alone tells the listeners, so BM25 rebuilds (M3.6)
+        assert sync_database(vdb, "chinook") == Synced(
+            embedded=0, deleted=genre, current=total - genre
+        )
+    finally:
+        stop()
+    assert heard == [("vdb", "semantic_layer")]
 
-    assert sync_database(vdb, "chinook") == Synced(
-        embedded=1, deleted=1 + genre, current=total - 1 - genre
-    )
+    sql(store, "UPDATE term SET description = 'One sale.' WHERE name = 'Invoice'")
+    assert sync_database(vdb, "chinook") == Synced(embedded=1, deleted=1, current=total - genre - 1)
     assert rows(
         store,
         "SELECT content FROM vdb.semantic_layer WHERE content LIKE 'Term: Invoice.%'",

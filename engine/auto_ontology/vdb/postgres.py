@@ -2,7 +2,8 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # Modified by Ontological: a vector_size within pgvector's HNSW limit for vector is indexed
-# as vector, with no halfvec conversion.
+# as vector, with no halfvec conversion; listeners registered with on_change hear of every
+# write and delete; row_metadata and delete_rows read and delete rows by the store's row ids.
 
 """Postgres + pgvector vector store for the data and semantic layers.
 
@@ -19,7 +20,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import psycopg
 from psycopg import sql
@@ -34,6 +35,29 @@ _HNSW_MAX_VECTOR_DIMS = 2000
 
 _DATABASE_METADATA_COLUMN = "database_name"
 _LABEL_METADATA_COLUMN = "label"
+
+# Ontological: called with (schema_name, collection_name) after a write or delete has changed a
+# collection, whichever PostgresVDB made it, so the engine's BM25 index rebuilds on every change.
+_change_listeners: list[Callable[[str, str], None]] = []
+
+
+def on_change(listener: Callable[[str, str], None]) -> Callable[[], None]:
+    """Call *listener* after every change to any collection; returns a function that stops it."""
+    _change_listeners.append(listener)
+
+    def remove() -> None:
+        if listener in _change_listeners:
+            _change_listeners.remove(listener)
+
+    return remove
+
+
+def _notify_change(schema_name: str, collection_name: str) -> None:
+    for listener in list(_change_listeners):
+        try:
+            listener(schema_name, collection_name)
+        except Exception:  # a listener must never fail the write it hears about
+            logger.exception("PostgresVDB change listener failed")
 
 
 class _UnusableEmbeddings(Embeddings):
@@ -405,6 +429,7 @@ class PostgresVDB:
                 metadatas=[d.metadata for d in chunk_docs],
             )
             inserted += len(chunk_docs)
+        _notify_change(self.schema_name, self.collection_name)
 
         logger.info(
             "PostgresVDB.write_to_index: inserted %d rows into %s (skipped %d)",
@@ -442,7 +467,27 @@ class PostgresVDB:
             return []
 
         store.delete(filter=filter)
+        _notify_change(self.schema_name, self.collection_name)
         return ids
+
+    def row_metadata(self, where: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        """Ontological: ``(row id, metadata)`` for each row the filter dict matches."""
+        store = self._get_store()
+        if store is None:
+            return []
+        found = store.get(where=where, include=["metadatas"])
+        return list(zip((str(i) for i in found["ids"]), found["metadatas"]))
+
+    def delete_rows(self, row_ids: list[str]) -> int:
+        """Ontological: delete the rows with these row ids (the store's, not metadata ``id``)."""
+        if not row_ids:
+            return 0
+        store = self._get_store()
+        if store is None:
+            return 0
+        store.delete(ids=list(row_ids))
+        _notify_change(self.schema_name, self.collection_name)
+        return len(row_ids)
 
     def delete_all(self) -> int:
         """Delete every row in the collection.
@@ -468,6 +513,8 @@ class PostgresVDB:
                     )
                 )
                 deleted = cur.rowcount
+        if deleted:
+            _notify_change(self.schema_name, self.collection_name)
 
         logger.info(
             "PostgresVDB.delete_all: deleted %d rows from %s",
@@ -514,6 +561,8 @@ class PostgresVDB:
                     (node_id,),
                 )
                 deleted = cur.rowcount
+        if deleted:
+            _notify_change(self.schema_name, self.collection_name)
 
         logger.info(
             "PostgresVDB.delete_by_id: deleted %d rows from %s for id=%s",
