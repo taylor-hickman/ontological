@@ -93,6 +93,10 @@ class ExecutorDied(SourceError):
     """The child exited in the middle of an operation. A new one has been started."""
 
 
+class _Unstarted(Exception):
+    """The child exited before it started the operation."""
+
+
 @dataclass(frozen=True)
 class Rows:
     columns: list[str]
@@ -265,27 +269,33 @@ class SourceExecutor:
     def _call(self, op: str, args: tuple[Any, ...], timeout_s: float | None) -> Any:
         with self._lock:
             self._ensure_ready()
-            assert self._conn is not None
             self._cancel.clear()
-            self._op_id += 1
             self._busy = True
             try:
                 try:
-                    self._conn.send((self._op_id, op, args))
-                except OSError:
-                    # The child died while idle, after `_ensure_ready` saw it alive: on Linux a
-                    # killed process with threads still exiting can't be reaped yet. Nothing
-                    # reached it, so a new child can take the operation.
+                    return self._send(op, args, timeout_s)
+                except _Unstarted:
+                    # The child died while idle, though `_ensure_ready` saw it alive: on Linux a
+                    # killed process whose threads are still exiting can't be reaped yet, and
+                    # its end of the pipe stays open. It never started the operation, so a new
+                    # child can take it.
                     self._stop(kill=True)
                     self._ensure_ready()
-                    assert self._conn is not None
                     try:
-                        self._conn.send((self._op_id, op, args))
-                    except OSError:
+                        return self._send(op, args, timeout_s)
+                    except _Unstarted:
                         raise self._died() from None
-                return self._await(self._op_id, timeout_s)
             finally:
                 self._busy = False
+
+    def _send(self, op: str, args: tuple[Any, ...], timeout_s: float | None) -> Any:
+        assert self._conn is not None
+        self._op_id += 1
+        try:
+            self._conn.send((self._op_id, op, args))
+        except OSError:
+            raise _Unstarted from None
+        return self._await(self._op_id, timeout_s)
 
     def _await(self, op_id: int, timeout_s: float | None) -> Any:
         assert self._proc is not None and self._conn is not None
@@ -293,13 +303,19 @@ class SourceExecutor:
         deadline = None if timeout_s is None else time.monotonic() + timeout_s
         why: Literal["cancel", "timeout"] | None = None
         kill_at = 0.0
+        started = False
         while True:
             if wait([conn, sentinel], _POLL_S):
                 try:
                     reply_id, kind, payload = conn.recv()
                 except (EOFError, OSError):
+                    if not started:
+                        raise _Unstarted from None
                     raise self._died() from None
                 if reply_id != op_id:
+                    continue
+                if kind == "started":
+                    started = True
                     continue
                 if kind == "ok":
                     return payload

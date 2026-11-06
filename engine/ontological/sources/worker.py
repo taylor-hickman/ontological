@@ -1,10 +1,11 @@
 """The source executor's child process: one read-only source connection (ARCHITECTURE.md §5.6).
 
 The engine side is `executor.py`. Messages cross a `multiprocessing` pipe. The child sends
-`("ready", None)` or `("failed", message)` once, then the engine sends `(op_id, op, args)` and the
-child answers `(op_id, "ok", payload)`, `(op_id, "error", message)` or `(op_id, "interrupted",
-None)`. `("cancel", op_id)` asks it to `interrupt()` that operation. Everything sent is plain
-Python data; the engine builds its own types from it.
+`("ready", None)` or `("failed", message)` once, then the engine sends `(op_id, op, args)`. The
+child sends `(op_id, "started", None)` as it takes the operation, then answers
+`(op_id, "ok", payload)`, `(op_id, "error", message)` or `(op_id, "interrupted", None)`.
+`("cancel", op_id)` asks it to `interrupt()` that operation. Everything sent is plain Python data;
+the engine builds its own types from it.
 
 The main thread runs operations one at a time, so the reader thread is free to take a cancel
 while a query runs. When the pipe closes, the engine has gone, and the child exits at once,
@@ -79,6 +80,7 @@ def serve(conn: Connection, source: Source, password: str | None) -> None:
     while True:
         op_id, op, args = requests.get()
         session.begin(op_id)
+        conn.send((op_id, "started", None))
         try:
             reply = (op_id, "ok", session.run(op, args))
         except Exception as e:  # a query error, a refusal or a bug: the child carries on
