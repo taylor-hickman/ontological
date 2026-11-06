@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Modified by Ontological: a vector_size within pgvector's HNSW limit for vector is indexed
 # as vector, with no halfvec conversion; listeners registered with on_change hear of every
-# write and delete.
+# write and delete; row_metadata and delete_rows read and delete rows by the store's row ids.
 
 """Postgres + pgvector vector store for the data and semantic layers.
 
@@ -469,6 +469,25 @@ class PostgresVDB:
         store.delete(filter=filter)
         _notify_change(self.schema_name, self.collection_name)
         return ids
+
+    def row_metadata(self, where: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        """Ontological: ``(row id, metadata)`` for each row the filter dict matches."""
+        store = self._get_store()
+        if store is None:
+            return []
+        found = store.get(where=where, include=["metadatas"])
+        return list(zip((str(i) for i in found["ids"]), found["metadatas"]))
+
+    def delete_rows(self, row_ids: list[str]) -> int:
+        """Ontological: delete the rows with these row ids (the store's, not metadata ``id``)."""
+        if not row_ids:
+            return 0
+        store = self._get_store()
+        if store is None:
+            return 0
+        store.delete(ids=list(row_ids))
+        _notify_change(self.schema_name, self.collection_name)
+        return len(row_ids)
 
     def delete_all(self) -> int:
         """Delete every row in the collection.
