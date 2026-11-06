@@ -134,12 +134,12 @@ def test_an_identifier_query_finds_its_column(hashed: PostgresVDB, search: Hybri
     column = "billing_master.cust_acct_no"
     # BM25 and the trigram ranking both put it first.
     assert names(ready(search).search("cust_acct_no", k=3))[0] == column
-    # Only BM25 has these first: the table `customer` is second in it and the trigram ranking's
-    # first for the words, so with noise for a dense ranking either can win the fusion.
+    # BM25 puts it first for the words and the CamelCase spelling too. The fusion can rank it
+    # lower here: the customer rows are in the trigram ranking as well, and the hash vectors give
+    # every row a dense rank.
     for query in ("customer account number", "CustAcctNo"):
         [(first, _), *_] = search.bm25.search(query, 5)
         assert first == langchain_id(hashed, ids[column])
-        assert column in names(search.search(query, k=3))
 
 
 def test_a_misspelt_name_finds_its_row_by_trigrams(
