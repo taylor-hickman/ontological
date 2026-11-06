@@ -111,3 +111,20 @@ export function Logo() {
     </svg>
   )
 }
+
+export function RestartIcon() {
+  return (
+    <Svg size={16} strokeWidth={2.2}>
+      <path d="M20 12a8 8 0 1 1-2.3-5.6" />
+      <path d="M20 4v5h-5" />
+    </Svg>
+  )
+}
+
+export function StopIcon() {
+  return (
+    <Svg size={16} strokeWidth={2.2}>
+      <rect x="7" y="7" width="10" height="10" rx="1.5" />
+    </Svg>
+  )
+}

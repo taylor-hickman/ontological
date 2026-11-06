@@ -35,7 +35,8 @@ const api: OntologicalApi = {
     const handler = (_event: IpcRendererEvent, state: EngineState): void => listener(state)
     ipcRenderer.on(IPC.engineState, handler)
     return () => ipcRenderer.removeListener(IPC.engineState, handler)
-  }
+  },
+  reconnectEngine: () => ipcRenderer.invoke(IPC.reconnectEngine)
 }
 
 contextBridge.exposeInMainWorld('ontological', api)

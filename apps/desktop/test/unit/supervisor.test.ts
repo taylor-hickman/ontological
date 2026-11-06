@@ -295,6 +295,45 @@ describe('when the engine dies', () => {
     expect(io.spawns).toBe(1)
   })
 
+  it('reconnects to an attached engine’s successor by starting one', async () => {
+    const live = io.addEngine()
+    await supervisor.start()
+    io.kill(live)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(last()).toEqual({ status: 'stopped' })
+
+    states = []
+    await supervisor.reconnect()
+    expect(states[0]).toEqual({ status: 'starting' })
+    expect(io.spawns).toBe(1)
+    const next = io.engines[1]!
+    expect(last()).toMatchObject({ status: 'running', startedByApp: true, token: next.info.token })
+    expect(next.leases.size).toBe(1)
+    // An engine started by Reconnect is the app's own, so a crash restarts it.
+    io.kill(next)
+    await settle()
+    expect(io.spawns).toBe(2)
+  })
+
+  it('reconnects to an engine another client started meanwhile', async () => {
+    const live = io.addEngine()
+    await supervisor.start()
+    io.kill(live)
+    await vi.advanceTimersByTimeAsync(30_000)
+    const other = io.addEngine()
+    await supervisor.reconnect()
+    expect(io.spawns).toBe(0)
+    expect(last()).toMatchObject({ status: 'running', startedByApp: false, token: other.info.token })
+  })
+
+  it('reconnects only from stopped', async () => {
+    await supervisor.start()
+    states = []
+    await supervisor.reconnect()
+    expect(states).toEqual([])
+    expect(io.spawns).toBe(1)
+  })
+
   it('gives up after three crashes in a minute', async () => {
     await supervisor.start()
     for (let i = 0; i < 3; i++) {
