@@ -8,9 +8,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from ontological.answer.models import AnswerModel
 from ontological.answer.postcheck import Verdict, post_run_check
-
 from ontological.llm.gateway import ToolCall
 
 SQL = "SELECT COUNT(*) AS n FROM Album"
