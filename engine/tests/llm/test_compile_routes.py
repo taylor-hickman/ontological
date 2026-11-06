@@ -24,13 +24,14 @@ from sdk_fakes import (
     said,
 )
 
-from ontological.compile import descriptions, keys, terms
+from ontological.compile import descriptions, keys, synonyms, terms
 from ontological.compile.gateway import ClaudeUnavailable, Structured
 from ontological.compile.models import (
     ColumnAttributeSpec,
     ColumnDescriptionResult,
     FkAndPkResult,
     RawTableTermsResult,
+    SynonymExtraction,
 )
 from ontological.llm.gateway import ClaudeGateway
 
@@ -48,6 +49,7 @@ def test_each_stage_spawns_on_its_route_with_upstream_s_prompt(tmp_path: Path) -
             answered({"fk_suggestions": [{"column_name": "ParentId"}]}, model=SONNET),
             answered({"descriptions": [{"column_name": "Name", "description": "x"}]}, model=HAIKU),
             answered({"terms": [{"name": "Genre", "attributes": []}]}, model=SONNET),
+            answered({"synonyms": ["GN"]}, model=HAIKU),
         ]
     )
     calls = MemoryCalls()
@@ -65,6 +67,7 @@ def test_each_stage_spawns_on_its_route_with_upstream_s_prompt(tmp_path: Path) -
         spec = ColumnAttributeSpec("Name", "name", datatype="VARCHAR")
         [term] = await terms.extract_terms(gateway, TABLE, [spec])
         assert term.name == "Genre"
+        assert await synonyms.extract_synonyms(gateway, "Music genres (GN).") == ["GN"]
 
     asyncio.run(stages())
 
@@ -76,16 +79,18 @@ def test_each_stage_spawns_on_its_route_with_upstream_s_prompt(tmp_path: Path) -
         ("sonnet", "high", keys.SYSTEM, schema(FkAndPkResult)),
         ("haiku", "medium", descriptions.SYSTEM, schema(ColumnDescriptionResult)),
         ("sonnet", "high", terms.SYSTEM, schema(RawTableTermsResult)),
+        ("haiku", "low", synonyms.SYSTEM, schema(SynonymExtraction)),
     ]
     assert [(r.task, r.prompt_version) for r in calls.rows] == [
         ("table_keys", "2a24f5d"),
         ("column_descriptions", "2a24f5d"),
         ("table_terms", "2a24f5d"),
+        ("table_synonyms", "2a24f5d"),
     ]
 
 
 def schema(
-    model: type[FkAndPkResult | ColumnDescriptionResult | RawTableTermsResult],
+    model: type[FkAndPkResult | ColumnDescriptionResult | RawTableTermsResult | SynonymExtraction],
 ) -> dict[str, object]:
     return {"type": "json_schema", "schema": model.model_json_schema()}
 

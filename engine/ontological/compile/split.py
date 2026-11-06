@@ -2,36 +2,42 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # Modified by Ontological: ported from upstream's auto_ontology/semantic/compile.py, pipeline.py
-# and visit_enter.py (`process_table`, `_commit_terms`) at 2a24f5d. Tables run one at a time,
-# in upstream's canonical commit order, and so do the Claude calls. A table's terms and
-# attributes are written in one transaction, with its checkpoint. The FK stage reads the table's
-# columns after profiling has stored their samples, where upstream reads them before, so its
-# prompt has samples on a first compile. The Terms and attributes are embedded once the compile
-# ends or stops, not as each table commits (ontological/embed/semantic.py). The SQL-attribute and
-# bridge stages are later work.
+# and visit_enter.py (`process_table`, `_commit_terms`) at 2a24f5d. Packs run one at a time, in
+# the order of their first tables, and so do the Claude calls; small tables share a pack's calls,
+# where upstream asks each table on its own. A pack's Terms and attributes are written in one
+# transaction, with its checkpoints. The FK stage reads the table's columns after profiling has
+# stored their samples, where upstream reads them before, so its prompt has samples on a first
+# compile. The Terms and attributes are embedded once the compile ends or stops, not as each
+# table commits (ontological/embed/semantic.py). The SQL-attribute and bridge stages are later
+# work.
 
-"""The split compile (BUILD_PLAN.md M1.4, M3.1; ARCHITECTURE.md §1.3, §6.4, §6.5).
+"""The split compile (BUILD_PLAN.md M1.4, M3.1, M3.2; ARCHITECTURE.md §1.3, §6.4, §6.5).
 
 A compile is a job (ops.job) with a step per table (ops.job_step), planned when it starts from
 the tables with no Term yet: canonical order, and the packs small tables share
-(`compile.packing`). For each pending step, in order:
+(`compile.packing`). For each pack with pending steps, in the order of the packs' first tables:
 
-1. profile the table through the source executor, and store samples, uniqueness and date
+1. profile each table through the source executor, and store samples, uniqueness and date
    notations;
-2. `table_keys`: suggest FKs and PKs and decide whether it is a junction table;
-3. `column_descriptions`: describe its undescribed non-FK columns, 15 to a call;
-4. `table_terms`: propose its Terms and assign every non-FK column to one;
-5. write the Terms and their attributes, and mark the step done, in one transaction.
+2. `table_keys`: suggest FKs and PKs and decide whether each table is a junction;
+3. `column_descriptions`: describe the undescribed non-FK columns, 15 to a call;
+4. `table_terms`: propose each table's Terms and assign every non-FK column to one, a table
+   wider than 40 such columns in chunks of 40;
+5. `table_synonyms`: the alternate names each table's description writes out, for its Terms;
+6. write the Terms and their attributes, and mark the steps done, in one transaction.
 
-Then semantic FKs from the declared foreign keys, and, given an embedder, the Terms' and
-attributes' vectors in the semantic layer (`ontological.embed.semantic`), for retrieval. Every
-Claude call goes through the gateway,
-one at a time. An answer that fails validation takes upstream's deterministic fallback. When
-Claude doesn't answer at all, nothing is written for the table: on a rate limit or an overload
-the job pauses until the usage window resets and retries the table; for anything else (a
-logged-out or missing `claude`) it stops, still embedding the tables it wrote, and the next run
-resumes it. A crashed job is resumed
-the same way. Packed calls, chunking wide tables and the `merged` option are M3.2's and later.
+Each stage asks once for the pack's tables that have something to ask (`compile.packed`); a
+table that is alone in that, and a wide table, which is a pack of its own, gets upstream's prompt
+unchanged. Then semantic FKs from the declared foreign keys, and, given an embedder, the Terms'
+and attributes' vectors in the semantic layer (`ontological.embed.semantic`), for retrieval.
+Every Claude call goes through the gateway, one at a time. An answer that fails validation takes
+upstream's deterministic fallback. When Claude doesn't answer at all, nothing is written for the
+pack: on a rate limit or an overload the job pauses until the usage window resets and retries
+the pack; for anything else (a logged-out or missing `claude`) it stops, still embedding the
+tables it wrote, and the next run resumes it. A crashed job is resumed the same way, and a
+resumed pack's calls are the ones its first try made, so the gateway's cache answers those that
+were answered. A certified description is never overwritten (the DAL's writes guard it). The
+`merged` option is M3.3's.
 """
 
 # The vendored DAL is untyped.
@@ -42,6 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
@@ -58,13 +65,14 @@ from auto_ontology.dal.datasources import (
 )
 from auto_ontology.dal.session import store, write_transaction
 from auto_ontology.dal.terms import upsert_table_term
-from ontological.compile.descriptions import column_attribute_specs
+from ontological.compile.descriptions import DescriptionsRequest, column_attribute_specs_pack
 from ontological.compile.gateway import ClaudeUnavailable, Structured
-from ontological.compile.keys import fk_source_columns, suggest_keys
+from ontological.compile.keys import KeysRequest, fk_source_columns, suggest_keys_pack
 from ontological.compile.models import ColumnAttributeSpec, TermProposal
 from ontological.compile.packing import PlannedTable, plan
 from ontological.compile.semantic_fk import SemanticFks, resolve_declared_fks
-from ontological.compile.terms import extract_terms
+from ontological.compile.synonyms import extract_synonyms_pack
+from ontological.compile.terms import extract_terms_pack
 from ontological.embed.embedder import LocalEmbedder
 from ontological.embed.search import semantic_vdb
 from ontological.embed.semantic import Synced, sync_database
@@ -163,25 +171,36 @@ async def compile_database(
         if job.state != "running":
             await asyncio.to_thread(job_store.set_state, job.id, "running")
         pending = await asyncio.to_thread(_pending, job.id, database_name)
-        logger.info("compile job %d: %d table(s) of %s", job.id, len(pending), database_name)
+        packs = _by_pack(pending)
+        logger.info(
+            "compile job %d: %d table(s) of %s in %d pack(s)",
+            job.id,
+            len(pending),
+            database_name,
+            len(packs),
+        )
         done: list[CompiledTable] = []
-        for number, (step, table) in enumerate(pending, start=1):
-            checkpoint = Checkpoint(job.id, step.position)
-            if table is None:
-                logger.warning("[%s] has left the work list; skipping", step.table_name)
-                await asyncio.to_thread(
-                    checkpoint.record, "skipped", {"skipped": "not in the work list"}
-                )
+        left = len(pending)
+        for number, members in enumerate(packs, start=1):
+            work: list[tuple[dict[str, Any], Checkpoint]] = []
+            for step, table in members:
+                checkpoint = Checkpoint(job.id, step.position)
+                if table is None:
+                    logger.warning("[%s] has left the work list; skipping", step.table_name)
+                    await asyncio.to_thread(
+                        checkpoint.record, "skipped", {"skipped": "not in the work list"}
+                    )
+                    continue
+                work.append((table, checkpoint))
+            left -= len(members) - len(work)
+            if not work:
                 continue
-            logger.info("[%d/%d] %s", number, len(pending), step.table_name)
+            names = ", ".join(str(table["name"]) for table, _ in work)
+            logger.info("[pack %d/%d] %s", number, len(packs), names)
             while True:
                 try:
-                    compiled = await compile_table(
-                        table,
-                        executor,
-                        gateway,
-                        probe_distinct_values=probe_distinct_values,
-                        checkpoint=checkpoint,
+                    compiled = await compile_pack(
+                        work, executor, gateway, probe_distinct_values=probe_distinct_values
                     )
                     break
                 except ClaudeUnavailable as e:
@@ -189,8 +208,8 @@ async def compile_database(
                         logger.warning(
                             "compile job %d stopped at %s, %d table(s) left: %s",
                             job.id,
-                            step.table_name,
-                            len(pending) - number + 1,
+                            names,
+                            left,
                             e,
                         )
                         await asyncio.to_thread(
@@ -201,7 +220,8 @@ async def compile_database(
                             database_name, job.id, done, None, stopped=e, vectors=vectors
                         )
                     await _pause(job.id, clock, e)
-            done.append(compiled)
+            done.extend(compiled)
+            left -= len(work)
         fks = await asyncio.to_thread(resolve_declared_fks, database_name)
         vectors = await _embed(database_name, embedder)
         await asyncio.to_thread(job_store.set_state, job.id, "done")
@@ -278,49 +298,101 @@ def _pending(job_id: int, database_name: str) -> list[tuple[job_store.Step, dict
     ]
 
 
-async def compile_table(
-    table: dict[str, Any],
+def _by_pack(
+    pending: list[tuple[job_store.Step, dict[str, Any] | None]],
+) -> list[list[tuple[job_store.Step, dict[str, Any] | None]]]:
+    """The pending steps by pack, in the order of the packs' numbers, which is the order of
+    their first tables; each pack's steps in canonical order."""
+    packs: dict[int, list[tuple[job_store.Step, dict[str, Any] | None]]] = {}
+    for item in pending:
+        packs.setdefault(item[0].pack, []).append(item)
+    return [packs[number] for number in sorted(packs)]
+
+
+@dataclass
+class _Table:
+    """A table of a pack on its way through the stages."""
+
+    table: dict[str, Any]  # with its declared primary key, once profiled
+    checkpoint: Checkpoint | None
+    ctx: dict[str, Any] = field(default_factory=dict[str, Any])
+    profiling: dict[str, Any] = field(default_factory=dict[str, Any])
+    skipped: str | None = None
+    junction: bool = False
+    specs: list[ColumnAttributeSpec] = field(default_factory=list[ColumnAttributeSpec])
+    terms: list[TermProposal] = field(default_factory=list[TermProposal])
+
+    @property
+    def id(self) -> str:
+        return str(self.table["id"])
+
+    @property
+    def name(self) -> str:
+        return str(self.table["name"])
+
+
+async def compile_pack(
+    tables: Sequence[tuple[dict[str, Any], Checkpoint | None]],
     executor: SourceExecutor,
     gateway: Structured,
     *,
     probe_distinct_values: bool = True,
-    checkpoint: Checkpoint | None = None,
-) -> CompiledTable:
-    """Compile one table. With a `checkpoint`, its step is marked done or skipped in the
-    transaction that writes the table's result."""
-    table_id, name = str(table["id"]), str(table["name"])
-    loaded = await asyncio.to_thread(_profile, table, executor, probe_distinct_values)
-    if loaded is None:
-        logger.warning("[%s] has no columns; skipping", name)
-        await asyncio.to_thread(_skip, table_id, "no columns", False, checkpoint)
-        return CompiledTable(table_id, name, skipped="no columns")
-    table, ctx, profile = loaded
-    profiling: dict[str, Any] = dict(profile["columns"])
+) -> list[CompiledTable]:
+    """Compile a pack's tables: profile each, then run each stage once for the pack (packed
+    calls, `compile.packed`), then write every table, and mark each `checkpoint` done or
+    skipped, in one transaction. Raises `ClaudeUnavailable`, having written nothing, when
+    Claude doesn't answer."""
+    work = [_Table(table, checkpoint) for table, checkpoint in tables]
+    for t in work:
+        loaded = await asyncio.to_thread(_profile, t.table, executor, probe_distinct_values)
+        if loaded is None:
+            logger.warning("[%s] has no columns; skipping", t.name)
+            t.skipped = "no columns"
+            continue
+        t.table, t.ctx, profile = loaded
+        t.profiling = dict(profile["columns"])
 
-    keys = await suggest_keys(gateway, table, ctx, profiling)
-    fk_names = fk_source_columns(ctx.get("fks", [])) | {s.column_name for s in keys.suggestions}
-    # Payload-bearing junctions are wider than the two-key shape the bridge pass handles, so
-    # the model's decision needs structural evidence of two FK roles too.
-    junction = len(ctx.get("columns", [])) > 2 and keys.is_junction_table and len(fk_names) >= 2
+    live = [t for t in work if t.skipped is None]
+    found = await suggest_keys_pack(
+        gateway, [KeysRequest(t.table, t.ctx, t.profiling) for t in live]
+    )
+    fk_names: list[set[str]] = []
+    for t, keys in zip(live, found, strict=True):
+        names = fk_source_columns(t.ctx.get("fks", [])) | {s.column_name for s in keys.suggestions}
+        # Payload-bearing junctions are wider than the two-key shape the bridge pass handles, so
+        # the model's decision needs structural evidence of two FK roles too.
+        t.junction = (
+            len(t.ctx.get("columns", [])) > 2 and keys.is_junction_table and len(names) >= 2
+        )
+        fk_names.append(names)
 
-    specs = await column_attribute_specs(
+    specs = await column_attribute_specs_pack(
         gateway,
-        ctx.get("columns", []),
-        ctx.get("fks", []),
-        suggested_fk_columns=fk_names,
-        profiling=profiling,
+        [
+            DescriptionsRequest(
+                t.name, t.ctx.get("columns", []), t.ctx.get("fks", []), names, t.profiling
+            )
+            for t, names in zip(live, fk_names, strict=True)
+        ],
     )
-    if not specs:
-        logger.warning("[%s] has no non-FK columns; no Term", name)
-        await asyncio.to_thread(_skip, table_id, "no non-FK columns", junction, checkpoint)
-        return CompiledTable(table_id, name, junction=junction, skipped="no non-FK columns")
+    for t, table_specs in zip(live, specs, strict=True):
+        t.specs = table_specs
+        if not table_specs:
+            logger.warning("[%s] has no non-FK columns; no Term", t.name)
+            t.skipped = "no non-FK columns"
 
-    terms = await extract_terms(gateway, table, specs)
-    written, attrs = await asyncio.to_thread(_commit, table_id, terms, specs, junction, checkpoint)
-    logger.info(
-        "[%s] Terms %s, %d attributes, %d FK columns", name, written, len(attrs), len(fk_names)
+    named = [t for t in live if t.skipped is None]
+    proposed = await extract_terms_pack(gateway, [(t.table, t.specs) for t in named])
+    synonyms = await extract_synonyms_pack(
+        gateway, [(t.name, t.table.get("description")) for t in named]
     )
-    return CompiledTable(table_id, name, written, attrs, junction)
+    for t, terms, words in zip(named, proposed, synonyms, strict=True):
+        t.terms = terms
+        if words:
+            for term in terms:
+                term.synonyms = words
+
+    return await asyncio.to_thread(_commit_pack, work)
 
 
 def _profile(
@@ -347,55 +419,57 @@ def _profile(
     return {**table, "pk": row.get("pk") or []}, fetch_table_context(table_id), profile
 
 
-def _skip(table_id: str, reason: str, junction: bool, checkpoint: Checkpoint | None) -> None:
+def _commit_pack(work: list[_Table]) -> list[CompiledTable]:
+    """Write the pack's tables, each with its checkpoint, in one transaction, so a pack is
+    written whole or not at all and a resumed job asks the same packed calls again."""
+    out: list[CompiledTable] = []
     with write_transaction():
-        if junction:
-            mark_table_as_junction(table_id)
-        if checkpoint is not None:
-            checkpoint.record("skipped", {"skipped": reason})
+        for t in work:
+            if t.junction:
+                mark_table_as_junction(t.id)
+            if t.skipped is not None:
+                if t.checkpoint is not None:
+                    t.checkpoint.record("skipped", {"skipped": t.skipped})
+                out.append(CompiledTable(t.id, t.name, junction=t.junction, skipped=t.skipped))
+                continue
+            written, attrs = _commit(t.id, t.terms, t.specs)
+            if t.checkpoint is not None:
+                t.checkpoint.record(
+                    "done", {"terms": written, "attributes": len(attrs), "junction": t.junction}
+                )
+            logger.info("[%s] Terms %s, %d attributes", t.name, written, len(attrs))
+            out.append(CompiledTable(t.id, t.name, written, attrs, t.junction))
+    return out
 
 
 def _commit(
-    table_id: str,
-    terms: list[TermProposal],
-    specs: list[ColumnAttributeSpec],
-    junction: bool,
-    checkpoint: Checkpoint | None,
+    table_id: str, terms: list[TermProposal], specs: list[ColumnAttributeSpec]
 ) -> tuple[list[str], list[str]]:
-    """Write the Terms and their attributes, and the checkpoint, in one transaction. A Term
-    whose name another table holds is written under a qualified name."""
+    """Write the Terms and their attributes. A Term whose name another table holds is written
+    under a qualified name."""
     spec_by_column = {spec.source_column: spec for spec in specs}
     written: list[str] = []
     attrs: list[str] = []
-    with write_transaction():
-        if junction:
-            mark_table_as_junction(table_id)
-        for term in terms:
-            assignments = [a for a in term.attributes if a.source_column in spec_by_column]
-            if not assignments:
-                continue
-            persisted = upsert_table_term(
-                term.name, term.description, table_id, synonyms=term.synonyms
+    for term in terms:
+        assignments = [a for a in term.attributes if a.source_column in spec_by_column]
+        if not assignments:
+            continue
+        persisted = upsert_table_term(term.name, term.description, table_id, synonyms=term.synonyms)
+        if persisted is None:
+            continue
+        _, term_name = persisted
+        if term_name != term.name:
+            logger.info("qualified colliding Term name %r as %r", term.name, term_name)
+        written.append(term_name)
+        for assignment in assignments:
+            spec = spec_by_column[assignment.source_column]
+            merge_column_attribute(
+                term_name=term_name,
+                table_id=table_id,
+                source_column=spec.source_column,
+                attr_name=spec.display_name,
+                datatype=spec.datatype,
+                description=spec.description,
             )
-            if persisted is None:
-                continue
-            _, term_name = persisted
-            if term_name != term.name:
-                logger.info("qualified colliding Term name %r as %r", term.name, term_name)
-            written.append(term_name)
-            for assignment in assignments:
-                spec = spec_by_column[assignment.source_column]
-                merge_column_attribute(
-                    term_name=term_name,
-                    table_id=table_id,
-                    source_column=spec.source_column,
-                    attr_name=spec.display_name,
-                    datatype=spec.datatype,
-                    description=spec.description,
-                )
-                attrs.append(spec.display_name)
-        if checkpoint is not None:
-            checkpoint.record(
-                "done", {"terms": written, "attributes": len(attrs), "junction": junction}
-            )
+            attrs.append(spec.display_name)
     return written, attrs

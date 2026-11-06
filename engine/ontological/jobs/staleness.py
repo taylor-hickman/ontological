@@ -4,7 +4,8 @@ Upstream's scheduler re-ingests every source every 24 hours, but a desktop app i
 So when the engine starts, it re-ingests the metadata of each source last ingested more than
 `STALE_AFTER` ago: a source whose catalog database row keeps its spec (`ingest.py` writes it) and
 whose `pulled` stamp is older than that, or missing. Ingest reads the source's catalog through its
-executor and diffs it into the store (M2.3), so the check spends no Claude quota.
+executor and diffs it into the store (M2.3), then adds the source's recent query history, parsed
+in one parse pool the check's sources share; the check spends no Claude quota.
 
 It runs on a thread of its own once the engine serves, one source at a time, and counts as a
 running job, so the engine doesn't idle out under it. A source that fails, such as a server that
@@ -29,6 +30,7 @@ from sqlalchemy import or_, select
 from auto_ontology.dal import schema as s
 from auto_ontology.dal.session import store
 from ontological.catalog.ingest import ingest
+from ontological.catalog.parse_pool import ParsePool
 from ontological.sources.executor import Cancelled, SourceExecutor
 from ontological.sources.spec import Source, from_record
 
@@ -109,10 +111,11 @@ class StalenessCheck:
         sources = self._find()
         if sources:
             log.info("staleness: %d source(s) last ingested over a day ago", len(sources))
-        for source in sources:
-            if self._cancelled.is_set():
-                break
-            self.results.append(self._refresh(source))
+        with ParsePool() as pool:  # its workers start only if a source has history
+            for source in sources:
+                if self._cancelled.is_set():
+                    break
+                self.results.append(self._refresh(source, pool))
         return self.results
 
     def _run_logged(self) -> None:
@@ -121,7 +124,7 @@ class StalenessCheck:
         except Exception:
             log.exception("staleness check failed")
 
-    def _refresh(self, source: Source) -> Refreshed:
+    def _refresh(self, source: Source, pool: ParsePool) -> Refreshed:
         name = source.database_name
         try:
             with self._open(source) as executor:
@@ -129,7 +132,7 @@ class StalenessCheck:
                     self._executor = executor
                 if self._cancelled.is_set():  # cancelled before the extract could be
                     raise Cancelled("the check was cancelled")
-                got = ingest(executor, timeout_s=self._extract_timeout_s)
+                got = ingest(executor, timeout_s=self._extract_timeout_s, pool=pool)
         except Exception as e:
             log.warning("staleness: %s (%s) wasn't refreshed: %s", name, source.label, e)
             return Refreshed(name, [], f"{type(e).__name__}: {e}")
