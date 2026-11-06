@@ -145,12 +145,12 @@ def test_a_sync_embeds_only_what_changed_and_drops_what_is_gone(
 def test_a_stopped_compile_embeds_the_tables_it_wrote(
     store: pg.Layout, chinook: Path, embedder: LocalEmbedder
 ) -> None:
-    def limited_at_employee(task: str, user: str) -> dict[str, Any] | NoAnswer | None:
+    def logged_out_at_employee(task: str, user: str) -> dict[str, Any] | NoAnswer | None:
         if task == "table_terms" and table_of(user) == "Employee":
-            return NoAnswer("limited", "limited")
+            return NoAnswer("error", "needs_login")  # a wait won't fix it: the job stops
         return claude(task, user)
 
-    stopped = compile_source(chinook, embedder, ScriptedGateway(limited_at_employee))
+    stopped = compile_source(chinook, embedder, ScriptedGateway(logged_out_at_employee))
 
     assert stopped.stopped is not None
     term_rows = "SELECT langchain_metadata ->> 'name' FROM vdb.semantic_layer WHERE label = 'Term'"
