@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by Ontological: imports query_stats from ontological.catalog.query_stats, the port of
+# upstream's catalog/query_stats.py with the month-counter fix (M2.4).
 
 """Storing parsed SQL statements and what they reference.
 
 ``get_sql_counters`` and ``get_candidate_sql_ids`` are pure and live in
-:mod:`auto_ontology.catalog.query_stats`, re-exported here.
+:mod:`ontological.catalog.query_stats`, re-exported here.
 
 Two things this deliberately does not do:
 
@@ -36,7 +38,7 @@ from auto_ontology.catalog.constants import Edges, Props
 from auto_ontology.catalog.model.node import CatalogNode
 
 # Pure, so it lives outside this module rather than being reimplemented.
-from auto_ontology.catalog.query_stats import (  # noqa: F401
+from ontological.catalog.query_stats import (  # noqa: F401
     get_candidate_sql_ids,
     get_sql_counters,
 )

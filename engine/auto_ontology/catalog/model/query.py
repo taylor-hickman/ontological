@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by Ontological: the month counter is written under query_stats.month_key, the key its
+# readers parse (M2.4, ARCHITECTURE.md §1.3), not count_{month}_{year}.
 
 """A parsed SQL query and the catalog nodes it references."""
 
 from auto_ontology.catalog.model.node import CatalogNode
 from auto_ontology.catalog.constants import Labels
+from ontological.catalog.query_stats import month_key
 
 
 class Query:
@@ -26,11 +29,9 @@ class Query:
         self.union_count: int = 0
         self.dialect_used: str | None = None
 
-        month = ltimestamp.month
-        year = ltimestamp.year
         props = {
             "name": f"query_{str(id)}",
-            f"count_{month}_{year}": count,
+            month_key(ltimestamp): count,
             "total_counter": count,
             "sql_full_query": sql_text,
             "last_query_timestamp": ltimestamp,

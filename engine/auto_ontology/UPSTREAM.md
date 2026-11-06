@@ -24,11 +24,12 @@ Upstream's `alembic.ini` isn't vendored. `ontological/store/chains.py` configure
 | `dal/custom_analyses.py` | Modified: takes `SqlParseError` from `server/sql_errors.py`; `embed_custom_analyses` takes a LangChain `Embeddings` in place of `EmbedParams` |
 | `dal/pql_analyses.py` | Modified: `embed_pql_analyses` takes a LangChain `Embeddings` in place of `EmbedParams` |
 | `dal/sql_attributes.py` | Modified: takes `SqlParseError` from `server/sql_errors.py` |
-| `catalog/store/*.py` except the two below | Unchanged |
+| `catalog/store/*.py` except the three below | Unchanged |
 | `catalog/store/db.py` | Modified: re-exports the diff from `ontological/catalog/diff.py`, the port of upstream's `catalog/diff.py` (M2.3) |
 | `catalog/store/schemas.py` | Modified: imports `normalize_tables` and `normalize_columns` from `ontological/catalog/normalize.py`, the port of upstream's `catalog/normalize.py` (M2.3) |
-| `catalog/__init__.py`, `catalog/constants.py`, `catalog/model/*.py` | Unchanged |
-| `catalog/query_stats.py` | Unchanged, for now: `catalog/store/queries.py` imports it. M2.4 ports it with the month-counter fix, and the store then imports the port |
+| `catalog/store/queries.py` | Modified: re-exports `get_sql_counters` and `get_candidate_sql_ids` from `ontological/catalog/query_stats.py`, the port of upstream's `catalog/query_stats.py` with the month-counter fix (M2.4) |
+| `catalog/__init__.py`, `catalog/constants.py`, `catalog/model/*.py` except `query.py` | Unchanged |
+| `catalog/model/query.py` | Modified: writes the month counter under `query_stats.month_key` (`count_monthly_YYYY_MM`), the key its readers parse, not `count_{month}_{year}` (M2.4, ARCHITECTURE.md §1.3) |
 | `infra/postgres.py` | Modified: a `POSTGRES_HOST` that is a socket directory builds `postgresql://user@/db?host=<dir>`, with no password |
 | `semantic/__init__.py`, `semantic/constants.py` | Unchanged |
 | `server/__init__.py`, `server/zones/__init__.py`, `server/zones/constants.py`, `server/zones/utils.py` | Unchanged |
@@ -38,6 +39,7 @@ Upstream's `alembic.ini` isn't vendored. `ontological/store/chains.py` configure
 | `vdb/__init__.py` | Modified: `get_vdb`, `get_data_vdb` and `get_semantic_vdb` pass `embeddings` and `vector_size` through |
 | `vdb/postgres.py` | Modified: a `vector_size` up to 2,000 is indexed as `vector` with `vector_cosine_ops`, with no `halfvec` conversion (§5.4); `on_change` registers a listener that every write and delete calls with the collection it changed, so the engine's BM25 index rebuilds whichever `PostgresVDB` made the change (§7.3); `row_metadata` and `delete_rows` read and delete rows by the store's row ids, for the semantic layer's sync (M1.6) |
 | `catalog/diff.py`, `catalog/normalize.py` | Not vendored: ported to `ontological/catalog/` (M2.3). The golden seed's copy of `normalize.py` is test-only (`engine/tests/upstream_fixtures/`) |
+| `catalog/query_stats.py` | Not vendored: ported to `ontological/catalog/` with the month-counter fix (M2.4). `catalog/sql_parse.py` and `parsers/*` are ported there too; the golden seed's copies are test-only |
 | `vdb/records.py` | Modified: adds `embed_rows_into_vdb`, upstream's `utils.embedding` helper on an `Embeddings`, which stores `model` and `content_hash` in each row's metadata (§7.1), and `content_hash` |
 
 Added by Ontological, in upstream's layout so the vendored imports stay one-line edits:

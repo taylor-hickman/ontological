@@ -18,7 +18,7 @@ from conftest import STUB, Apps, Engine, count, nearest, seed, sql
 from ontological.store import chains, pg
 
 UPSTREAM_HEAD = "99d4d343dd0b"  # upstream's chain at 2a24f5d
-OURS_HEAD = "0003"
+OURS_HEAD = "0004"
 GROWN = f"{int(OURS_HEAD) + 1:04d}"  # the first revision `extended` adds
 
 
