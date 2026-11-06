@@ -2,14 +2,16 @@
 
 A spec holds no secret. A server source names its password by a `KeychainRef`, and the executor
 reads the keychain each time it starts a child, so the store and the spec only ever hold the
-reference (§4.3, Source credentials).
+reference (§4.3, Source credentials). Ingest keeps each source's spec, as `to_record` writes it, on
+its catalog database row, so the engine can open the source again (§9.1, the staleness check).
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from ontological.sources.keychain import KeychainRef
 
@@ -160,3 +162,54 @@ class MySQLSource:
 
 Source = SqliteSource | DuckDBSource | FileSource | PostgresSource | MySQLSource
 ServerSource = PostgresSource | MySQLSource
+
+
+# --- a source as JSON, the form the store keeps ------------------------------------------------
+
+Record = dict[str, Any]
+
+
+def to_record(source: Source) -> Record:
+    """The source as JSON, for `catalog_database.connection`. A password stays a reference."""
+    if isinstance(source, SqliteSource | DuckDBSource):
+        kind = "sqlite" if isinstance(source, SqliteSource) else "duckdb"
+        return {"kind": kind, "path": str(source.path)}
+    if isinstance(source, FileSource):
+        return {
+            "kind": "files",
+            "name": source.name,
+            "tables": [{"name": t.name, "path": t.path, "format": t.format} for t in source.tables],
+        }
+    return {
+        "kind": "postgres" if isinstance(source, PostgresSource) else "mysql",
+        "host": source.host,
+        "database": source.database,
+        "user": source.user,
+        "port": source.port,
+        "password": source.password.account if source.password else None,
+    }
+
+
+def from_record(record: Mapping[str, Any]) -> Source:
+    """The source `to_record` wrote. Raises `ValueError` for a record it can't read."""
+    try:
+        kind = record["kind"]
+        if kind in ("sqlite", "duckdb"):
+            return (SqliteSource if kind == "sqlite" else DuckDBSource)(Path(record["path"]))
+        if kind == "files":
+            return FileSource(
+                record["name"],
+                tuple(FileTable(t["name"], t["path"], t["format"]) for t in record["tables"]),
+            )
+        if kind in ("postgres", "mysql"):
+            password = record.get("password")
+            return (PostgresSource if kind == "postgres" else MySQLSource)(
+                host=record["host"],
+                database=record["database"],
+                user=record["user"],
+                port=int(record["port"]),
+                password=KeychainRef(password) if password else None,
+            )
+    except (KeyError, TypeError) as e:
+        raise ValueError(f"not a source record: {record!r}") from e
+    raise ValueError(f"not a source record: {record!r}")
