@@ -6,6 +6,7 @@ scripted `query()` that calls the tools through the SDK's MCP bridge."""
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +23,11 @@ from llm.sdk_fakes import (
     said,
 )
 from llm.sdk_fakes import answered as structured_session
-from ontological.answer.agent import Answered, ask
-from ontological.answer.prompts import REFUSAL_RULE
 from test_tools import GOOD_SQL, PLAN, FakeOntology, FakeRunner
 
+from ontological.answer.agent import Answered, ask
 from ontological.answer.pack import GroundingPack
+from ontological.answer.prompts import REFUSAL_RULE
 from ontological.llm.gateway import ClaudeGateway
 
 QUESTION = "How many albums does each artist have?"
@@ -84,7 +85,7 @@ FULL = [
 
 
 class Harness:
-    def __init__(self, tmp_path: Path, scripts: list[list[Any]]) -> None:
+    def __init__(self, tmp_path: Path, scripts: list[Sequence[Any]]) -> None:
         self.query = FakeQuery(scripts)
         self.calls = MemoryCalls()
         self.gateway = ClaudeGateway(
