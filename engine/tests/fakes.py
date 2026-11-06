@@ -1,4 +1,4 @@
-"""Stand-ins tests share: an embedder, a keychain, and a Claude gateway for compile."""
+"""Stand-ins tests share: an embedder, a keychain, a Claude gateway for compile, and a clock."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 
 from keyring.backend import KeyringBackend
@@ -66,10 +67,11 @@ class StructuredCall:
 @dataclass(frozen=True)
 class NoAnswer:
     """What a scripted call returns when Claude didn't answer: the call's outcome, and the state
-    the gateway is left in."""
+    the gateway is left in, with the `resets_at` of a rejected rate-limit event when one came."""
 
     outcome: Outcome = "limited"
     state: State = "limited"
+    resets_at: datetime | None = None
 
 
 # The model's JSON, None for an answer that failed validation, or NoAnswer
@@ -88,6 +90,7 @@ class ScriptedGateway:
     peak: int = 0
     last_outcome: Outcome | None = None
     state: State = "ready"
+    resets_at: datetime | None = None
 
     @property
     def status(self) -> GatewayStatus:
@@ -98,7 +101,7 @@ class ScriptedGateway:
             version=None,
             logged_in=self.state != "needs_login",
             rate_limit=None,
-            limited_until=None,
+            limited_until=self.resets_at if self.state == "limited" else None,
             error=None if self.state == "ready" else self.state,
         )
 
@@ -122,9 +125,33 @@ class ScriptedGateway:
             self.in_flight -= 1
         if isinstance(output, NoAnswer):
             self.last_outcome, self.state = output.outcome, output.state
+            self.resets_at = output.resets_at
             return None
+        self.state, self.resets_at = "ready", None
         self.last_outcome = "invalid" if output is None else "ok"
         return None if output is None else schema.model_validate(output)
 
     def tasks(self) -> list[str]:
         return [c.task for c in self.calls]
+
+
+T0 = datetime(2026, 11, 6, 12, 0, tzinfo=UTC)
+
+
+@dataclass
+class FakeClock:
+    """A wall clock that `sleep` moves on at once. Records each sleep, and calls `on_sleep` with
+    its length first, so a test can look at what a paused job left behind."""
+
+    at: datetime = T0
+    sleeps: list[float] = field(default_factory=list[float])
+    on_sleep: Callable[[float], None] = lambda _: None
+
+    def now(self) -> datetime:
+        return self.at
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.on_sleep(seconds)
+        self.at += timedelta(seconds=seconds)
+        await asyncio.sleep(0)

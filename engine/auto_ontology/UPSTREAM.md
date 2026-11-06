@@ -36,7 +36,7 @@ Upstream's `alembic.ini` isn't vendored. `ontological/store/chains.py` configure
 | `utils/embedding_rows.py` | Unchanged. `ontological/catalog/data_layer.py` builds the data layer's texts with it, and its templates are the retrieval contract (M2.5) |
 | `utils/__init__.py` | Modified: empty. Upstream's imports `utils.embedding` (the OpenAI client) |
 | `vdb/__init__.py` | Modified: `get_vdb`, `get_data_vdb` and `get_semantic_vdb` pass `embeddings` and `vector_size` through |
-| `vdb/postgres.py` | Modified: a `vector_size` up to 2,000 is indexed as `vector` with `vector_cosine_ops`, with no `halfvec` conversion (§5.4) |
+| `vdb/postgres.py` | Modified: a `vector_size` up to 2,000 is indexed as `vector` with `vector_cosine_ops`, with no `halfvec` conversion (§5.4); `on_change` registers a listener that every write and delete calls with the collection it changed, so the engine's BM25 index rebuilds whichever `PostgresVDB` made the change (§7.3) |
 | `catalog/diff.py`, `catalog/normalize.py` | Not vendored: ported to `ontological/catalog/` (M2.3). The golden seed's copy of `normalize.py` is test-only (`engine/tests/upstream_fixtures/`) |
 | `vdb/records.py` | Modified: adds `embed_rows_into_vdb`, upstream's `utils.embedding` helper on an `Embeddings`, which stores `model` and `content_hash` in each row's metadata (§7.1), and `content_hash` |
 

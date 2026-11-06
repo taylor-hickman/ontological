@@ -48,6 +48,7 @@ from ontological.api.app import create_app
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
+from ontological.jobs.active import ActiveJobs
 from ontological.llm.env import sanitize_environ
 from ontological.store import dal, pg
 
@@ -276,7 +277,12 @@ async def _serve(
     stop: _Stop,
     embedder: LocalEmbedder | None,
 ) -> None:
-    lifetime = Lifetime(idle_timeout_s=config.idle_timeout_s, renew_every_s=config.renew_every_s)
+    jobs = ActiveJobs()
+    lifetime = Lifetime(
+        idle_timeout_s=config.idle_timeout_s,
+        renew_every_s=config.renew_every_s,
+        jobs_running=jobs.count,
+    )
     info = discovery.EngineInfo(
         pid=os.getpid(),
         port=sock.getsockname()[1],
@@ -289,6 +295,7 @@ async def _serve(
         pid=info.pid,
         version=info.version,
         embedder=embedder,
+        jobs=jobs,
     )
     server = _Server(
         uvicorn.Config(
