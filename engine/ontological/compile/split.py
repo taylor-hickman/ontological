@@ -191,7 +191,7 @@ async def compile_database(
             logger.info("[%d/%d] %s", number, len(pending), step.table_name)
             while True:
                 try:
-                    with call_scope(job.id, step.table_name):
+                    with call_scope(job.id, step.table_id, step.table_name):
                         compiled = await compile_table(
                             table,
                             executor,

@@ -210,20 +210,19 @@ def test_a_person_pausing_during_a_usage_pause_holds_the_job_at_once(
 
 
 def test_each_tables_calls_are_made_under_its_job_and_table(executor: SourceExecutor) -> None:
-    scopes: list[tuple[int | None, str | None, str | None]] = []
+    scopes: list[tuple[CallScope, str | None]] = []
 
     def note(task: str, user: str) -> Any:
-        scope = current_scope()
         # A description call's prompt names only columns
-        asked = None if task == "column_descriptions" else table_of(user)
-        scopes.append((scope.job_id, scope.table_name, asked))
+        scopes.append((current_scope(), None if task == "column_descriptions" else table_of(user)))
         return claude(task, user)
 
     got = asyncio.run(compile_database("chinook", executor, ScriptedGateway(note)))
 
-    assert scopes and all(job == got.job_id for job, _, _ in scopes)
-    assert all(scoped == asked for _, scoped, asked in scopes if asked is not None)
-    assert all(scoped is not None for _, scoped, _ in scopes)
+    ids = {s.table_name: s.table_id for s in jobs.job_steps(got.job_id)}
+    assert scopes and all(scope.job_id == got.job_id for scope, _ in scopes)
+    assert all(scope.table_name == asked for scope, asked in scopes if asked is not None)
+    assert all(ids[str(scope.table_name)] == scope.table_id for scope, _ in scopes)
     assert current_scope() == CallScope()
 
 

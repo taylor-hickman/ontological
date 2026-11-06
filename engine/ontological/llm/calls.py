@@ -61,6 +61,7 @@ class CallScope:
     """What a call is for: the job and the table, for the job's call log."""
 
     job_id: int | None = None
+    table_id: str | None = None
     table_name: str | None = None
 
 
@@ -68,10 +69,10 @@ _scope: ContextVar[CallScope | None] = ContextVar("call_scope", default=None)
 
 
 @contextmanager
-def call_scope(job_id: int | None, table_name: str | None) -> Generator[None]:
+def call_scope(job_id: int, table_id: str, table_name: str) -> Generator[None]:
     """Calls made inside, in this task or a thread it starts, are logged under this job and
     table."""
-    token = _scope.set(CallScope(job_id, table_name))
+    token = _scope.set(CallScope(job_id, table_id, table_name))
     try:
         yield
     finally:
@@ -106,6 +107,7 @@ class LlmCall:
     session_id: str | None = None
     cached: bool = False  # answered from the cache: no spawn, and no output of its own
     job_id: int | None = None
+    table_id: str | None = None
     table_name: str | None = None
 
     @property
@@ -136,12 +138,12 @@ _INSERT = text(
     INSERT INTO ops.llm_call (
         task, kind, prompt_version, cache_key, model, effort, attempt, outcome, output, error,
         resolved_model, answered_model, fallback, usage, cost_usd, duration_ms, num_turns,
-        session_id, cached, job_id, table_name
+        session_id, cached, job_id, table_id, table_name
     ) VALUES (
         :task, :kind, :prompt_version, :cache_key, :model, :effort, :attempt, :outcome,
         CAST(:output AS jsonb), :error, :resolved_model, :answered_model, :fallback,
         CAST(:usage AS jsonb), :cost_usd, :duration_ms, :num_turns, :session_id, :cached,
-        :job_id, :table_name
+        :job_id, :table_id, :table_name
     )
     """
 )
@@ -194,6 +196,7 @@ class PgCallLog:
             "session_id": call.session_id,
             "cached": call.cached,
             "job_id": call.job_id,
+            "table_id": call.table_id,
             "table_name": call.table_name,
         }
         with self._engine.begin() as conn:

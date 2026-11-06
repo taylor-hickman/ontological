@@ -5,6 +5,12 @@ processes can't reach the API; there are no open routes, docs included. Authoris
 as activity for idle shutdown, for as long as they are in flight (an SSE stream keeps the engine
 up). Unauthorised ones don't.
 
+Jobs (DESIGN.md §5.4): `GET /jobs` lists the latest, `GET /jobs/{id}` adds a compile's tables
+and their stages, `GET /jobs/{id}/calls` is its call log. `POST /jobs/compile` starts or resumes
+a database's compile, which uses Claude quota; `POST /jobs/{id}/hold` pauses one until
+`POST /jobs/{id}/resume`; `POST /jobs/{id}/dismiss` puts off a refresh's new-tables prompt. The
+routes answer 503 in an engine with no store to keep jobs in.
+
 Leases: `POST /leases` takes one, `PUT /leases/{id}` renews it, `DELETE /leases/{id}` releases
 it. A renewal of an expired lease is 404, and the client takes a new one. A closing engine
 refuses new leases with 503, and the client starts a new engine.
@@ -27,7 +33,9 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine.lifetime import Closing, Lease, Lifetime
-from ontological.jobs.active import ActiveJobs
+from ontological.jobs.active import ActiveJobs, JobBusy
+from ontological.jobs.service import JobsService, NoSource, NoSuchJob, NotNow
+from ontological.jobs.view import CallRow, JobDetail, JobSummary
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +59,18 @@ class LeaseOut(BaseModel):
             renew_every_s=lease.renew_every_s,
             expires_after_s=lease.expires_after_s,
         )
+
+
+class CompileRequest(BaseModel):
+    database_name: str
+
+
+class JobList(BaseModel):
+    jobs: list[JobSummary]
+
+
+class CallList(BaseModel):
+    calls: list[CallRow]
 
 
 class Health(BaseModel):
@@ -100,6 +120,7 @@ def create_app(
     version: str,
     embedder: LocalEmbedder | None = None,
     jobs: ActiveJobs | None = None,
+    jobs_service: JobsService | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Ontological engine",
@@ -113,6 +134,11 @@ def create_app(
     # The jobs running now, paused ones included: the count idle shutdown reads (§4.4). A job
     # started from a route runs under it.
     app.state.jobs = jobs or ActiveJobs()
+
+    def service() -> JobsService:
+        if jobs_service is None:
+            raise HTTPException(503, "this engine has no store to keep jobs in")
+        return jobs_service
 
     @app.get("/health")
     async def health() -> Health:  # pyright: ignore[reportUnusedFunction]
@@ -141,6 +167,50 @@ def create_app(
             raise HTTPException(404, "no such lease")
         log.info("lease %s released", lease_id[:6])
         return Response(status_code=204)
+
+    @app.get("/jobs")
+    async def list_jobs() -> JobList:  # pyright: ignore[reportUnusedFunction]
+        return JobList(jobs=await service().summaries())
+
+    @app.get("/jobs/{job_id}")
+    async def job_detail(job_id: int) -> JobDetail:  # pyright: ignore[reportUnusedFunction]
+        try:
+            return await service().detail(job_id)
+        except NoSuchJob:
+            raise HTTPException(404, "no such job") from None
+
+    @app.get("/jobs/{job_id}/calls")
+    async def job_calls(job_id: int) -> CallList:  # pyright: ignore[reportUnusedFunction]
+        try:
+            return CallList(calls=await service().calls(job_id))
+        except NoSuchJob:
+            raise HTTPException(404, "no such job") from None
+
+    @app.post("/jobs/compile", status_code=202)
+    async def start_compile(body: CompileRequest) -> Response:  # pyright: ignore[reportUnusedFunction]
+        try:
+            await service().compile(body.database_name)
+        except NoSource:
+            raise HTTPException(404, f"no source for {body.database_name}") from None
+        except JobBusy as e:
+            raise HTTPException(409, str(e)) from None
+        return Response(status_code=202)
+
+    @app.post("/jobs/{job_id}/{action}", status_code=202)
+    async def act_on_job(job_id: int, action: str) -> Response:  # pyright: ignore[reportUnusedFunction]
+        jobs = service()
+        actions = {"hold": jobs.hold, "resume": jobs.resume, "dismiss": jobs.dismiss}
+        if action not in actions:
+            raise HTTPException(404, "no such action")
+        try:
+            await actions[action](job_id)
+        except NoSuchJob:
+            raise HTTPException(404, "no such job") from None
+        except (NotNow, JobBusy) as e:
+            raise HTTPException(409, str(e)) from None
+        except NoSource as e:
+            raise HTTPException(404, f"no source for {e}") from None
+        return Response(status_code=202)
 
     app.add_middleware(BearerAuth, token=token, lifetime=lifetime)
     # Added last, so it runs first: a preflight is answered before BearerAuth sees it.

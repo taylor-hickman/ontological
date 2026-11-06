@@ -425,6 +425,7 @@ class ClaudeGateway:
             outcome="ok",
             cached=True,
             job_id=scope.job_id,
+            table_id=scope.table_id,
             table_name=scope.table_name,
         )
         await asyncio.to_thread(self.calls.record, call)
@@ -462,6 +463,7 @@ class ClaudeGateway:
             num_turns=result.num_turns if result else None,
             session_id=result.session_id if result else None,
             job_id=scope.job_id,
+            table_id=scope.table_id,
             table_name=scope.table_name,
         )
         await asyncio.to_thread(self.calls.record, call)

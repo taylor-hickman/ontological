@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 import httpx2
 import pytest
+from fake_jobs import FakeJobs
 from fastapi.testclient import TestClient
 
 from ontological.api.app import create_app
@@ -193,3 +197,77 @@ def test_responses_to_the_app_carry_its_origin(client: TestClient) -> None:
     assert r.headers["access-control-allow-origin"] == "app://ontological"
     r = client.get("/health", headers={"Origin": "https://example.com"})
     assert "access-control-allow-origin" not in r.headers
+
+
+# --- jobs ---------------------------------------------------------------------------------------
+
+JOB: dict[str, Any] = {
+    "id": 3,
+    "kind": "compile",
+    "database_name": "wwi",
+    "state": "paused",
+    "paused_until": "2026-11-06T16:10:00Z",
+    "error": None,
+    "created_at": "2026-11-06T14:31:00Z",
+    "finished_at": None,
+    "tables": 48,
+    "tables_done": 31,
+    "calls": 142,
+    "cache_hits": 37,
+    "new_tables": [],
+    "dismissed": False,
+}
+
+
+@pytest.fixture
+def jobs_client(lifetime: Lifetime, tmp_path: Path) -> Iterator[TestClient]:
+    scenario: dict[str, Any] = {
+        "jobs": [JOB],
+        "details": {"3": {"stages": ["table_keys"], "tables": [
+            {"name": "cities", "state": "done", "stages_done": 1, "skipped": None},
+        ]}},
+        "calls": {"3": [{
+            "id": 9, "at": "2026-11-06T15:31:58Z", "task": "table_terms",
+            "table_name": "cities_archive", "model": "claude-sonnet-5-5", "outcome": "limited",
+            "cached": False, "attempt": 1, "duration_ms": 900,
+        }]},
+    }  # fmt: skip
+    (tmp_path / "jobs.json").write_text(json.dumps(scenario))
+    app = create_app(
+        token=TOKEN, lifetime=lifetime, pid=1, version="9.9.9", jobs_service=FakeJobs(tmp_path)
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.headers["Authorization"] = f"Bearer {TOKEN}"
+        yield c
+
+
+def test_jobs_routes_need_a_store(client: TestClient) -> None:
+    assert client.get("/jobs").status_code == 503
+    assert client.post("/jobs/compile", json={"database_name": "x"}).status_code == 503
+
+
+def test_jobs_lists_reads_and_acts_on_jobs(jobs_client: TestClient) -> None:
+    [job] = jobs_client.get("/jobs").json()["jobs"]
+    assert (job["id"], job["state"], job["cache_hits"]) == (3, "paused", 37)
+    detail = jobs_client.get("/jobs/3").json()
+    assert (detail["job"]["id"], detail["stages"], detail["tables"][0]["name"]) == (
+        3, ["table_keys"], "cities",
+    )  # fmt: skip
+    [call] = jobs_client.get("/jobs/3/calls").json()["calls"]
+    assert (call["task"], call["outcome"], call["cached"]) == ("table_terms", "limited", False)
+
+    assert jobs_client.post("/jobs/3/hold").status_code == 202
+    assert jobs_client.get("/jobs").json()["jobs"][0]["state"] == "held"
+    assert jobs_client.post("/jobs/3/hold").status_code == 409, "a held job can't be held"
+    assert jobs_client.post("/jobs/3/resume").status_code == 202
+    assert jobs_client.post("/jobs/compile", json={"database_name": "wwi"}).status_code == 409
+    assert jobs_client.post("/jobs/3/dismiss").status_code == 202
+    assert jobs_client.get("/jobs").json()["jobs"][0]["dismissed"] is True
+
+
+def test_jobs_routes_answer_404_for_what_isnt_there(jobs_client: TestClient) -> None:
+    assert jobs_client.get("/jobs/99").status_code == 404
+    assert jobs_client.get("/jobs/99/calls").status_code == 404
+    assert jobs_client.post("/jobs/99/hold").status_code == 404
+    assert jobs_client.post("/jobs/3/explode").status_code == 404
+    assert jobs_client.post("/jobs/compile", json={"database_name": "nope"}).status_code == 404
