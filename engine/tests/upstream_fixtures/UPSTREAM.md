@@ -24,6 +24,7 @@ The gate reads the JUnit report and fails on any test that doesn't pass, skips i
 | `dev_tools/__init__.py`, `dev_tools/fixtures/__init__.py`, `seed_fixtures.py`, `seed_local_postgres.py`, `build_sqlite_fixtures.py`, `seed_graph_fixture.py`, `capture_dal_golden.py` | Unchanged. `capture_dal_golden.py` finds the goldens at `parents[2]/auto_ontology/dal/tests/golden`, which this layout keeps |
 | `dev_tools/fixtures/sql/` (`pagila.sql`, `pagila_analytics.sql`, `chinook.sql`, `README.md`) | Unchanged. Pagila and Chinook are MIT (THIRD_PARTY_NOTICES.md) |
 | `auto_ontology/catalog/ingest.py`, `extract.py`, `write.py`, `table_filter.py`, `sql_parse.py`, `parsers/*`, `services/*` | Unchanged |
+| `auto_ontology/catalog/normalize.py` | Unchanged. The engine imports the port (`ontological/catalog/normalize.py`, M2.3); this copy keeps the seed's `extract.py` and `sql_parse.py` on upstream's own, since the goldens are byte-for-byte against its output. The seed's `write.py` reaches the diff through the store (`catalog/store/db.py`), so it gets the port, which a first load never calls |
 | `auto_ontology/connectors/base.py`, `postgres.py`, `sqlite.py`, `connection_string_factory.py` | Unchanged |
 | `auto_ontology/connectors/__init__.py` | Modified: only the Postgres and SQLite connectors |
 | `auto_ontology/connectors/registry.py` | Modified: only the Postgres and SQLite connectors; drops `get_connectors_for_subject_token` (Databricks SSO) |

@@ -12,6 +12,10 @@ column in the catalog as nullable. These tests pin the conversion so it can't si
 a string.
 """
 
+# pandas has no stubs here.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
+# pyright: reportUnknownArgumentType=false, reportMissingTypeStubs=false
+
 from __future__ import annotations
 
 import pandas as pd
@@ -87,7 +91,7 @@ def _columns(**extra: list[object]) -> pd.DataFrame:
 
 
 def test_normalize_columns_produces_a_nullable_boolean_dtype() -> None:
-    """"boolean", not "bool": a source may not be able to determine it."""
+    """ "boolean", not "bool": a source may not be able to determine it."""
     df = normalize_columns(_columns(is_nullable=[True, False, None]))
     assert df["is_nullable"].dtype == "boolean"
     assert df["is_nullable"].tolist()[:2] == [True, False]

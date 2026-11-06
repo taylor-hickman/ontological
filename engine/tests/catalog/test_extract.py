@@ -11,6 +11,10 @@ The executor already keeps an undescribable relation out of `tables` and puts it
 wrong: a listed relation with no columns fails before anything is written.
 """
 
+# pandas has no stubs here.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
+# pyright: reportUnknownArgumentType=false, reportMissingTypeStubs=false
+
 from __future__ import annotations
 
 import pandas as pd
@@ -97,17 +101,29 @@ def test_listed_relation_without_columns_fails_before_catalog_write() -> None:
     assert "private.customers" in message
 
 
+ORDERS = {"table_schema": "sales", "table_name": "orders"}
+
+
 def test_extract_normalizes_the_frames_and_keeps_the_keys() -> None:
     catalog = _catalog(
         [{"table_schema": "sales", "table_name": "orders", "table_type": "base table"}],
         [
-            {"table_schema": "sales", "table_name": "orders", "column_name": "id",
-             "data_type": "INTEGER", "is_nullable": False, "ordinal_position": 1},
-            {"table_schema": "sales", "table_name": "orders", "column_name": "note",
-             "data_type": "VARCHAR", "is_nullable": True, "ordinal_position": 2},
-        ],  # fmt: skip
-        pks=[{"table_schema": "sales", "table_name": "orders", "column_name": "id",
-              "ordinal_position": 1}],  # fmt: skip
+            {
+                **ORDERS,
+                "column_name": "id",
+                "data_type": "INTEGER",
+                "is_nullable": False,
+                "ordinal_position": 1,
+            },
+            {
+                **ORDERS,
+                "column_name": "note",
+                "data_type": "VARCHAR",
+                "is_nullable": True,
+                "ordinal_position": 2,
+            },
+        ],
+        pks=[{**ORDERS, "column_name": "id", "ordinal_position": 1}],
     )
 
     got = extract(catalog)

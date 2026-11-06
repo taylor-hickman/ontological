@@ -76,7 +76,7 @@ def _mutate(store: pg.Layout, database_name: str, *statements: str) -> None:
         pg.psql(store, statement, db=database_name)
 
 
-# --- the catalog, read back in its own vocabulary (upstream's catalog_inspector.py) -------------
+# --- the catalog, read back in its own vocabulary (upstream's catalog_inspector.py) ---------------
 
 
 def _q(sql: str, **params: Any) -> list[dict[str, Any]]:
@@ -194,7 +194,9 @@ def test_added_table_appears_with_its_columns(
 ) -> None:
     ingest(executor)
     _mutate(
-        store, source_db, "CREATE TABLE shop.invoice (invoice_id integer PRIMARY KEY, amount numeric)"
+        store,
+        source_db,
+        "CREATE TABLE shop.invoice (invoice_id integer PRIMARY KEY, amount numeric)",
     )
     ingest(executor)
 
@@ -313,7 +315,7 @@ def test_foreign_key_survives_reingest(source_db: str, executor: SourceExecutor)
     assert foreign_keys(source_db) == {("customer_id", "customer_id")}
 
 
-# --- Ontological's ----------------------------------------------------------------------------------
+# --- Ontological's --------------------------------------------------------------------------------
 
 
 def test_dropped_schema_is_removed(
@@ -442,7 +444,9 @@ def test_mixed_case_names_reingest_as_a_no_op(
     assert columns(source_db, "Invoice") == {"InvoiceId", "Total"}
 
 
-def test_a_reingest_stamps_pulled(store: pg.Layout, source_db: str, executor: SourceExecutor) -> None:
+def test_a_reingest_stamps_pulled(
+    store: pg.Layout, source_db: str, executor: SourceExecutor
+) -> None:
     """`pulled` is when the catalog was last read from the source; the staleness check on engine
     start reads it (M2.6)."""
     ingest(executor)

@@ -1,6 +1,6 @@
-"""Minimal ingest (BUILD_PLAN.md M1.3): Chinook's catalog, extracted by a real source executor and
-written through upstream's DAL to the bundled store, and re-ingested through the catalog diff (M2.3).
-No query history.
+"""Ingest of Chinook's catalog (BUILD_PLAN.md M1.3, M2.3), extracted by a real source executor and
+written through upstream's DAL to the bundled store, then re-ingested through the catalog diff. No
+query history.
 
 Chinook is upstream's fixture SQL (MIT, THIRD_PARTY_NOTICES.md), built into a SQLite file here.
 """
