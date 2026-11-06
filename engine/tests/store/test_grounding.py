@@ -154,7 +154,10 @@ def test_a_stopped_compile_embeds_the_tables_it_wrote(
 
     assert stopped.stopped is not None
     term_rows = "SELECT langchain_metadata ->> 'name' FROM vdb.semantic_layer WHERE label = 'Term'"
-    assert rows(store, term_rows + " ORDER BY 1") == ["Album", "Artist", "Customer"]
+    # The small tables' pack and Customer were written before Employee
+    assert rows(store, term_rows + " ORDER BY 1") == [
+        "Album", "Artist", "Customer", "Genre", "Invoice Line", "Media Type", "Playlist",
+    ]  # fmt: skip
 
     resumed = compile_source(chinook, embedder, ScriptedGateway(claude))
 

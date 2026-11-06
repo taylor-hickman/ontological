@@ -18,12 +18,14 @@ Upstream's `alembic.ini` isn't vendored. `ontological/store/chains.py` configure
 | `alembic/README`, `alembic/script.py.mako`, `alembic/versions/*.py` (7 revisions, head `99d4d343dd0b`) | Unchanged |
 | `alembic/env.py` | Modified: drops the `auto_ontology.env` import (python-dotenv) and uses `sqlalchemy.url` when the engine has set it |
 | `__init__.py`, `infra/__init__.py` | Unchanged |
-| `dal/*.py` except the four below and `model_interchange.py` | Unchanged |
+| `dal/*.py` except the six below and `model_interchange.py` | Unchanged |
 | `dal/schema_version.py` | Modified: finds the chain at `auto_ontology/alembic`, not two levels above `dal/` |
 | `dal/connections.py` | Modified: imports `read_secret` from `infra/keychain.py`, not `connectors/vault.py` |
 | `dal/custom_analyses.py` | Modified: takes `SqlParseError` from `server/sql_errors.py`; `embed_custom_analyses` takes a LangChain `Embeddings` in place of `EmbedParams` |
 | `dal/pql_analyses.py` | Modified: `embed_pql_analyses` takes a LangChain `Embeddings` in place of `EmbedParams` |
 | `dal/sql_attributes.py` | Modified: takes `SqlParseError` from `server/sql_errors.py` |
+| `dal/terms.py` | Modified: `upsert_table_term` keeps a Term's description when `description_certified` is set (the certified-description guard, ARCHITECTURE.md §1.3; M3.2) |
+| `dal/attributes.py` | Modified: `merge_column_attribute` keeps a certified attribute's description, where a non-null one overwrote it (M3.2) |
 | `catalog/store/*.py` except the three below | Unchanged |
 | `catalog/store/db.py` | Modified: re-exports the diff from `ontological/catalog/diff.py`, the port of upstream's `catalog/diff.py` (M2.3) |
 | `catalog/store/schemas.py` | Modified: imports `normalize_tables` and `normalize_columns` from `ontological/catalog/normalize.py`, the port of upstream's `catalog/normalize.py` (M2.3) |

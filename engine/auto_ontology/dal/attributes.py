@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by Ontological: `merge_column_attribute` keeps a certified attribute's description,
+# where upstream overwrote it with any non-null one (ARCHITECTURE.md §1.3, BUILD_PLAN.md M3.2).
 
 """ColumnAttribute and SEMANTIC_FK reads and writes, plus join-path traversal.
 
@@ -69,7 +71,8 @@ def merge_column_attribute(
     below refuse rather than create an attribute that dangles.
 
     ``description`` is coalesced, not assigned: a merge that has nothing to say
-    about the description must not erase a curated one. ``datatype`` *is*
+    about the description must not erase a curated one. A certified attribute's
+    description isn't touched at all. ``datatype`` *is*
     assigned, as before — it describes the column, not the human's opinion of it.
     """
     column = store().query_read(
@@ -108,9 +111,17 @@ def merge_column_attribute(
                 constraint="uq_column_attribute_merge_key",
                 set_={
                     "datatype": statement.excluded.datatype,
-                    "description": func.coalesce(
-                        statement.excluded.description,
-                        s.column_attribute.c.description,
+                    # A certified attribute keeps its description: compile never
+                    # overwrites what a person certified (ARCHITECTURE.md §1.3).
+                    "description": case(
+                        (
+                            s.column_attribute.c.certified,
+                            s.column_attribute.c.description,
+                        ),
+                        else_=func.coalesce(
+                            statement.excluded.description,
+                            s.column_attribute.c.description,
+                        ),
                     ),
                 },
             ).returning(s.column_attribute.c.id)
