@@ -13,16 +13,21 @@ from typing import Any
 
 import duckdb
 import pytest
+from conftest import MySQLServer, PgCluster
+from fakes import MemoryKeyring
 
 from ontological.sources.executor import (
     DuckDBSource,
     FileSource,
     FileTable,
+    MySQLSource,
+    PostgresSource,
     SourceExecutor,
     SourceQueryError,
     SqliteSource,
     StatementTimeout,
 )
+from ontological.sources.keychain import save_password
 
 
 def catalog_columns(ex: SourceExecutor, schema: str, table: str) -> list[dict[str, Any]]:
@@ -179,3 +184,75 @@ def test_profile_reads_a_file_source(tmp_path: Path) -> None:
 
     assert got["date_formats"] == {"paid_on": "YYYY-MM-DD"}  # a DATE, as DuckDB reads the CSV
     assert got["sample_values"] == {"id": [1, 2, 3], "method": ["card", "cash"]}
+
+
+# The scanners read JSON columns as VARCHAR. The profile asks the server which they are, so they
+# are profiled as upstream profiles JSONB: by their keys.
+
+
+def test_profile_reads_a_postgres_source_s_json_by_its_keys(pg_cluster: PgCluster) -> None:
+    pg_cluster.psql("DROP DATABASE IF EXISTS crm")
+    pg_cluster.psql("CREATE DATABASE crm")
+    pg_cluster.psql(
+        """
+        CREATE TABLE public.contact (
+            id int PRIMARY KEY, prefs jsonb, extra json, born date, tier text
+        );
+        INSERT INTO public.contact VALUES
+            (1, '{"lang": "en", "visit": {"last_on": "2024-03-01"}}', '{"src": "web"}',
+             '1990-05-17', 'gold'),
+            (2, '{"lang": "fr"}', '{"src": "app"}', '1985-11-30', 'gold'),
+            (3, NULL, NULL, NULL, 'silver');
+        """,
+        db="crm",
+    )
+    with SourceExecutor(PostgresSource(str(pg_cluster.socket_dir), "crm", "postgres")) as ex:
+        columns = catalog_columns(ex, "public", "contact")
+        got = ex.profile("public", "contact", columns)
+
+    assert {c["name"]: c["data_type"] for c in columns}["prefs"] == "VARCHAR"
+    assert got["sample_values"] == {
+        "id": [1, 2, 3],
+        "prefs": ["visit.last_on [date format: YYYY-MM-DD]", "lang [e.g. 'en', 'fr']"],
+        "extra": ["src [e.g. 'web', 'app']"],
+        "tier": ["gold", "silver"],
+    }
+    assert got["date_formats"] == {"born": "YYYY-MM-DD"}
+    assert got["uniqueness"] == {
+        "id": True,
+        "prefs": True,
+        "extra": True,
+        "born": True,
+        "tier": False,
+    }
+
+
+def test_profile_reads_a_mysql_source_s_json_by_its_keys(
+    mysql_server: MySQLServer, keychain: MemoryKeyring
+) -> None:
+    admin = duckdb.connect()
+    admin.execute(f"ATTACH '{mysql_server.dsn}' AS admin (TYPE mysql)")
+    for statement in (
+        "DROP DATABASE IF EXISTS src_crm",
+        "CREATE DATABASE src_crm",
+        "CREATE TABLE src_crm.contact (id int PRIMARY KEY, prefs json, tier varchar(10))",
+        """INSERT INTO src_crm.contact VALUES (1, '{"lang": "en"}', 'gold'), """
+        """(2, '{"lang": "fr"}', 'gold'), (3, NULL, 'silver')""",
+    ):
+        admin.execute("CALL mysql_execute('admin', ?)", [statement])
+    ref = save_password("mysql-admin", mysql_server.password)
+    source = MySQLSource(
+        mysql_server.host, "src_crm", mysql_server.user, port=mysql_server.port, password=ref
+    )
+    try:
+        with SourceExecutor(source) as ex:
+            got = ex.profile("src_crm", "contact", catalog_columns(ex, "src_crm", "contact"))
+    finally:
+        admin.execute("CALL mysql_execute('admin', 'DROP DATABASE src_crm')")
+        admin.close()
+
+    assert got["sample_values"] == {
+        "id": [1, 2, 3],
+        "prefs": ["lang [e.g. 'en', 'fr']"],
+        "tier": ["gold", "silver"],
+    }
