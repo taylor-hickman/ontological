@@ -11,13 +11,17 @@ from __future__ import annotations
 import contextlib
 import os
 import signal
+import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pytest
 from engine_proc import Proc, app_data, http
 
-from ontological.store import chains, pg
+from ontological.catalog.ingest import ingest
+from ontological.sources.executor import SourceExecutor, SqliteSource
+from ontological.store import chains, dal, pg
 
 __all__ = ["app_data"]  # the fixture
 
@@ -83,5 +87,43 @@ def test_the_engine_runs_the_store_and_idles_out_with_a_quit_dump(
         dumps = sorted(layout.backups.glob("ontology-*-quit.dump"))
         assert len(dumps) == 1 and dumps[0].stat().st_size > 0
         assert not (app_data / "engine.json").exists()
+    finally:
+        stop_leftover_server(layout)
+
+
+def test_the_engine_refreshes_a_source_last_ingested_over_a_day_ago(
+    app_data: Path, pg_bin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The staleness check (§9.1): once the engine serves, it re-ingests the stale source and
+    finds the table added since, while the engine answers requests."""
+    layout = pg.Layout(app_data, pg_bin)
+    shop = tmp_path / "shop.sqlite"
+    with sqlite3.connect(shop) as con:
+        con.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, total REAL)")
+    pg.ensure_running(layout)
+    for name in dal.environ(layout):
+        monkeypatch.delenv(name, raising=False)  # dal.connect sets them; put them back after
+    dal.connect(layout)
+    try:
+        with SourceExecutor(SqliteSource(shop)) as ex:
+            ingest(ex)
+    finally:
+        dal.close()
+    pg.psql(layout, "UPDATE catalog_database SET pulled = now() - interval '25 hours'")
+    pg.stop(layout, quit_dump=False)
+    with sqlite3.connect(shop) as con:
+        con.execute("CREATE TABLE refunds (id INTEGER PRIMARY KEY, order_id INTEGER)")
+
+    e = engine(app_data, pg_bin)
+    try:
+        assert http(app_data, "GET", "/health")[0] == 200
+        tables = "SELECT string_agg(name, ',' ORDER BY name) FROM catalog_table"
+        deadline = time.monotonic() + 60
+        while pg.psql(layout, tables) != "orders,refunds":
+            assert time.monotonic() < deadline, "the stale source wasn't refreshed"
+            time.sleep(0.2)
+        age = "SELECT now() - pulled < interval '1 minute' FROM catalog_database"
+        assert pg.psql(layout, age) == "t"
+        assert e.term() == 0
     finally:
         stop_leftover_server(layout)

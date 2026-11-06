@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from ontological.engine import main
+from ontological.jobs.staleness import StalenessCheck
 
 
 class FakeStore:
@@ -40,6 +41,9 @@ class FakeStore:
         if self.slow_stop.exists():
             time.sleep(float(self.slow_stop.read_text()))
         self._write("stop")
+
+    def staleness_check(self) -> StalenessCheck:
+        return StalenessCheck(find=lambda: [])  # no catalog, so no sources to refresh
 
 
 if __name__ == "__main__":
