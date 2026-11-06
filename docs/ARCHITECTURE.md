@@ -763,11 +763,11 @@ ontological/
       sources/                  SQLDatabase ABC, duckdb/sqlite/scanner connectors, executor.py, keyring refs
       catalog/                  extract, normalize, diff, query-history parsing, parse_pool.py   (ported)
       profile/                  sampling, date_format, json paths (run inside the executor)     (ported)
-      compile/                  stages, merged/split call shapes, batching/packing, checkpoints
+      compile/                  stages with their prompts (versioned), merged/split call shapes, batching/packing, checkpoints
       pii/                      rules (ported) + batched Claude fallback
       embed/                    ONNX embedder (LangChain Embeddings interface), BM25 index + tokenizer, hybrid search, retrieval benchmark
       answer/                   grounding pack, agent tools + preconditions, validation gate, probes (ported)
-      llm/                      ClaudeGateway, route table, cache, limits, prompts/ (versioned)
+      llm/                      ClaudeGateway, route table, cache, limits
       interchange/              native YAML + Ossie
       mcp/                      stdio shim
       jobs/                     runner, staleness check, pause/resume
