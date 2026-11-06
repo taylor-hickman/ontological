@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+
 from ontological.answer.gate import KeyColumns
 from ontological.answer.models import Review
 from ontological.answer.tools import (
@@ -20,7 +21,6 @@ from ontological.answer.tools import (
     ReviewInput,
     ToolResult,
 )
-
 from ontological.catalog.parsers.catalog_index import CatalogIndex, SchemaEntry, TableEntry
 from ontological.sources.executor import Rows, SourceQueryError
 
@@ -31,14 +31,22 @@ GOOD_SQL = (
 )
 PLAN = {"intent": "calculation", "calc_subtype": "counting", "entities": ["artist", "album"]}
 
+
+def table(id: str, name: str, columns: list[str]) -> TableEntry:
+    return TableEntry(
+        id,
+        name,
+        {c.lower(): f"{id}.{c}" for c in columns},
+        {c.lower(): c for c in columns},
+    )
+
+
 CATALOG = CatalogIndex(
     {
         "main": SchemaEntry(
             {
-                "artist": TableEntry("t-artist", "Artist", {"artistid": "c1", "name": "c2"}),
-                "album": TableEntry(
-                    "t-album", "Album", {"albumid": "c3", "title": "c4", "artistid": "c5"}
-                ),
+                "artist": table("t-artist", "Artist", ["ArtistId", "Name"]),
+                "album": table("t-album", "Album", ["AlbumId", "Title", "ArtistId"]),
             }
         )
     }
@@ -109,7 +117,11 @@ class Harness:
 
     def call(self, name: str, **args: Any) -> ToolResult:
         handler = next(t.handler for t in self.tools.sdk_tools() if t.name == name)
-        return asyncio.run(handler(args))
+
+        async def go() -> ToolResult:
+            return await handler(args)
+
+        return asyncio.run(go())
 
     def planned(self) -> str:
         return data(self.call("plan", **PLAN))["plan_id"]

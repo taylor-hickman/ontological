@@ -5,23 +5,27 @@ degenerate SQL or raw many-side column under a GROUP BY. Checks 4 to 7 are M4.1'
 from __future__ import annotations
 
 import pytest
-from ontological.answer.gate import KeyColumns, check_sql
 
+from ontological.answer.gate import KeyColumns, check_sql
 from ontological.catalog.parsers.catalog_index import CatalogIndex, SchemaEntry, TableEntry
+
+
+def table(id: str, name: str, columns: list[str]) -> TableEntry:
+    return TableEntry(
+        id,
+        name,
+        {c.lower(): f"{id}.{c}" for c in columns},
+        {c.lower(): c for c in columns},
+    )
+
 
 CATALOG = CatalogIndex(
     {
         "main": SchemaEntry(
             {
-                "artist": TableEntry("t-artist", "Artist", {"artistid": "c1", "name": "c2"}),
-                "album": TableEntry(
-                    "t-album", "Album", {"albumid": "c3", "title": "c4", "artistid": "c5"}
-                ),
-                "track": TableEntry(
-                    "t-track",
-                    "Track",
-                    {"trackid": "c6", "name": "c7", "albumid": "c8", "milliseconds": "c9"},
-                ),
+                "artist": table("t-artist", "Artist", ["ArtistId", "Name"]),
+                "album": table("t-album", "Album", ["AlbumId", "Title", "ArtistId"]),
+                "track": table("t-track", "Track", ["TrackId", "Name", "AlbumId", "Milliseconds"]),
             }
         )
     }
