@@ -106,8 +106,10 @@ class FileSession(Session):
             )
         self.lock_down(paths=paths, directories=directories)
 
+    catalog_name = "memory"  # each file is a view in the session's own database
+
     def extract(self) -> dict[str, Any]:
-        relations = [Relation("main", t.name, BASE_TABLE, catalog="memory") for t in self.tables]
+        relations = [Relation("main", t.name, BASE_TABLE, self.catalog_name) for t in self.tables]
         return self.catalog(relations)
 
 
