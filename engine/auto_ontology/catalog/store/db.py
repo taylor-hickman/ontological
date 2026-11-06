@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by Ontological: imports the diff from ontological.catalog.diff, the port of upstream's
+# catalog/diff.py (M2.3).
 
 """Database-level writes and the incremental re-ingest diff.
 
@@ -23,7 +25,7 @@ from sqlalchemy import func, select, update
 from auto_ontology.catalog.constants import Labels
 
 # Re-exported: the diff is shared, only the storage primitives below differ.
-from auto_ontology.catalog.diff import (  # noqa: F401
+from ontological.catalog.diff import (  # noqa: F401
     accumulate_added_column_props,
     accumulate_updated_column,
     update_diff_from_existing_schema,

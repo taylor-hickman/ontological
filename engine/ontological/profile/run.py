@@ -33,6 +33,7 @@ from auto_ontology.dal.datasources import (
     store_column_uniqueness,
 )
 from auto_ontology.dal.session import store
+from ontological.profile.sampling import TableProfile, empty_profile
 from ontological.sources.executor import (
     PROFILE_TIMEOUT_S,
     Cancelled,
@@ -156,6 +157,31 @@ def profile_catalog(
         store_column_date_formats(table.id, profile["date_formats"])
         result.tables += 1
     return result
+
+
+def profile_table(
+    executor: SourceExecutor,
+    schema: str | None,
+    table: str,
+    columns: list[Record],
+    *,
+    probe_distinct_values: bool = True,
+) -> TableProfile:
+    """One table's profile, for compile: its `columns` are upstream's
+    `columns_profiling_samples`. A sample that fails gives an empty profile, and compile goes on
+    without it. `Cancelled` propagates."""
+    try:
+        return executor.profile(
+            schema or "main",
+            table,
+            [{"name": c.get("name"), "data_type": c.get("data_type")} for c in columns],
+            probe_distinct_values=probe_distinct_values,
+        )
+    except Cancelled:
+        raise
+    except SourceError as e:
+        logger.warning("[%s] column profiling failed — skipping: %s", table, e)
+        return empty_profile()
 
 
 def _failure(table: CatalogTable, error: Exception) -> dict[str, Any]:

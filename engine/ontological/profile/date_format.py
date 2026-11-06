@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Modified by Ontological: moved from auto_ontology/semantic/date_format.py to run inside the source
-# executor (ARCHITECTURE.md §11). The code is upstream's, unchanged.
-# ruff: noqa: RUF002  (upstream's docstrings keep their en dashes)
+# Ported by Ontological from upstream's auto_ontology/semantic/date_format.py at 2a24f5d, unchanged
+# but for this line and formatting.
 
 """Infer how a date column stores its values.
 Date columns are the one type kept out of sample-value profiling, on the
@@ -106,7 +105,7 @@ def _parses_all(pattern: str, values: list[str]) -> bool:
     ``%y`` is exempt: two digits carry no century, so Python's 1969–2068 window
     is the only year available and rejecting it would rule the format out
     entirely.
-    """
+    """  # noqa: RUF002 (upstream's en dash)
     century_known = "%Y" in pattern
     for value in values:
         try:

@@ -93,9 +93,6 @@ def main(argv: list[str] | None = None) -> int:
 
 def _ingest(home: Path, pg_bin: Path, names: list[str]) -> int:
     for r in ingest.run(home, pg_bin, names):
-        if r.ingested is None:
-            print(f"{r.name}: already in the store, left as it is")
-            continue
         got = r.ingested
         print(f"{r.name}: {got.tables} tables, {got.columns} columns as {got.database_name}")
         for s in got.skipped:

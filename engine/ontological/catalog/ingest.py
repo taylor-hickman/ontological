@@ -1,28 +1,31 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Modified by Ontological: ported from upstream's auto_ontology/catalog/ingest.py, extract.py,
-# write.py, parsers/schemas_parser.py and services/schema.py. It reads a source executor's extract
-# in place of a connector, writes a first load only (no diff, no query history), sequentially and
-# in one transaction, and profiles the catalog before it embeds the data layer.
+# Modified by Ontological: ported from upstream's auto_ontology/catalog/ingest.py, write.py,
+# parsers/schemas_parser.py and services/schema.py. It reads a source executor's extract in place
+# of a connector, writes sequentially and in one transaction, and profiles the catalog before it
+# embeds the data layer. No query history (M2.4).
 
-"""Minimal ingest: a source's catalog, extracted by its executor and written through the DAL,
-then profiled through the executor, then embedded as the data layer.
+"""Ingest: a source's catalog, extracted by its executor and written through the DAL, then
+profiled through the executor, then embedded as the data layer.
 
-The write is the first-load branch of upstream's `write.populate_db`, then `populate_fks` and
-`populate_pks`, over upstream's vendored catalog store. A database the store already holds is
-refused: updating it needs the catalog diff, which M2.3 ports. Query history (M2.4) isn't read.
+Upstream's `write.populate_db`, then `populate_fks` and `populate_pks`, over upstream's vendored
+catalog store. A database the store doesn't hold yet is loaded whole. One it holds is diffed, schema
+by schema (`diff.py`): new schemas are added, schemas gone from the source are deleted, and the rest
+are brought in line, keeping every unchanged row's id. Foreign keys are upserted with this ingest's
+`last_seen` and the ones it didn't see are swept; primary keys are reset and written again.
 
-Profiling (`ontological/profile/`) runs before the data layer is built, so each column's text
-carries its sample values (§7.1). Upstream embedded the data layer at ingest and profiled at
-compile, so its texts never had them.
+Upstream writes each schema, the keys and the `pulled` stamp in separate transactions, and runs
+the schema diffs on a thread pool. A failure part way leaves a half-written catalog until the next
+ingest repairs it. Here the whole write is one transaction: the catalog lands complete, or stays as
+the last ingest left it.
 
-Upstream writes each schema, the keys and the `pulled` stamp in separate transactions, and a
-failure part way is repaired by the next ingest's diff. With no diff a half-written catalog would
-be stuck, so here the whole write is one transaction: the catalog lands complete, or not at all.
+Profiling (`ontological/profile/`) runs after the write and before the data layer is built, so each
+column's text carries its sample values (§7.1). Upstream embedded the data layer at ingest and
+profiled at compile, so its texts never had them.
 """
 
-# The vendored catalog store is untyped.
+# The vendored catalog store and model are untyped.
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
 # pyright: reportUnknownArgumentType=false, reportMissingTypeStubs=false
 
@@ -37,27 +40,29 @@ import pandas as pd
 from auto_ontology.catalog.constants import Labels
 from auto_ontology.catalog.model.node import CatalogNode
 from auto_ontology.catalog.model.schema import Schema
-from auto_ontology.catalog.normalize import normalize_columns, normalize_tables
-from auto_ontology.catalog.store.db import db_exists, update_node_property
+from auto_ontology.catalog.store.db import db_exists, delete_schema, update_node_property
 from auto_ontology.catalog.store.schemas import (
     PendingRows,
     add_fks,
     add_pks,
     add_schemas_edge,
+    delete_old_fks,
+    get_column_ids,
+    get_schemas_ids_and_names,
+    get_table_ids,
     merge_schema_edges,
     merge_schema_nodes,
+    reset_pks,
 )
 from auto_ontology.dal.session import write_transaction
 from ontological.catalog.data_layer import embed_data_layer
+from ontological.catalog.diff import update_diff_from_existing_schema
+from ontological.catalog.extract import extract
 from ontological.embed.embedder import LocalEmbedder
 from ontological.profile.run import Profiled, profile_catalog
 from ontological.sources.executor import Catalog, Record, SourceExecutor
 
 logger = logging.getLogger(__name__)
-
-
-class AlreadyIngested(Exception):
-    """The store already holds this database's catalog. Updating it needs the diff (M2.3)."""
 
 
 @dataclass(frozen=True)
@@ -91,7 +96,7 @@ def ingest(
 
 
 def write_catalog(catalog: Catalog) -> Ingested:
-    """Write an extracted catalog to the store, as a first load."""
+    """Write an extracted catalog to the store: a first load, or a diff against what it holds."""
     name = catalog.database_name
     for relation in catalog.skipped:
         logger.warning(
@@ -101,35 +106,76 @@ def write_catalog(catalog: Catalog) -> Ingested:
             relation["table_name"],
             relation["error"],
         )
-    tables = normalize_tables(pd.DataFrame(catalog.tables))
-    columns = normalize_columns(pd.DataFrame(catalog.columns))
-    if tables.empty:
+    data = extract(catalog)
+    if data.tables.empty:
         logger.warning("%s has no tables; nothing to write", name)
         return Ingested(name, None, 0, 0, catalog.skipped)
 
-    db_node = CatalogNode(
-        name=name, label=Labels.DB, props={"name": name}, match_props={"name": name}
-    )
     with write_transaction():
+        schemas, db_node = _parse(data.tables, data.columns, name)
         existing_id, loaded = db_exists(db_node)
-        if loaded:
-            raise AlreadyIngested(f"the store already holds {name}'s catalog")
         if existing_id is not None:
             db_node.replace_id(existing_id)
         pulled = datetime.now(UTC).replace(microsecond=0)
-        for schema_name in tables["table_schema"].unique():
-            schema = Schema(
-                db_node,
-                tables.loc[tables["table_schema"] == schema_name].copy(),
-                columns.loc[columns["table_schema"] == schema_name].copy(),
-            )
-            schema.create_schema_node(schema_name)
-            _add_schema(schema, pulled)
-        add_fks(pd.DataFrame(catalog.fks), pulled, name)
-        add_pks(pd.DataFrame(catalog.pks), name)
+        if loaded:
+            _update_schemas(schemas, str(existing_id), pulled)
+        else:
+            for schema in schemas.values():
+                _add_schema(schema, pulled)
+        # Upstream's own clock for `last_seen`, finer than `pulled`: two ingests in one second
+        # would otherwise share it, and the second couldn't sweep what the first saw.
+        last_seen = datetime.now(UTC)
+        add_fks(data.fks, last_seen, name)
+        delete_old_fks(last_seen, name)
+        reset_pks(name)
+        add_pks(data.pks, name)
         database_id = str(db_node.get_id())
         update_node_property("db", database_id, {"pulled": pulled})
-    return Ingested(name, database_id, len(tables), len(columns), catalog.skipped)
+    return Ingested(name, database_id, len(data.tables), len(data.columns), catalog.skipped)
+
+
+def _parse(
+    tables: pd.DataFrame, columns: pd.DataFrame, database_name: str
+) -> tuple[dict[str, Schema], CatalogNode]:
+    """Upstream's `schemas_parser.parse_df`: one `Schema` per schema, keyed by its lower-cased
+    name, with every table and column the store already holds under its stored id."""
+    db_node = CatalogNode(
+        name=database_name,
+        label=Labels.DB,
+        props={"name": database_name},
+        match_props={"name": database_name},
+    )
+    tables = get_table_ids(tables, database_name)
+    columns = get_column_ids(columns, database_name)
+    schemas: dict[str, Schema] = {}
+    for schema_name in tables["table_schema"].unique():
+        schema = Schema(
+            db_node,
+            tables.loc[tables["table_schema"] == schema_name].copy(),
+            columns.loc[columns["table_schema"] == schema_name].copy(),
+        )
+        schema.create_schema_node(schema_name)
+        schemas[str(schema_name).lower()] = schema
+    return schemas, db_node
+
+
+def _update_schemas(schemas: dict[str, Schema], database_id: str, pulled: datetime) -> None:
+    """Upstream's `populate_db` for a database the store holds: add, diff and delete schemas."""
+    stored = {
+        row["schema_name"].lower(): row["schema_id"]
+        for row in get_schemas_ids_and_names(database_id)
+    }
+    for key, schema in schemas.items():
+        if key in stored:
+            update_diff_from_existing_schema(schema, pulled)
+            logger.info("Updated schema %s.", schema.get_schema_name())
+        else:
+            _add_schema(schema, pulled)
+            logger.info("Added schema %s.", schema.get_schema_name())
+    for key, schema_id in stored.items():
+        if key not in schemas:
+            logger.info("Deleting schema %s.", key)
+            delete_schema(schema_id)
 
 
 def _add_schema(schema: Schema, pulled: datetime) -> None:

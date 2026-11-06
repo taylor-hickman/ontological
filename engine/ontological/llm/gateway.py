@@ -170,6 +170,11 @@ class ClaudeGateway:
         self._logged_in: bool | None = None
         self._rate_limit: RateLimit | None = None
         self._error: str | None = None
+        # How the latest structured() call ended. None from structured() is upstream's "fall
+        # back" signal; this says whether the model answered badly ("invalid") or Claude didn't
+        # answer at all ("limited", "error"), which compile must not fall back on. Read it right
+        # after the call: with calls in flight together it is the one that ended last.
+        self.last_outcome: Outcome | None = None
 
     # --- calls ----------------------------------------------------------------------------------
 
@@ -200,19 +205,24 @@ class ClaudeGateway:
         cached = await asyncio.to_thread(self.calls.lookup, key)
         if cached is not None:
             try:
-                return schema.model_validate(cached)
+                answer = schema.model_validate(cached)
             except ValidationError:
                 pass  # can't happen while the schema is in the key; ask again if it does
+            else:
+                self.last_outcome = "ok"
+                return answer
         output_format = {"type": "json_schema", "schema": schema.model_json_schema()}
         prompt = user
         for attempt in (1, 2):
             session = await self._spawn(route, system, prompt, output_format, STRUCTURED_MAX_TURNS)
             if session is None:
+                self.last_outcome = "error"
                 return None
             verdict = self._failure(session) or _validate(session, schema)
             await self._record(
                 task, "structured", prompt_version, key, route, attempt, session, verdict
             )
+            self.last_outcome = verdict.outcome
             if verdict.outcome == "ok":
                 return schema.model_validate(verdict.output)
             if verdict.outcome != "invalid":

@@ -309,7 +309,7 @@ CHINOOK_SQL = Path(__file__).parents[1] / "upstream_fixtures/dev_tools/fixtures/
 
 @pytest.fixture(scope="module")
 def chinook(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Chinook as a SQLite file: upstream's fixture SQL (MIT, THIRD_PARTY_NOTICES.md)."""
+    """Chinook as a SQLite file, built from upstream's fixture SQL (MIT, THIRD_PARTY_NOTICES.md)."""
     path = tmp_path_factory.mktemp("src") / "chinook.sqlite"
     con = sqlite3.connect(path)
     try:

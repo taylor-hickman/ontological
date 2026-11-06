@@ -10,8 +10,8 @@ never mix with the user's own and can be thrown away with the rest of the eval h
 writes to the store directly, under `engine.lock`, and refuses while an engine serves it: a
 running engine wouldn't know the catalog had changed under it.
 
-Ingest is a first load only (M1.3): a database the store already holds is reported and left as
-it is, since updating it needs the catalog diff (M2.3).
+A database the store already holds is re-ingested through the catalog diff (M2.3): an unchanged
+source leaves its catalog as it is, ids included.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ontological.catalog.ingest import AlreadyIngested, Ingested, ingest
+from ontological.catalog.ingest import Ingested, ingest
 from ontological.engine import discovery
 from ontological.sources.executor import SourceExecutor
 from ontological.sources.spec import PostgresSource, Source, SqliteSource
@@ -42,7 +42,7 @@ class IngestError(RuntimeError):
 @dataclass(frozen=True)
 class Result:
     name: str
-    ingested: Ingested | None  # None when the store already held it
+    ingested: Ingested
 
 
 def layout(home: Path, pg_bin: Path) -> pg.Layout:
@@ -97,7 +97,4 @@ def run(home: Path, pg_bin: Path, names: list[str]) -> list[Result]:
 
 def _ingest(name: str, s: Source) -> Result:
     with SourceExecutor(s) as executor:
-        try:
-            return Result(name, ingest(executor, timeout_s=EXTRACT_TIMEOUT_S))
-        except AlreadyIngested:
-            return Result(name, None)
+        return Result(name, ingest(executor, timeout_s=EXTRACT_TIMEOUT_S))
