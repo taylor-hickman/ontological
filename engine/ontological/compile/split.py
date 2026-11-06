@@ -70,7 +70,8 @@ from ontological.embed.search import semantic_vdb
 from ontological.embed.semantic import Synced, sync_database
 from ontological.jobs import store as job_store
 from ontological.jobs.active import ActiveJobs
-from ontological.profile.sample import TableProfile, profile_table
+from ontological.profile.run import profile_table
+from ontological.profile.sampling import TableProfile
 from ontological.sources.executor import SourceExecutor
 
 logger = logging.getLogger(__name__)
@@ -294,7 +295,7 @@ async def compile_table(
         await asyncio.to_thread(_skip, table_id, "no columns", False, checkpoint)
         return CompiledTable(table_id, name, skipped="no columns")
     table, ctx, profile = loaded
-    profiling = profile.as_prompt_input()
+    profiling: dict[str, Any] = dict(profile["columns"])
 
     keys = await suggest_keys(gateway, table, ctx, profiling)
     fk_names = fk_source_columns(ctx.get("fks", [])) | {s.column_name for s in keys.suggestions}
@@ -339,9 +340,9 @@ def _profile(
         probe_distinct_values=probe_distinct_values,
     )
     with write_transaction():
-        store_column_sample_values(table_id, profile.stored_samples)
-        store_column_uniqueness(table_id, profile.uniqueness)
-        store_column_date_formats(table_id, profile.date_formats)
+        store_column_sample_values(table_id, profile["sample_values"])
+        store_column_uniqueness(table_id, profile["uniqueness"])
+        store_column_date_formats(table_id, profile["date_formats"])
     row = fetch_table_by_id(table_id) or {}
     return {**table, "pk": row.get("pk") or []}, fetch_table_context(table_id), profile
 

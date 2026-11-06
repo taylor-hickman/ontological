@@ -2,18 +2,22 @@
 
 A session is an in-memory DuckDB connection with one source attached and nothing else
 reachable. Each kind of source subclasses `Session`: it attaches the source, calls
-`lock_down()`, and reads its catalog in `extract()`. Running SQL, and cancelling it, are the
-same for every kind.
+`lock_down()`, and reads its catalog in `extract()`. Running SQL, profiling a table, and
+cancelling either, are the same for every kind.
 """
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import duckdb
+import pandas as pd  # pyright: ignore[reportMissingTypeStubs]
+
+from ontological.profile.sampling import TableProfile, calculate_columns_profiling
 
 ALIAS = "src"
 
@@ -49,10 +53,11 @@ class Relation:
 
 
 class Session:
-    """The connection, `rows()`, cancel, and the catalog's shape. Subclasses attach a source
-    and read its catalog."""
+    """The connection, `rows()`, `profile()`, cancel, and the catalog's shape. Subclasses attach
+    a source and read its catalog."""
 
     database_name: str
+    catalog_name = ALIAS  # the DuckDB catalog the source's relations are in
 
     def __init__(self) -> None:
         self.con = duckdb.connect(":memory:")
@@ -134,6 +139,28 @@ class Session:
             "truncated": len(rows) > max_rows,
         }
 
+    def profile(
+        self, schema: str, table: str, columns: list[Record], probe_distinct_values: bool
+    ) -> TableProfile:
+        """Upstream's column profiling of one table (`ontological/profile/sampling.py`), on a
+        sample of at most 1,000 rows that stays in this process. `columns` are the catalog's
+        `name` and `data_type` for each. A column the source holds as JSON is profiled as
+        JSON, as upstream profiles one, whatever type DuckDB reads it as."""
+        json = self.json_columns(schema, table)
+        if json:
+            columns = [{**c, "data_type": "JSON"} if c["name"] in json else c for c in columns]
+        return calculate_columns_profiling(
+            {"schema_name": schema, "name": table},
+            columns,
+            _Connector(self, json),
+            probe_distinct_values=probe_distinct_values,
+        )
+
+    def json_columns(self, schema: str, table: str) -> set[str]:
+        """The table's columns that the source holds as JSON but DuckDB reads as text. DuckDB's
+        own JSON columns come back typed, so a local source has none."""
+        return set()
+
     def extract(self) -> dict[str, Any]:
         """The catalog in the shape upstream's `catalog/extract.py` reads from a connector
         (`connectors/base.py::SQLDatabase`): `database_name`, and lists of records for
@@ -145,6 +172,8 @@ class Session:
             return self.rows(*args)
         if op == "extract":
             return self.extract()
+        if op == "profile":
+            return self.profile(*args)
         raise ValueError(f"unknown operation {op!r}")
 
     # Building the catalog
@@ -211,6 +240,46 @@ class Session:
             "fks": kept(fks),
             "skipped": skipped,
         }
+
+
+class _Connector:
+    """The session as the connector upstream's profiling expects. Values keep the types DuckDB
+    returns, in object columns, so an integer column with a NULL stays integers; JSON, which
+    DuckDB returns as text, is decoded, as upstream's Postgres driver decodes JSONB. That covers
+    DuckDB's JSON columns and the scanners' `json_columns`."""
+
+    def __init__(self, session: Session, json_columns: set[str]) -> None:
+        self.session = session
+        self.json_columns = json_columns
+
+    def qualify(self, schema_name: str | None, table_name: str) -> str:
+        relation = Relation(
+            schema_name or "main", table_name, BASE_TABLE, self.session.catalog_name
+        )
+        return relation.qualified
+
+    def quote(self, name: str) -> str:
+        return quote_ident(name)
+
+    def execute(self, sql: str) -> pd.DataFrame:
+        self.session.check()
+        result = self.session.con.execute(sql)
+        description = result.description or []
+        rows = result.fetchall()
+        frame = pd.DataFrame(rows, columns=pd.Index([d[0] for d in description]), dtype=object)
+        for i, d in enumerate(description):
+            if str(d[1]) == "JSON" or d[0] in self.json_columns:
+                frame.iloc[:, i] = frame.iloc[:, i].map(_decode_json)  # pyright: ignore[reportUnknownMemberType]
+        return frame
+
+
+def _decode_json(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return value
 
 
 def pk_records(rows: Iterable[tuple[str, str, Sequence[str]]]) -> list[Record]:

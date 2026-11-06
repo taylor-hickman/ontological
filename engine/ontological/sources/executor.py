@@ -2,11 +2,13 @@
 §5.5, §5.6).
 
 A `SourceExecutor` starts its child as soon as it is made, so the source is attached before the
-first operation. It runs one operation at a time: `extract`, `run_sql` or `probe`. A timeout or a
-`cancel()` from another thread first asks the child to `interrupt()` the query. If the operation
-is still running `KILL_AFTER_S` later, the executor kills the child, starts a new one and raises.
+first operation. It runs one operation at a time: `extract`, `profile`, `run_sql` or `probe`. A
+timeout or a `cancel()` from another thread first asks the child to `interrupt()` the query. If
+the operation is still running `KILL_AFTER_S` later, the executor kills the child, starts a new
+one and raises.
 Results cross the pipe small: at most `MAX_PROFILE_ROWS` rows from a probe, and `MAX_ANSWER_ROWS`
-from `run_sql`.
+from `run_sql`. `profile` samples a table in the child and returns only each column's top values,
+uniqueness and date format.
 
 Every v1 source goes through DuckDB: a DuckDB file, Parquet, CSV and JSON files, a SQLite file,
 and Postgres and MySQL through DuckDB's scanners (`spec.py`). A server source's password is read
@@ -25,6 +27,7 @@ from multiprocessing.connection import Connection, wait
 from multiprocessing.process import BaseProcess
 from typing import Any, Literal
 
+from ontological.profile.sampling import TableProfile
 from ontological.sources import worker
 from ontological.sources.keychain import CredentialError, read_password
 from ontological.sources.spec import (
@@ -55,6 +58,7 @@ __all__ = [
     "SourceQueryError",
     "SqliteSource",
     "StatementTimeout",
+    "TableProfile",
 ]
 
 MAX_ANSWER_ROWS = 200
@@ -62,6 +66,7 @@ MAX_PROFILE_ROWS = 1000
 KILL_AFTER_S = 2.0
 RUN_SQL_TIMEOUT_S = 60.0
 PROBE_TIMEOUT_S = 5.0
+PROFILE_TIMEOUT_S = 120.0  # upstream's cap on one profiling query, here on a table's profile
 START_TIMEOUT_S = 30.0
 _POLL_S = 0.05  # how often a waiting operation looks for a cancel()
 
@@ -86,6 +91,10 @@ class StatementTimeout(SourceError, TimeoutError):
 
 class ExecutorDied(SourceError):
     """The child exited in the middle of an operation. A new one has been started."""
+
+
+class _Unstarted(Exception):
+    """The child exited before it started the operation."""
 
 
 @dataclass(frozen=True)
@@ -154,6 +163,21 @@ class SourceExecutor:
     def extract(self, *, timeout_s: float | None = None) -> Catalog:
         catalog = self._call("extract", (), timeout_s)
         return Catalog(**catalog)
+
+    def profile(
+        self,
+        schema: str,
+        table: str,
+        columns: list[Record],
+        *,
+        probe_distinct_values: bool = True,
+        timeout_s: float = PROFILE_TIMEOUT_S,
+    ) -> TableProfile:
+        """Profile one table from a sample of at most `MAX_PROFILE_ROWS` rows, taken and read in
+        the child (`ontological/profile/sampling.py`). `columns` are the catalog's `name` and
+        `data_type` for each. A row sample the source refuses raises `SourceQueryError`."""
+        args = (schema, table, columns, probe_distinct_values)
+        return self._call("profile", args, timeout_s)
 
     def run_sql(self, sql: str, *, timeout_s: float = RUN_SQL_TIMEOUT_S) -> Rows:
         """The answer agent's query: one SELECT, at most `MAX_ANSWER_ROWS` rows."""
@@ -245,18 +269,33 @@ class SourceExecutor:
     def _call(self, op: str, args: tuple[Any, ...], timeout_s: float | None) -> Any:
         with self._lock:
             self._ensure_ready()
-            assert self._conn is not None
             self._cancel.clear()
-            self._op_id += 1
             self._busy = True
             try:
                 try:
-                    self._conn.send((self._op_id, op, args))
-                except OSError:
-                    raise self._died() from None
-                return self._await(self._op_id, timeout_s)
+                    return self._send(op, args, timeout_s)
+                except _Unstarted:
+                    # The child died while idle, though `_ensure_ready` saw it alive: on Linux a
+                    # killed process whose threads are still exiting can't be reaped yet, and
+                    # its end of the pipe stays open. It never started the operation, so a new
+                    # child can take it.
+                    self._stop(kill=True)
+                    self._ensure_ready()
+                    try:
+                        return self._send(op, args, timeout_s)
+                    except _Unstarted:
+                        raise self._died() from None
             finally:
                 self._busy = False
+
+    def _send(self, op: str, args: tuple[Any, ...], timeout_s: float | None) -> Any:
+        assert self._conn is not None
+        self._op_id += 1
+        try:
+            self._conn.send((self._op_id, op, args))
+        except OSError:
+            raise _Unstarted from None
+        return self._await(self._op_id, timeout_s)
 
     def _await(self, op_id: int, timeout_s: float | None) -> Any:
         assert self._proc is not None and self._conn is not None
@@ -264,13 +303,19 @@ class SourceExecutor:
         deadline = None if timeout_s is None else time.monotonic() + timeout_s
         why: Literal["cancel", "timeout"] | None = None
         kill_at = 0.0
+        started = False
         while True:
             if wait([conn, sentinel], _POLL_S):
                 try:
                     reply_id, kind, payload = conn.recv()
                 except (EOFError, OSError):
+                    if not started:
+                        raise _Unstarted from None
                     raise self._died() from None
                 if reply_id != op_id:
+                    continue
+                if kind == "started":
+                    started = True
                     continue
                 if kind == "ok":
                     return payload

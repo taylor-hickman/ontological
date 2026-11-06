@@ -176,6 +176,17 @@ class PostgresSession(_ScannerSession):
         ]  # fmt: skip
         return self.catalog(relations, views=views, pks=pks, fks=fks)
 
+    def json_columns(self, schema: str, table: str) -> set[str]:
+        """`json` and `jsonb` columns, which the scanner reads as VARCHAR."""
+        rows = self.remote(
+            "SELECT a.attname::text FROM pg_attribute a "
+            "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE n.nspname = {quote_literal(schema)} AND c.relname = {quote_literal(table)} "
+            "AND a.attnum > 0 AND NOT a.attisdropped AND a.atttypid IN ('json'::regtype, "
+            "'jsonb'::regtype)"
+        )
+        return {name for (name,) in rows}
+
 
 class MySQLSession(_ScannerSession):
     """MySQL's schemas are its databases. The source is one of them, the one its spec names;
@@ -189,6 +200,15 @@ class MySQLSession(_ScannerSession):
             tuple(v.decode() if isinstance(v, bytes) else v for v in row)
             for row in super().remote(sql)
         ]
+
+    def json_columns(self, schema: str, table: str) -> set[str]:
+        """`JSON` columns, which the scanner reads as VARCHAR."""
+        rows = self.remote(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            f"WHERE TABLE_SCHEMA = {quote_literal(schema)} AND TABLE_NAME = {quote_literal(table)} "
+            "AND DATA_TYPE = 'json'"
+        )
+        return {name for (name,) in rows}
 
     def extract(self) -> dict[str, Any]:
         self.clear_cache()

@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Modified by Ontological: ported from upstream's auto_ontology/catalog/ingest.py, write.py,
 # parsers/schemas_parser.py and services/schema.py. It reads a source executor's extract in place
-# of a connector, and writes sequentially and in one transaction. No query history (M2.4).
+# of a connector, writes sequentially and in one transaction, and profiles the catalog before it
+# embeds the data layer. No query history (M2.4).
 
-"""Ingest: a source's catalog, extracted by its executor and written through the DAL.
+"""Ingest: a source's catalog, extracted by its executor and written through the DAL, then
+profiled through the executor, then embedded as the data layer.
 
 Upstream's `write.populate_db`, then `populate_fks` and `populate_pks`, over upstream's vendored
 catalog store. A database the store doesn't hold yet is loaded whole. One it holds is diffed, schema
@@ -19,6 +21,10 @@ Upstream writes each schema, the keys and the `pulled` stamp in separate transac
 the schema diffs on a thread pool. A failure part way leaves a half-written catalog until the next
 ingest repairs it. Here the whole write is one transaction: the catalog lands complete, or stays as
 the last ingest left it.
+
+Profiling (`ontological/profile/`) runs after the write and before the data layer is built, so each
+column's text carries its sample values (§7.1). Upstream embedded the data layer at ingest and
+profiled at compile, so its texts never had them.
 """
 
 # The vendored catalog store and model are untyped.
@@ -28,7 +34,7 @@ the last ingest left it.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -53,8 +59,11 @@ from auto_ontology.catalog.store.schemas import (
 )
 from auto_ontology.dal import schema as s
 from auto_ontology.dal.session import store, write_transaction
+from ontological.catalog.data_layer import embed_data_layer
 from ontological.catalog.diff import update_diff_from_existing_schema
 from ontological.catalog.extract import extract
+from ontological.embed.embedder import LocalEmbedder
+from ontological.profile.run import Profiled, profile_catalog
 from ontological.sources.executor import Catalog, Record, SourceExecutor
 from ontological.sources.spec import Source, to_record
 
@@ -70,11 +79,27 @@ class Ingested:
     skipped: list[Record]  # relations the executor couldn't read, which weren't written
     # `schema.table` for each table the store didn't hold before: every table, on a first load
     new_tables: list[str] = field(default_factory=list[str])
+    profiled: Profiled | None = None  # None when nothing was written
+    data_layer_rows: int = 0  # rows embedded into `data_objects_layer`
 
 
-def ingest(executor: SourceExecutor, *, timeout_s: float | None = None) -> Ingested:
-    """Extract the executor's source and write its catalog to the store."""
-    return write_catalog(executor.extract(timeout_s=timeout_s), source=executor.source)
+def ingest(
+    executor: SourceExecutor,
+    *,
+    embedder: LocalEmbedder | None = None,
+    timeout_s: float | None = None,
+    probe_distinct_values: bool = True,
+) -> Ingested:
+    """Extract the executor's source, write its catalog to the store, profile it, and, given an
+    embedder, embed its data layer from the profiled catalog."""
+    ingested = write_catalog(executor.extract(timeout_s=timeout_s), source=executor.source)
+    if ingested.database_id is None:
+        return ingested
+    profiled = profile_catalog(
+        executor, ingested.database_name, probe_distinct_values=probe_distinct_values
+    )
+    rows = embed_data_layer(ingested.database_name, embedder) if embedder is not None else 0
+    return replace(ingested, profiled=profiled, data_layer_rows=rows)
 
 
 def write_catalog(catalog: Catalog, *, source: Source | None = None) -> Ingested:
