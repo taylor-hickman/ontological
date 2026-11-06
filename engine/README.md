@@ -67,6 +67,8 @@ ONTOLOGICAL_PG_BIN=<tree>/bin ONTOLOGICAL_MYSQL_URL=mysql://root:pw@127.0.0.1:53
 
 The catalog ingest tests in `tests/store/test_ingest.py` build Chinook from upstream's fixture SQL (`tests/upstream_fixtures/dev_tools/fixtures/sql/chinook.sql`), extract it through a real source executor and write it to the bundled Postgres, so they need `ONTOLOGICAL_PG_BIN` like the rest of `tests/store`.
 
+The staleness check's tests in `tests/store/test_staleness.py` ingest copies of Chinook, back-date their `pulled` stamps and re-ingest the stale ones the same way. `test_engine_pg.py` also starts the real engine on a store with a source ingested 25 hours ago and waits for the refresh.
+
 The compile tests answer for Claude with a scripted gateway, so they spend no quota. `tests/compile` checks the split stages' prompts and fallbacks, and profiles a SQLite file through a real executor. `tests/store/test_compile.py` ingests Chinook, compiles it and checks the profile, the Terms and attributes, and the semantic FKs in the store, so it needs `ONTOLOGICAL_PG_BIN`. `tests/llm/test_compile_routes.py` runs each stage through the real gateway on a scripted `query()`, to check its route and schema.
 
 `ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip. CI sets it in two places: `ci.yml` runs these tests on every change on Linux, against PGDG's PostgreSQL 17 and 16 with pgvector (`.github/actions/postgres-linux`), and `postgres.yml` runs them on the bundled macOS tree when its build changes.

@@ -9,7 +9,8 @@ Postgres, applies pending migrations (§5.3), loads the embedder from `--model-d
 its bulk batch cap (§7.1; with no model directory it runs without one), serves the API on
 127.0.0.1 at a random port with a new bearer token, writes engine.json and releases the lock. It
 prints one JSON line when it serves or attaches, `{"pid", "port", "version", "started"}`, or
-`{"error"}` and exits 1.
+`{"error"}` and exits 1. Once it serves, it re-ingests the metadata of every source last ingested
+over a day ago, in the background (§9.1, `jobs/staleness.py`).
 
 It exits 0 after `--idle-timeout` seconds (600) with no live lease, no request in flight and no
 running job, or on SIGTERM or SIGINT. Either way it removes engine.json, writes the quit dump
@@ -48,6 +49,7 @@ from ontological.api.app import create_app
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
+from ontological.jobs.staleness import StalenessCheck
 from ontological.llm.env import sanitize_environ
 from ontological.store import dal, pg
 
@@ -82,6 +84,7 @@ class Config:
 class Store(Protocol):
     def start(self) -> None: ...
     def stop(self) -> None: ...
+    def staleness_check(self) -> StalenessCheck: ...
 
 
 class PgStore:
@@ -105,6 +108,9 @@ class PgStore:
         dal.close()
         dump = pg.stop(self.layout)
         log.info("store stopped; quit dump %s", dump.name if dump else "not needed")
+
+    def staleness_check(self) -> StalenessCheck:
+        return StalenessCheck()
 
 
 def pg_store(config: Config) -> Store:
@@ -251,7 +257,7 @@ def serve(config: Config, make_store: Callable[[Config], Store]) -> int:
         if stop.requested:
             stop.log_once()
         else:
-            asyncio.run(_serve(config, sock, lock, stop, embedder))
+            asyncio.run(_serve(config, sock, lock, stop, embedder, new_store.staleness_check()))
     except Exception as e:
         log.exception("engine failed")
         emit(error=f"{type(e).__name__}: {e}")
@@ -275,8 +281,13 @@ async def _serve(
     lock: discovery.EngineLock,
     stop: _Stop,
     embedder: LocalEmbedder | None,
+    staleness: StalenessCheck,
 ) -> None:
-    lifetime = Lifetime(idle_timeout_s=config.idle_timeout_s, renew_every_s=config.renew_every_s)
+    lifetime = Lifetime(
+        idle_timeout_s=config.idle_timeout_s,
+        renew_every_s=config.renew_every_s,
+        jobs_running=lambda: int(staleness.running),
+    )
     info = discovery.EngineInfo(
         pid=os.getpid(),
         port=sock.getsockname()[1],
@@ -310,24 +321,29 @@ async def _serve(
     lock.release()
     announce(info, started=True)
     log.info("serving on 127.0.0.1:%d", info.port)
-
-    tick = min(1.0, config.idle_timeout_s / 4, config.renew_every_s)
-    while not task.done():
-        if lifetime.should_exit():
-            log.info("idle for %gs: stopping", config.idle_timeout_s)
-        if lifetime.closing or stop.requested:
-            stop.log_once()
-            lifetime.close()
-            # Take engine.lock before we stop answering: an engine starting meanwhile holds it
-            # while it checks for us, so it either finds us still serving and exits, or waits
-            # until our store has stopped. Otherwise it could adopt the Postgres we are about to
-            # stop. The lock is taken off the loop, so /health keeps answering.
-            await asyncio.to_thread(lock.acquire)
-            discovery.remove_engine_json(config.app_data, pid=info.pid)
-            server.should_exit = True
-            break
-        await asyncio.wait({task}, timeout=tick)
-    await task
+    staleness.start()
+    try:
+        tick = min(1.0, config.idle_timeout_s / 4, config.renew_every_s)
+        while not task.done():
+            if lifetime.should_exit():
+                log.info("idle for %gs: stopping", config.idle_timeout_s)
+            if lifetime.closing or stop.requested:
+                stop.log_once()
+                lifetime.close()
+                # Take engine.lock before we stop answering: an engine starting meanwhile holds it
+                # while it checks for us, so it either finds us still serving and exits, or waits
+                # until our store has stopped. Otherwise it could adopt the Postgres we are about to
+                # stop. The lock is taken off the loop, so /health keeps answering.
+                await asyncio.to_thread(lock.acquire)
+                discovery.remove_engine_json(config.app_data, pid=info.pid)
+                server.should_exit = True
+                break
+            await asyncio.wait({task}, timeout=tick)
+        await task
+    finally:
+        # Before the store stops: a refresh writes to it.
+        staleness.cancel()
+        await asyncio.to_thread(staleness.join)
 
 
 # --- headless ----------------------------------------------------------------------------------

@@ -12,6 +12,8 @@ catalog store. A database the store doesn't hold yet is loaded whole. One it hol
 by schema (`diff.py`): new schemas are added, schemas gone from the source are deleted, and the rest
 are brought in line, keeping every unchanged row's id. Foreign keys are upserted with this ingest's
 `last_seen` and the ones it didn't see are swept; primary keys are reset and written again.
+An ingest through an executor also keeps the executor's source on the database row
+(`catalog_database.connection`), so the staleness check can open it again (`jobs/staleness.py`).
 
 Upstream writes each schema, the keys and the `pulled` stamp in separate transactions, and runs
 the schema diffs on a thread pool. A failure part way leaves a half-written catalog until the next
@@ -26,10 +28,11 @@ the last ingest left it.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pandas as pd
+from sqlalchemy import update
 
 from auto_ontology.catalog.constants import Labels
 from auto_ontology.catalog.model.node import CatalogNode
@@ -48,10 +51,12 @@ from auto_ontology.catalog.store.schemas import (
     merge_schema_nodes,
     reset_pks,
 )
-from auto_ontology.dal.session import write_transaction
+from auto_ontology.dal import schema as s
+from auto_ontology.dal.session import store, write_transaction
 from ontological.catalog.diff import update_diff_from_existing_schema
 from ontological.catalog.extract import extract
 from ontological.sources.executor import Catalog, Record, SourceExecutor
+from ontological.sources.spec import Source, to_record
 
 logger = logging.getLogger(__name__)
 
@@ -63,15 +68,18 @@ class Ingested:
     tables: int
     columns: int
     skipped: list[Record]  # relations the executor couldn't read, which weren't written
+    # `schema.table` for each table the store didn't hold before: every table, on a first load
+    new_tables: list[str] = field(default_factory=list[str])
 
 
 def ingest(executor: SourceExecutor, *, timeout_s: float | None = None) -> Ingested:
     """Extract the executor's source and write its catalog to the store."""
-    return write_catalog(executor.extract(timeout_s=timeout_s))
+    return write_catalog(executor.extract(timeout_s=timeout_s), source=executor.source)
 
 
-def write_catalog(catalog: Catalog) -> Ingested:
-    """Write an extracted catalog to the store: a first load, or a diff against what it holds."""
+def write_catalog(catalog: Catalog, *, source: Source | None = None) -> Ingested:
+    """Write an extracted catalog to the store: a first load, or a diff against what it holds.
+    With `source`, the database row keeps it, replacing any it kept before."""
     name = catalog.database_name
     for relation in catalog.skipped:
         logger.warning(
@@ -87,6 +95,7 @@ def write_catalog(catalog: Catalog) -> Ingested:
         return Ingested(name, None, 0, 0, catalog.skipped)
 
     with write_transaction():
+        new_tables = _new_tables(data.tables, name)
         schemas, db_node = _parse(data.tables, data.columns, name)
         existing_id, loaded = db_exists(db_node)
         if existing_id is not None:
@@ -106,7 +115,25 @@ def write_catalog(catalog: Catalog) -> Ingested:
         add_pks(data.pks, name)
         database_id = str(db_node.get_id())
         update_node_property("db", database_id, {"pulled": pulled})
-    return Ingested(name, database_id, len(data.tables), len(data.columns), catalog.skipped)
+        if source is not None:
+            store().query_write(
+                update(s.catalog_database)
+                .where(s.catalog_database.c.id == database_id)
+                .values(connection=to_record(source))
+            )
+    return Ingested(
+        name, database_id, len(data.tables), len(data.columns), catalog.skipped, new_tables
+    )
+
+
+def _new_tables(tables: pd.DataFrame, database_name: str) -> list[str]:
+    """`schema.table` for each extracted table the store holds no row for."""
+    known = get_table_ids(tables, database_name)
+    new = known if "id" not in known else known[known["id"].isna()]
+    return sorted(
+        f"{schema}.{table}"
+        for schema, table in zip(new["table_schema"], new["table_name"], strict=True)
+    )
 
 
 def _parse(
