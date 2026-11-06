@@ -9,6 +9,7 @@ inside the repo wouldn't.
     <home>/bird/mini_dev_sqlite.jsonl
     <home>/bird/<db_id>.sqlite
     <home>/cluster/          the eval cluster's <appData>: pgdata, pgsocket, logs, pg.lock
+    <home>/app/              the eval store: an engine <appData> that holds the eval's catalogs
 """
 
 from __future__ import annotations
@@ -34,3 +35,7 @@ def bird_dir(home: Path) -> Path:
 
 def cluster_dir(home: Path) -> Path:
     return home / "cluster"
+
+
+def app_data_dir(home: Path) -> Path:
+    return home / "app"
