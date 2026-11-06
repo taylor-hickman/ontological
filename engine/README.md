@@ -60,6 +60,6 @@ The source executor tests in `tests/sources` run real executor processes on SQLi
 
 The catalog ingest tests in `tests/store/test_ingest.py` build Chinook from upstream's fixture SQL (`tests/upstream_fixtures/dev_tools/fixtures/sql/chinook.sql`), extract it through a real source executor and write it to the bundled Postgres, so they need `ONTOLOGICAL_PG_BIN` like the rest of `tests/store`.
 
-`ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip; `postgres.yml` sets it.
+`ONTOLOGICAL_PG_REQUIRED=1` turns a missing binary into a failure instead of a skip. CI sets it in two places: `ci.yml` runs these tests on every change on Linux, against PGDG's PostgreSQL 17 and 16 with pgvector (`.github/actions/postgres-linux`), and `postgres.yml` runs them on the bundled macOS tree when its build changes.
 
 Tests that run the embedding model (`tests/embed`, the embedder's engine tests and `tests/store/test_dense_search.py`) skip without `ONTOLOGICAL_MODEL_DIR`, and `ONTOLOGICAL_MODEL_REQUIRED=1` turns that into a failure. CI caches the model and sets both (`.github/actions/embedding-model`). The disk-full tests mount small disk images with `hdiutil`, so they run on macOS only.
