@@ -56,7 +56,14 @@ ONTOLOGICAL_PG_BIN=<tree>/bin ONTOLOGICAL_PG16_BIN=<work>/postgres/bin uv run py
 
 The engine process tests in `tests/engine`, and the shim's, run the real engine with a fake store and need no binaries, except `test_engine_pg.py`, which runs it on the bundled Postgres with `ONTOLOGICAL_PG_BIN` set.
 
-The source executor tests in `tests/sources` run real executor processes on SQLite files they write. DuckDB downloads its `sqlite_scanner` extension the first time it attaches one; bundling the extensions with autoinstall off is M7.2.
+The source executor tests in `tests/sources` run real executor processes on the SQLite, DuckDB, Parquet, CSV and JSON files they write. The Postgres and MySQL tests in `test_scanners.py` need servers, and skip without them. Postgres runs in a cluster of its own on the binaries `ONTOLOGICAL_PG_BIN` names (the bundled tree, or PGDG's packages in `ci.yml`); MySQL is any server you name with a user that can create databases and users (`ci.yml` starts the runner's own). With Docker:
+
+```sh
+docker run -d --rm --name src-mysql -e MYSQL_ROOT_PASSWORD=pw -p 53306:3306 mysql:8.4
+ONTOLOGICAL_PG_BIN=<tree>/bin ONTOLOGICAL_MYSQL_URL=mysql://root:pw@127.0.0.1:53306 uv run pytest tests/sources
+```
+
+`ONTOLOGICAL_MYSQL_REQUIRED=1` turns a missing server into a failure. DuckDB downloads its `sqlite_scanner`, `postgres_scanner` and `mysql_scanner` extensions the first time a test needs them; bundling the extensions with autoinstall off is M7.2.
 
 The catalog ingest tests in `tests/store/test_ingest.py` build Chinook from upstream's fixture SQL (`tests/upstream_fixtures/dev_tools/fixtures/sql/chinook.sql`), extract it through a real source executor and write it to the bundled Postgres, so they need `ONTOLOGICAL_PG_BIN` like the rest of `tests/store`.
 

@@ -4,7 +4,8 @@ name: Bundled Postgres
 # minimal configure, trimmed to the shipped file list, signed with the hardened runtime, then
 # smoke-tested and run through every test that needs Postgres on that tree: the store lifecycle
 # tests (engine/tests/store, including the macOS-only disk-full tests), the engine's idle shutdown
-# on the real store, upstream's golden DAL suite (M2.1) and the eval cluster's tests.
+# on the real store, upstream's golden DAL suite (M2.1), the Postgres source executor (M2.2) and
+# the eval cluster's tests.
 #
 # A macOS minute bills at ten times a Linux one, so this runs only when the bundled build or the
 # macOS-specific store code changes, or by hand from the Actions tab. ci.yml runs the same tests on
@@ -78,6 +79,12 @@ jobs:
           ONTOLOGICAL_PG_REQUIRED: "1"
           ONTOLOGICAL_GOLDEN_REPORTS: ${{ runner.temp }}/golden
         run: uv run pytest tests/golden_dal -ra
+      - name: Postgres source executor (postgres_scanner on a cluster of its own; MySQL runs in ci.yml)
+        working-directory: engine
+        env:
+          ONTOLOGICAL_PG_BIN: ${{ env.WORK }}/dist/bin
+          ONTOLOGICAL_PG_REQUIRED: "1"
+        run: uv run pytest tests/sources/test_scanners.py -ra -k "not mysql"
       - name: Upload the golden DAL suite's reports
         if: failure()
         uses: actions/upload-artifact@v4
