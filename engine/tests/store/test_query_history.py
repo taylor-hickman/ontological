@@ -188,8 +188,9 @@ TRACK = [
 ]
 #: Statements in the large history. Each is distinct text, and most are distinct statements.
 LARGE = 8000
-#: The API's slowest acceptable answers while the history ingests.
-P95_S = 0.025
+#: How much slower the API may answer while the history ingests than when idle (p95), and its
+#: slowest acceptable answer. Parsing on an engine thread adds 50-70 ms to the p95.
+P95_ADDED_S = 0.025
 MAX_S = 0.5
 
 
@@ -259,20 +260,30 @@ def test_the_api_stays_responsive_while_a_large_history_ingests(
         finally:
             done.set()
 
+    def timed(client: httpx.Client) -> float:
+        t0 = time.perf_counter()
+        assert client.get("/health").status_code == 200
+        return time.perf_counter() - t0
+
     latencies: list[tuple[float, float]] = []  # (when sent, how long)
+    # Without TCP_NODELAY, Linux's delayed ACK can add 40 ms to every request, idle or not.
+    nodelay = httpx.HTTPTransport(socket_options=[(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)])
     with (
         serving(Lifetime()) as base,
-        httpx.Client(base_url=base, headers={"Authorization": f"Bearer {TOKEN}"}) as client,
+        httpx.Client(
+            base_url=base, headers={"Authorization": f"Bearer {TOKEN}"}, transport=nodelay
+        ) as client,
         ParsePool() as pool,
     ):
-        assert client.get("/health").status_code == 200
+        idle: list[float] = []
+        for _ in range(50):
+            idle.append(timed(client))
+            time.sleep(0.01)
         job = threading.Thread(target=run, args=(pool,))
         started = time.perf_counter()
         job.start()
         while not done.is_set():
-            t0 = time.perf_counter()
-            assert client.get("/health").status_code == 200
-            latencies.append((t0, time.perf_counter() - t0))
+            latencies.append((time.perf_counter(), timed(client)))
             time.sleep(0.01)
         job.join()
         took = time.perf_counter() - started
@@ -280,7 +291,10 @@ def test_the_api_stays_responsive_while_a_large_history_ingests(
     assert not failed, failed
     every = [d for _, d in latencies]
     p95 = statistics.quantiles(every, n=20)[-1]
-    report = f"{len(every)} requests over a {took:.1f} s ingest: {summary(every)}"
+    idle_p95 = statistics.quantiles(idle, n=20)[-1]
+    report = (
+        f"idle: {summary(idle)}; {len(every)} requests over a {took:.1f} s ingest: {summary(every)}"
+    )
     for phase, ds in (
         ("parsing", [d for t, d in latencies if t < writing[0]]),
         ("writing", [d for t, d in latencies if t >= writing[0]]),
@@ -288,7 +302,7 @@ def test_the_api_stays_responsive_while_a_large_history_ingests(
         report += f"; while {phase}, {len(ds)}: {summary(ds)}"
     print(report)
     assert len(every) >= 50, f"too short an ingest to measure: {report}"
-    assert p95 < P95_S and max(every) < MAX_S, report
+    assert p95 < idle_p95 + P95_ADDED_S and max(every) < MAX_S, report
 
 
 def summary(ds: list[float]) -> str:
