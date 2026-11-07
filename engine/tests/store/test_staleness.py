@@ -7,16 +7,24 @@ Needs ONTOLOGICAL_PG_BIN, like the rest of tests/store.
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from conftest import sql
+from fakes import NoAnswer, ScriptedGateway
+from test_jobs_screen import WaitingClock, state, until
 
+from ontological import settings
 from ontological.catalog.ingest import ingest
 from ontological.jobs import store as jobs
+from ontological.jobs.active import ActiveJobs
+from ontological.jobs.service import Jobs, auto_compile_from
 from ontological.jobs.staleness import Refreshed, StalenessCheck, stale_sources
+from ontological.jobs.store import JobState
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.sources.spec import to_record
 from ontological.store import pg
@@ -157,3 +165,104 @@ def test_a_cancelled_check_refreshes_nothing_more(
     assert not check.running
     assert check.results == []
     assert pulled(store, "stale") == before
+
+
+def limited(task: str, user: str) -> NoAnswer:
+    """Claude at its usage limit, so a compile it is asked for waits, paused, until the engine
+    stops."""
+    return NoAnswer("limited", "limited", datetime.now(UTC) + timedelta(hours=1))
+
+
+def refresh_with_jobs() -> tuple[list[bool], jobs.Job]:
+    """The engine's staleness check over Chinook's copy `stale`, handing what it finds to the
+    engine's Jobs as `_serve` does. Whether each refresh it handed over started a compile, and
+    the refresh's job."""
+    handed: list[bool] = []
+
+    async def scenario() -> None:
+        service = Jobs(gateway=ScriptedGateway(limited), active=ActiveJobs(), clock=WaitingClock())
+        auto_compile = auto_compile_from(service, asyncio.get_running_loop())
+        check = StalenessCheck(new_tables=lambda refresh: handed.append(auto_compile(refresh)))
+        await asyncio.to_thread(check.run)
+        if any(handed):
+            await until(lambda: state("stale") == "paused")
+        await service.stop()
+
+    asyncio.run(scenario())
+    [refresh] = [j for j in jobs.recent(5) if j.kind == "ingest"]
+    return handed, refresh
+
+
+def stale_chinook(lay: pg.Layout, chinook: Path, tmp_path: Path, *, new_table: bool) -> None:
+    path = copy_of(chinook, tmp_path, "stale")
+    ingested(path)
+    pulled_ago(lay, "stale", timedelta(hours=25))
+    if new_table:
+        add_table(path, "Review")
+
+
+def test_with_auto_compile_on_a_refresh_with_new_tables_starts_their_compile(
+    store: pg.Layout, chinook: Path, tmp_path: Path
+) -> None:
+    stale_chinook(store, chinook, tmp_path, new_table=True)
+    settings.put(settings.AUTO_COMPILE, True)
+
+    handed, refresh = refresh_with_jobs()
+
+    assert handed == [True]
+    assert state("stale") == "paused", "a compile of stale started by itself"
+    assert refresh.result == {"new_tables": ["main.Review"]}
+    assert refresh.dismissed_at is not None, "the compile answers the refresh's prompt"
+
+
+@pytest.mark.parametrize("left", ["held", "stopped", "running", "paused"])
+def test_with_auto_compile_on_an_unfinished_compile_is_left_and_the_prompt_waits(
+    store: pg.Layout, chinook: Path, tmp_path: Path, left: JobState
+) -> None:
+    """Resuming it would compile only the tables it planned, which leave out the new ones, and a
+    held or stopped compile waits for the person. Running and paused are left by an earlier
+    engine: the check starts before the engine resumes them."""
+    stale_chinook(store, chinook, tmp_path, new_table=True)
+    settings.put(settings.AUTO_COMPILE, True)
+    unfinished = jobs.start_job("compile", "stale", [])
+    if left == "paused":
+        jobs.set_state(unfinished.id, "paused", paused_until=datetime.now(UTC) + timedelta(hours=1))
+    elif left != "running":
+        jobs.set_state(unfinished.id, left)
+
+    handed, refresh = refresh_with_jobs()
+
+    assert handed == [False]
+    assert jobs.job(unfinished.id).state == left, "not resumed"
+    assert [j.id for j in jobs.recent(5) if j.kind == "compile"] == [unfinished.id]
+    assert refresh.dismissed_at is None, "Jobs still asks: 1 new table, compile?"
+
+
+@pytest.mark.parametrize("setting", [None, False], ids=["unset", "off"])
+def test_with_auto_compile_off_a_refresh_with_new_tables_waits_for_the_person(
+    store: pg.Layout, chinook: Path, tmp_path: Path, setting: bool | None
+) -> None:
+    stale_chinook(store, chinook, tmp_path, new_table=True)
+    if setting is not None:
+        settings.put(settings.AUTO_COMPILE, setting)
+    assert settings.auto_compile() is False
+
+    handed, refresh = refresh_with_jobs()
+
+    assert handed == [False]
+    assert state("stale") is None
+    assert refresh.result == {"new_tables": ["main.Review"]}
+    assert refresh.dismissed_at is None, "Jobs still asks: N new tables, compile?"
+
+
+def test_with_auto_compile_on_a_refresh_with_no_new_tables_compiles_nothing(
+    store: pg.Layout, chinook: Path, tmp_path: Path
+) -> None:
+    stale_chinook(store, chinook, tmp_path, new_table=False)
+    settings.put(settings.AUTO_COMPILE, True)
+
+    handed, refresh = refresh_with_jobs()
+
+    assert handed == [], "nothing to hand over"
+    assert state("stale") is None
+    assert refresh.result == {"new_tables": []}

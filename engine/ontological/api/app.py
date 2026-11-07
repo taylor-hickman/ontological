@@ -9,15 +9,21 @@ Onboarding and the catalog screen read the routes in `setup.py`: Claude Code's i
 and the sources and their catalogs.
 
 Jobs (DESIGN.md §5.4): `GET /jobs` lists the latest, `GET /jobs/{id}` adds a compile's tables
-and their stages, `GET /jobs/{id}/calls` is its call log. `POST /jobs/compile` starts or resumes
-a database's compile, which uses Claude quota; `POST /jobs/{id}/hold` pauses one until
-`POST /jobs/{id}/resume`; `POST /jobs/{id}/dismiss` puts off a refresh's new-tables prompt. The
-routes answer 503 in an engine with no store to keep jobs in.
+and their stages, `GET /jobs/{id}/calls` is its call log. `GET /jobs/estimate?database_name=`
+estimates a database's next compile, or the rest of its unfinished one, with split and with
+merged (§6.5), and asks Claude nothing. `POST /jobs/compile` starts or resumes a database's
+compile, which uses Claude quota, optionally with `table_calls` for its tables;
+`POST /jobs/{id}/table_calls` switches an unfinished compile's option from its next pack;
+`POST /jobs/{id}/hold` pauses one until `POST /jobs/{id}/resume`; `POST /jobs/{id}/dismiss` puts
+off a refresh's new-tables prompt. The routes answer 503 in an engine with no store to keep jobs
+in.
 
 Ask: `POST /ask` answers one question from one database with the gated agent (§8.1), which uses
 Claude quota, and returns once the session ends: the answer, whether the post-run check verified
 it, the validated SQL, its rows and the tool log (`ontological.answer.service.Asked`). It answers
 404 for a database with no source, and 503 in an engine with no store or no embedder.
+
+The Terms and Ontology screens read and edit the ontology through the routes in `curate.py`.
 
 Leases: `POST /leases` takes one, `PUT /leases/{id}` renews it, `DELETE /leases/{id}` releases
 it. A renewal of an expired lease is 404, and the client takes a new one. A closing engine
@@ -40,8 +46,12 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ontological.answer.service import Answers, Asked, NoEmbedder
+from ontological.api.curate import add_curate_routes
 from ontological.api.setup import add_setup_routes
 from ontological.catalog.sources import Sources
+from ontological.compile.estimate import Estimate
+from ontological.compile.packing import TableCalls
+from ontological.curate.service import OntologyService
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine.lifetime import Closing, Lease, Lifetime
 from ontological.jobs.active import ActiveJobs, JobBusy
@@ -75,12 +85,17 @@ class LeaseOut(BaseModel):
 
 class CompileRequest(BaseModel):
     database_name: str
+    table_calls: TableCalls | None = None  # None: a new job splits, a resumed one keeps its own
 
 
 class AskRequest(BaseModel):
     question: str
     database: str
     critic: bool = True  # the `answer.critic` setting (§8.1)
+
+
+class TableCallsRequest(BaseModel):
+    table_calls: TableCalls
 
 
 class JobList(BaseModel):
@@ -141,6 +156,7 @@ def create_app(
     claude: Claude | None = None,
     sources: Sources | None = None,
     jobs_service: JobsService | None = None,
+    ontology: OntologyService | None = None,
     answers: Answers | None = None,
 ) -> FastAPI:
     app = FastAPI(
@@ -190,6 +206,7 @@ def create_app(
         return Response(status_code=204)
 
     add_setup_routes(app, claude=claude, sources=sources)
+    add_curate_routes(app, ontology=ontology)
 
     @app.post("/ask")
     async def ask(body: AskRequest) -> Asked:  # pyright: ignore[reportUnusedFunction]
@@ -205,6 +222,11 @@ def create_app(
     @app.get("/jobs")
     async def list_jobs() -> JobList:  # pyright: ignore[reportUnusedFunction]
         return JobList(jobs=await service().summaries())
+
+    # Before /jobs/{job_id}, which would read "estimate" as an id
+    @app.get("/jobs/estimate")
+    async def estimate(database_name: str) -> Estimate:  # pyright: ignore[reportUnusedFunction]
+        return await service().estimate(database_name)
 
     @app.get("/jobs/{job_id}")
     async def job_detail(job_id: int) -> JobDetail:  # pyright: ignore[reportUnusedFunction]
@@ -223,10 +245,20 @@ def create_app(
     @app.post("/jobs/compile", status_code=202)
     async def start_compile(body: CompileRequest) -> Response:  # pyright: ignore[reportUnusedFunction]
         try:
-            await service().compile(body.database_name)
+            await service().compile(body.database_name, body.table_calls)
         except NoSource:
             raise HTTPException(404, f"no source for {body.database_name}") from None
         except JobBusy as e:
+            raise HTTPException(409, str(e)) from None
+        return Response(status_code=202)
+
+    @app.post("/jobs/{job_id}/table_calls", status_code=202)
+    async def choose(job_id: int, body: TableCallsRequest) -> Response:  # pyright: ignore[reportUnusedFunction]
+        try:
+            await service().choose(job_id, body.table_calls)
+        except NoSuchJob:
+            raise HTTPException(404, "no such job") from None
+        except NotNow as e:
             raise HTTPException(409, str(e)) from None
         return Response(status_code=202)
 
@@ -252,7 +284,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=[APP_ORIGIN],
         allow_origin_regex=DEV_ORIGIN_REGEX,
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["authorization", "content-type"],
     )
     return app

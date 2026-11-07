@@ -8,8 +8,10 @@ What the sequence must hold depends on the session:
 - an `information` answer needs only its plan, and no SQL;
 - with the critic off, no review is needed;
 - an `answerable=false` answer needs its plan and no SQL;
-- an `information` or `answerable=false` answer is unverified once run_sql has returned rows in
-  the session, since it would rest on them unchecked.
+- an `information` or `answerable=false` answer is unverified once run_sql has run in the
+  session, since it would rest on what came back unchecked. That holds for an empty result too:
+  "the data holds nothing on it" is what a wrong literal makes a query say, so it needs the SQL
+  that came back empty, validated, run and reviewed like any other.
 
 The intent is the one the answer's plan recorded.
 """
@@ -54,8 +56,8 @@ def post_run_check(log: Sequence[ToolCall], answer: AnswerModel | None, *, criti
             return _unverified(f"{kind} carries SQL; it should carry none")
         if any(call.name == "run_sql" and not call.is_error for call in log):
             return _unverified(
-                f"run_sql ran in this session, so {kind} rests on rows; it needs the SQL that "
-                "returned them, validated, run and reviewed"
+                f"run_sql ran in this session, so {kind} rests on what it returned, even no "
+                "rows; it needs that SQL, validated, run and reviewed"
             )
         return VERIFIED
 

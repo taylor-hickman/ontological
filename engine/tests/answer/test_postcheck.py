@@ -207,6 +207,22 @@ def test_an_unanswerable_answer_after_a_run_is_unverified() -> None:
     unverified(check(log, answer(answerable=False, **NO_SQL)), "run_sql", "SQL")
 
 
+def ran_empty(vid: str = "val-1") -> ToolCall:
+    return call("run_sql", validation_id=vid, outcome="empty", columns=["n"], rows=[], row_count=0)
+
+
+def test_an_unanswerable_answer_after_an_empty_run_is_unverified() -> None:
+    # "The data has nothing on it" from an empty run is the claim a wrong literal makes, so it
+    # needs the SQL that came back empty, validated, run and reviewed
+    log = [plan(), validated(), ran_empty()]
+    unverified(check(log, answer(answerable=False, **NO_SQL)), "run_sql", "SQL")
+
+
+def test_an_empty_run_verifies_an_answer_that_rests_on_it() -> None:
+    log = [plan(), validated(), ran_empty(), reviewed()]
+    assert check(log, answer(answer="No albums match.")).verified
+
+
 def test_an_information_answer_still_needs_its_plan() -> None:
     ans = answer(sql=None, validation_id=None, review_id=None)
     unverified(check([plan("plan-2", intent="information")], ans), "plan-1")

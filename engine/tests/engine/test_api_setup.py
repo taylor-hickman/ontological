@@ -88,6 +88,10 @@ def test_an_engine_without_a_store_or_gateway_answers_503() -> None:
         assert c.get("/claude").status_code == 503
         assert c.get("/sources").status_code == 503
         assert c.post("/sources", json={"kind": "file", "paths": ["/x.db"]}).status_code == 503
+        assert c.get("/sources/x/terms").status_code == 503
+        assert c.get("/terms/x").status_code == 503
+        assert c.patch("/terms/x", json={"name": "Y"}).status_code == 503
+        assert c.post("/edits/1/undo").status_code == 503
 
 
 def test_add_a_source_then_browse_and_remove_it(client: TestClient, shop: Path) -> None:

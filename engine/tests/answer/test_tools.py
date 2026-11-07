@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from fakes import FakeGraph, frame
+from fakes import DuckProber, FakeGraph, frame
 
 from ontological.answer.gate import KeyColumns
 from ontological.answer.models import Review
@@ -346,6 +346,86 @@ def test_a_source_error_is_returned_for_the_model_to_fix() -> None:
     assert not text(result).startswith("Refused:")
     # A failed run hasn't run: review still refuses it
     refused(h.call("review_answer", validation_id=validation_id, answer_draft="x"), "run_sql")
+
+
+def test_rows_come_back_as_the_rows_outcome() -> None:
+    h = Harness()
+    assert data(h.call("run_sql", validation_id=h.validated()))["outcome"] == "rows"
+
+
+# --- an empty result ---------------------------------------------------------------------------
+
+# 25 artists, more than the literal check judges before the query runs (LOW_CARD_THRESHOLD)
+ARTISTS = ["AC/DC", *(f"Artist {i:02}" for i in range(24))]
+NEAR_MISS_HIGH_CARD = "SELECT Name FROM Artist WHERE Name = 'ac/dc'"
+
+
+class DuckRunner(DuckProber):
+    """A source on an in-memory DuckDB, for run_sql as well as the gate's probes."""
+
+    def __init__(self, *setup: str) -> None:
+        super().__init__(*setup)
+        self.ran: list[str] = []
+
+    def run_sql(self, sql: str) -> Rows:
+        self.ran.append(sql)
+        return Rows(**self.session.rows(sql, 200))
+
+
+def chinook_runner() -> DuckRunner:
+    names = ", ".join(f"({i + 1}, '{n}')" for i, n in enumerate(ARTISTS))
+    return DuckRunner(
+        "CREATE TABLE Artist (ArtistId INTEGER, Name VARCHAR)",
+        f"INSERT INTO Artist VALUES {names}",
+        "CREATE TABLE Album (AlbumId INTEGER, Title VARCHAR, ArtistId INTEGER)",
+    )
+
+
+def test_an_empty_result_is_its_own_outcome_and_asks_for_the_filters_to_be_rechecked() -> None:
+    h = Harness()
+    h.runner.rows = Rows(["Name", "albums"], ["VARCHAR", "BIGINT"], [], False)
+    validation_id = h.validated()
+    result = h.call("run_sql", validation_id=validation_id)
+    ran = data(result)
+    assert ran["outcome"] == "empty"
+    assert ran["validation_id"] == validation_id and ran["row_count"] == 0 and ran["rows"] == []
+    assert ran["columns"] == ["Name", "albums"]
+    message = text(result)
+    assert "no rows" in message and "filter" in message and "literal" in message
+    assert validation_id in message
+    # It ran: the empty result can be the answer, so review takes it
+    assert data(h.call("review_answer", validation_id=validation_id, answer_draft="None."))
+
+
+def test_an_empty_result_finds_a_near_miss_the_gate_left_alone() -> None:
+    h = Harness()
+    h.runner = h.tools.runner = chinook_runner()  # type: ignore[assignment]
+    validation_id = h.validated(NEAR_MISS_HIGH_CARD)  # 25 names: the gate doesn't judge them
+    result = h.call("run_sql", validation_id=validation_id)
+    ran = data(result)
+    assert ran["outcome"] == "empty"
+    assert "AC/DC" in ran["repairs"] and "'ac/dc'" in ran["repairs"]
+    assert "AC/DC" in text(result) and "validate_sql" in text(result)
+
+
+def test_an_empty_result_with_nothing_to_repair_says_it_can_be_the_answer() -> None:
+    h = Harness()
+    h.runner = h.tools.runner = chinook_runner()  # type: ignore[assignment]
+    sql = "SELECT Name FROM Artist WHERE Name = 'Nobody Like This'"
+    result = h.call("run_sql", validation_id=h.validated(sql))
+    ran = data(result)
+    assert ran["outcome"] == "empty" and ran["repairs"] == ""
+    assert "can be the answer" in text(result)
+
+
+def test_the_empty_result_probes_share_the_questions_probe_cap() -> None:
+    h = Harness()
+    h.runner = h.tools.runner = chinook_runner()  # type: ignore[assignment]
+    validation_id = h.validated(NEAR_MISS_HIGH_CARD)
+    probes = h.tools._probing.probes  # pyright: ignore[reportPrivateUsage, reportOptionalMemberAccess]
+    probes.calls = probes.max_calls  # the gate spent the question's budget
+    ran = data(h.call("run_sql", validation_id=validation_id))
+    assert ran["outcome"] == "empty" and ran["repairs"] == ""
 
 
 # --- review_answer ---------------------------------------------------------------------------

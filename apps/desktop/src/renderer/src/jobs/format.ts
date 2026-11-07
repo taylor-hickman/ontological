@@ -1,7 +1,7 @@
 // The Jobs screen's words (DESIGN.md §5.4, §8): what each job, table and call says. Pure, so the
 // unit tests cover them without a window.
 
-import type { CallRow, JobState, JobSummary, TableProgress } from './types'
+import type { CallRow, JobState, JobSummary, OptionEstimate, TableCalls, TableProgress } from './types'
 
 const UNFINISHED: readonly JobState[] = ['running', 'paused', 'held', 'stopped']
 
@@ -217,7 +217,54 @@ export function stageLegend(stages: readonly string[]): string {
     table_keys: 'keys',
     column_descriptions: 'descriptions',
     table_terms: 'terms',
-    table_synonyms: 'synonyms'
+    table_synonyms: 'synonyms',
+    table_semantics: 'one merged call'
   }
   return stages.map((s) => names[s] ?? s).join(' · ')
+}
+
+/** The options a compile's tables ran with, split first: what the legend explains. */
+export function optionsShown(tables: readonly TableProgress[], current: TableCalls): TableCalls[] {
+  const used = new Set<TableCalls>(tables.map((t) => t.table_calls))
+  if (used.size === 0) used.add(current)
+  return (['split', 'merged'] as const).filter((o) => used.has(o))
+}
+
+export const OPTION_NAME: Record<TableCalls, string> = { split: 'Split', merged: 'Merged' }
+
+/** What each option's calls are, in a few words, as the mockup's "bulk on Haiku". */
+export const OPTION_SHAPE: Record<TableCalls, string> = {
+  split: 'four calls a table, packed; bulk on Haiku',
+  merged: 'one Sonnet call per table'
+}
+
+/** A duration estimate (§8): "under a minute", "4 min", "1 h 20 min". */
+export function minutes(seconds: number): string {
+  const m = Math.round(seconds / 60)
+  if (m < 1) return 'under a minute'
+  if (m < 60) return `${m} min`
+  const h = Math.floor(m / 60)
+  const rest = m % 60
+  return rest === 0 ? `${h} h` : `${h} h ${rest} min`
+}
+
+/** Usage at API prices: "$0.42", "under $0.01". */
+export function dollars(usd: number): string {
+  return usd < 0.01 ? 'under $0.01' : `$${usd.toFixed(2)}`
+}
+
+/** An option's estimate on one line: "≈ 70 calls · ≈ 15 min · ≈ $0.42 of usage". */
+export function estimateLine(option: OptionEstimate): string {
+  if (option.calls === 0) return 'No Claude calls'
+  const calls = `≈ ${option.calls} ${option.calls === 1 ? 'call' : 'calls'}`
+  return `${calls} · ≈ ${minutes(option.seconds)} · ≈ ${dollars(option.usd)} of usage`
+}
+
+/** The range behind an estimate: "16–18 calls, 1 to 2 min, $0.11 to $0.23 at API prices". */
+export function estimateRange(option: OptionEstimate): string {
+  const calls = option.calls_high > option.calls ? `${option.calls}–${option.calls_high}` : String(option.calls)
+  const low = minutes(option.seconds_low)
+  const high = minutes(option.seconds_high)
+  const time = low === high ? high : `${low} to ${high}`
+  return `${calls} calls, ${time}, ${dollars(option.usd_low)} to ${dollars(option.usd_high)} at API prices`
 }
