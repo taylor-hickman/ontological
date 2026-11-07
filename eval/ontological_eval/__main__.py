@@ -19,6 +19,10 @@
     answerable [--set dev] [--models <key> ...]
                       check_answerable's coverage distance on extracted entities: one Haiku
                       call a question, none on a rerun
+    run <set> [--config NAME] [--limit N] [--questions wwi:<id> bird:<id> ...] [--no-control]
+                      answer a set through the engine and score it, with the control arm:
+                      spends Claude quota
+    report <run id | run dir>   print a stored run's report again
 
 The data, the cluster and the eval store live under ONTOLOGICAL_EVAL_HOME (default
 ~/Library/Application Support/Ontological Eval). The cluster and the store run the bundled
@@ -36,7 +40,20 @@ from pathlib import Path
 from ontological.embed import model as models
 from ontological.store import pg
 
-from . import answerable, cluster, compile_store, fetch, ingest, questions, retrieval, review, sets
+from . import (
+    answerable,
+    cluster,
+    compile_store,
+    fetch,
+    ingest,
+    questions,
+    report,
+    retrieval,
+    review,
+    runner,
+    runs,
+    sets,
+)
 from .home import eval_home, wwi_dir
 
 
@@ -99,6 +116,17 @@ def main(argv: list[str] | None = None) -> int:
         "--models", nargs="+", choices=list(models.CANDIDATES), default=list(models.CANDIDATES)
     )
     a.add_argument("--pg-bin", help="the bundled Postgres's bin/ (default: $ONTOLOGICAL_PG_BIN)")
+    u = sub.add_parser("run", help="run a set through the agent and the control (spends quota)")
+    u.add_argument("set_name", choices=sets.NAMES, metavar="set")
+    u.add_argument(
+        "--config", help="eval/configs/<NAME>.json (default: sonnet for smoke, else default)"
+    )
+    u.add_argument("--limit", type=int, help="only the set's first N questions")
+    u.add_argument("--questions", nargs="+", default=[], metavar="KEY", help="wwi:<id>, bird:<id>")
+    u.add_argument("--no-control", action="store_true", help="skip the control arm")
+    u.add_argument("--pg-bin", help="the bundled Postgres's bin/ (default: $ONTOLOGICAL_PG_BIN)")
+    p = sub.add_parser("report", help="print a stored run's report")
+    p.add_argument("run", help="a run id under <home>/results/runs, or its directory")
     args = parser.parse_args(argv)
     home = eval_home()
 
@@ -110,16 +138,22 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "sets":
             return _sets(args.action, home, force=args.force)
+        if args.command == "report":
+            path = runs.find_run(home, args.run)
+            print(report.markdown(runs.read_json(path)), end="")
+            return 0
 
         pg_bin = _pg_bin(args.pg_bin)
         if args.command == "ingest":
             return _ingest(home, pg_bin, args.databases or list(ingest.DATABASES))
         if args.command == "compile":
             return _compile(home, pg_bin, args.databases or list(ingest.DATABASES))
+        if args.command == "run":
+            return _run(home, pg_bin, args)
         if args.command == "review":
             return _review(home, pg_bin, args.action, args.configs, args.databases)
         if args.command == "retrieval":
-            report, out = retrieval.bench(
+            bench, out = retrieval.bench(
                 home,
                 pg_bin,
                 args.layer,
@@ -128,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
                 store=args.store,
                 progress=lambda m: print(m, file=sys.stderr),
             )
-            print(retrieval.markdown(report))
+            print(retrieval.markdown(bench))
             print(f"written to {out}")
             return 0
         if args.command == "answerable":
@@ -169,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
         compile_store.CompileError,
         review.ReviewError,
         models.ModelError,
+        runner.RunError,
+        runs.ConfigError,
         OSError,
     ) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -203,6 +239,33 @@ def _compile(home: Path, pg_bin: Path, names: list[str]) -> int:
             pg.stop(lay)
     print(f"the store's call log: {calls} Claude call(s), ${cost:.2f} at API prices")
     return 0 if all(r.compiled.complete for r in results) else 1
+
+
+def _run(home: Path, pg_bin: Path, args: argparse.Namespace) -> int:
+    config = runs.load_config(args.config or ("sonnet" if args.set_name == "smoke" else "default"))
+    chosen = runner.select(
+        args.set_name, questions.load(home), limit=args.limit, only=args.questions
+    )
+    in_set = len(sets.read()[args.set_name])
+    print(
+        f"{args.set_name}: {len(chosen)} of {in_set} questions, config {config.name} "
+        f"({config.agent.model}, {config.agent.effort})",
+        file=sys.stderr,
+    )
+    path = runner.run(
+        home,
+        pg_bin,
+        args.set_name,
+        config,
+        chosen,
+        with_control=not args.no_control,
+        in_set=in_set,
+        progress=lambda m: print(m, file=sys.stderr),
+    )
+    run = runs.read_json(path)
+    print(report.markdown(run), end="")
+    print(f"\nstored in {path.parent}")
+    return 0 if not run["stopped"] and report.summarize(run)["healthy"] else 1
 
 
 def _review(home: Path, pg_bin: Path, action: str, configs: list[str], databases: list[str]) -> int:

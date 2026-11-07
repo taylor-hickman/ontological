@@ -1,0 +1,9 @@
+{
+  "about": "The default routes (ARCHITECTURE.md §6.3), pinned: the agent on Opus, the critic on Sonnet.",
+  "critic": true,
+  "routes": {
+    "answer_agent": {"model": "claude-opus-5-5", "effort": "medium"},
+    "answer_review": {"model": "claude-sonnet-5-5", "effort": "medium"},
+    "answerable_extract": {"model": "claude-haiku-5-5", "effort": "low"}
+  }
+}
