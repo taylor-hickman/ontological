@@ -111,8 +111,18 @@ def test_every_vendored_module_imports_without_the_cut_packages() -> None:
     assert loaded.isdisjoint(CUT), sorted(loaded & set(CUT))
 
 
-def test_model_interchange_is_not_vendored() -> None:
-    assert "auto_ontology.dal.model_interchange" not in vendored_modules()  # M6.4 ports it
+def test_model_interchange_is_ported_not_vendored() -> None:
+    """M6.4 ports dal/model_interchange.py with server/model_interchange/* (§11): it keeps
+    upstream's functions and their signatures (dal_surface.json), reads and writes the engine's
+    document, and says it was modified. The import above, of every vendored module, shows it
+    loads without sqlglot."""
+    from auto_ontology.dal import model_interchange
+    from ontological.interchange import schemas
+
+    assert "auto_ontology.dal.model_interchange" in vendored_modules()
+    assert model_interchange.AutoOntologyModelDocument is schemas.AutoOntologyModelDocument
+    header = Path(model_interchange.__file__).read_text().splitlines()[:4]
+    assert header[3].startswith("# Modified by Ontological"), header
 
 
 def test_every_public_dal_read_scoped_by_zone_defaults_to_the_whole_catalog() -> None:
