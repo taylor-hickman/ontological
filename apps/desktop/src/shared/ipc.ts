@@ -10,6 +10,14 @@ export interface FileFilter {
   extensions: string[]
 }
 
+/** A text file the user picked in an open dialog, read by main. */
+export interface OpenedFile {
+  path: string
+  /** The file's name, without its folder. */
+  name: string
+  text: string
+}
+
 export type ContextMenuItem =
   | { type?: 'item'; id: string; label: string; enabled?: boolean }
   | { type: 'separator' }
@@ -22,6 +30,8 @@ export type ShellCommand =
   | { type: 'focus-search' }
   | { type: 'toggle-rail' }
   | { type: 'theme'; theme: ThemeSource }
+  /** File → Import… and Export…: Settings → Import/Export, with Import's open dialog already up. */
+  | { type: 'interchange'; action: 'import' | 'export' }
 
 /**
  * Read synchronously by the preload on every document load, so the first paint already has the
@@ -48,8 +58,16 @@ export interface OntologicalApi {
   openFile(filters: FileFilter[]): Promise<string | null>
   /** The path of a file dropped on the page; '' for one that isn't on disk. */
   pathForFile(file: File): string
-  /** A native save dialog with `name` as the suggested file name. Resolves to the path, or null. */
-  saveFile(name: string): Promise<string | null>
+  /**
+   * A native save dialog with `name` as the suggested file name; main writes `data` where the user
+   * picks. Resolves to the path written, or null if cancelled.
+   */
+  saveFile(name: string, data: Uint8Array): Promise<string | null>
+  /**
+   * A native open dialog for a UTF-8 text file, which main reads. Resolves to the file, or null if
+   * cancelled; rejects for a file that is too large or isn't UTF-8.
+   */
+  openTextFile(filters: FileFilter[]): Promise<OpenedFile | null>
   /** A native context menu at the pointer. Resolves to the picked item's id, or null if dismissed. */
   showContextMenu(items: ContextMenuItem[]): Promise<string | null>
   /** A system notification, sent only while the window is not focused. Resolves to whether it was shown. */
@@ -72,6 +90,7 @@ export const IPC = {
   command: 'shell:command',
   openFile: 'dialog:open-file',
   saveFile: 'dialog:save-file',
+  openTextFile: 'dialog:open-text-file',
   showContextMenu: 'menu:context',
   notify: 'notify',
   engine: 'engine:get',

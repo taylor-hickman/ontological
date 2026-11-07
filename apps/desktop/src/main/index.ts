@@ -1,5 +1,6 @@
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { mkdirSync } from 'node:fs'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import {
   BrowserWindow,
   Menu,
@@ -27,7 +28,7 @@ import { nodeEngineIo } from './engine/io'
 import { engineEnv } from './shell-env'
 import { EngineSupervisor } from './engine/supervisor'
 import { buildMenuTemplate } from './menu'
-import { parseContextMenuItems, parseFileFilters, parseFileName, parseNotification } from './validate'
+import { parseContextMenuItems, parseFileData, parseFileFilters, parseFileName, parseNotification } from './validate'
 import { MIN_SIZE, StateFile, fitBounds, type ShellState } from './window-state'
 
 const isMac = process.platform === 'darwin'
@@ -273,6 +274,9 @@ function fromMainWindow(event: IpcMainInvokeEvent): BrowserWindow {
   return mainWindow
 }
 
+/** The largest file `openTextFile` reads: a model of every source is a few MB. */
+const MAX_OPEN_BYTES = 64 * 1024 * 1024
+
 function registerIpc(): void {
   // Each document load asks, so a reload gets the screen and theme open now. A sync message must
   // always answer, so an unknown sender gets null and the preload's defaults.
@@ -306,10 +310,31 @@ function registerIpc(): void {
     return result.canceled ? null : (result.filePaths[0] ?? null)
   })
 
-  ipcMain.handle(IPC.saveFile, async (event, name: unknown) => {
+  // The renderer names a file and hands over its bytes; only the user picks where they go.
+  ipcMain.handle(IPC.saveFile, async (event, name: unknown, data: unknown) => {
     const win = fromMainWindow(event)
-    const result = await dialog.showSaveDialog(win, { defaultPath: parseFileName(name) })
-    return result.canceled ? null : (result.filePath ?? null)
+    const defaultPath = parseFileName(name)
+    const bytes = parseFileData(data)
+    const result = await dialog.showSaveDialog(win, { defaultPath })
+    if (result.canceled || !result.filePath) return null
+    await writeFile(result.filePath, bytes)
+    return result.filePath
+  })
+
+  // Main reads only the file the user picked, so the renderer never names a path to read.
+  ipcMain.handle(IPC.openTextFile, async (event, filters: unknown) => {
+    const win = fromMainWindow(event)
+    const result = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: parseFileFilters(filters) })
+    const path = result.canceled ? undefined : result.filePaths[0]
+    if (path === undefined) return null
+    if ((await stat(path)).size > MAX_OPEN_BYTES) throw new Error(`${basename(path)} is larger than 64 MB`)
+    let text: string
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(await readFile(path))
+    } catch {
+      throw new Error(`${basename(path)} isn't UTF-8 text`)
+    }
+    return { path, name: basename(path), text }
   })
 
   ipcMain.handle(IPC.showContextMenu, (event, items: unknown) => {

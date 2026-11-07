@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import type { Source } from '@shared/api'
 import { THEME_SOURCES, type ThemeSource } from '@shared/shell'
 import { useEngineGet, useEngineRequest } from '../api/engine'
-import type { Embeddings as EmbeddingsInfo } from '../jobs/types'
+import { ImportExport, type InterchangeRequest } from '../interchange/ImportExport'
+import type { Embeddings as EmbeddingsInfo, JobSummary } from '../jobs/types'
 
 const LABELS: Record<ThemeSource, string> = { system: 'System', light: 'Light', dark: 'Dark' }
 
@@ -11,15 +13,25 @@ const NOTE = 'clear-both m-0 text-[13px] text-text-muted'
 const BUTTON =
   'min-h-9 rounded-lg border border-border bg-surface px-3 text-text-2 hover:text-text disabled:opacity-60'
 
-/** Settings so far: Appearance and Embeddings (DESIGN.md §3.5, ARCHITECTURE.md §9.1). The rest arrive with the engine. */
+/**
+ * Settings so far: Appearance, Embeddings and Import/Export (DESIGN.md §3.5, ARCHITECTURE.md §9.1).
+ * The rest arrive with the engine.
+ */
 export function Settings({
   theme,
   onThemeChange,
-  onOpenJobs
+  onOpenJobs,
+  sources,
+  jobs,
+  interchange
 }: {
   theme: ThemeSource
   onThemeChange(theme: ThemeSource): void
   onOpenJobs(): void
+  sources: Source[] | undefined
+  jobs: JobSummary[]
+  /** File → Import… or Export…, last asked. */
+  interchange: InterchangeRequest | null
 }) {
   return (
     <div className="flex max-w-[640px] flex-col gap-6">
@@ -48,6 +60,7 @@ export function Settings({
         </div>
       </fieldset>
       <Embeddings onOpenJobs={onOpenJobs} />
+      <ImportExport sources={sources} jobs={jobs} request={interchange} onOpenJobs={onOpenJobs} />
     </div>
   )
 }

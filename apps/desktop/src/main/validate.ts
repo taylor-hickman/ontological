@@ -50,6 +50,16 @@ export function parseFileName(value: unknown): string {
   return name
 }
 
+/** The most a save writes: an export of every source is a few MB, so this is room to spare. */
+export const MAX_SAVE_BYTES = 256 * 1024 * 1024
+
+/** The bytes a save dialog writes. */
+export function parseFileData(value: unknown): Uint8Array {
+  if (!(value instanceof Uint8Array)) throw new TypeError('data must be bytes')
+  if (value.byteLength > MAX_SAVE_BYTES) throw new TypeError(`data must be at most ${MAX_SAVE_BYTES} bytes`)
+  return value
+}
+
 export function parseContextMenuItems(value: unknown): ContextMenuItem[] {
   const items = list(value, 'items', MAX_MENU_ITEMS).map((entry, i): ContextMenuItem => {
     const item = record(entry, `items[${i}]`)

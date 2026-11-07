@@ -12,7 +12,7 @@ Run these from `apps/desktop/`, with Node 24 and pnpm 11. The end-to-end tests a
 | `pnpm dev` | Runs the app with hot reload |
 | `pnpm start` | Builds and runs the app as it ships |
 | `pnpm typecheck` | Type-checks main, preload, renderer and tests |
-| `pnpm test:unit` | Vitest: window state, IPC argument checks, the menu template, the engine supervisor, the CSP and the `app://` protocol |
+| `pnpm test:unit` | Vitest: window state, IPC argument checks, the menu template, the engine supervisor, the CSP, the `app://` protocol, and the screens' text helpers |
 | `pnpm test:e2e` | Builds, then drives the app with Playwright |
 | `pnpm test` | All of the above |
 

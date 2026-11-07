@@ -54,7 +54,7 @@ test('isolates the renderer: no Node, only the typed bridge', async () => {
     expect(globals.require).toBe('undefined')
     expect(globals.process).toBe('undefined')
     expect(globals.bridge).toEqual(
-      ['closeSetup', 'engine', 'initial', 'notify', 'onCommand', 'onEngine', 'openFile', 'pathForFile', 'platform', 'reconnectEngine', 'saveFile', 'setScreen', 'setTheme', 'showContextMenu'].sort()
+      ['closeSetup', 'engine', 'initial', 'notify', 'onCommand', 'onEngine', 'openFile', 'openTextFile', 'pathForFile', 'platform', 'reconnectEngine', 'saveFile', 'setScreen', 'setTheme', 'showContextMenu'].sort()
     )
   } finally {
     await app.close()
@@ -68,7 +68,9 @@ test('main rejects malformed IPC arguments', async () => {
       const api = window.ontological as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
       const attempt = (p: Promise<unknown>) => p.then(() => 'resolved', (e: Error) => e.message)
       return {
-        save: await attempt(api.saveFile!('../../etc/passwd')),
+        save: await attempt(api.saveFile!('../../etc/passwd', new Uint8Array(1))),
+        saveText: await attempt(api.saveFile!('model.yaml', 'not bytes')),
+        openText: await attempt(api.openTextFile!('yaml')),
         open: await attempt(api.openFile!([{ name: 'x', extensions: ['../x'] }])),
         menu: await attempt(api.showContextMenu!('copy')),
         notify: await attempt(api.notify!('', 'body')),
@@ -76,6 +78,8 @@ test('main rejects malformed IPC arguments', async () => {
       }
     })
     expect(errors.save).toContain('name must be a file name')
+    expect(errors.saveText).toContain('data must be bytes')
+    expect(errors.openText).toContain('filters must be an array')
     expect(errors.open).toContain('must be letters and digits')
     expect(errors.menu).toContain('items must be an array')
     expect(errors.notify).toContain('title must not be empty')
