@@ -17,12 +17,12 @@ from fakes import NoAnswer, ScriptedGateway
 from test_compile import claude, table_of
 
 from auto_ontology.vdb.postgres import PostgresVDB, on_change
-from ontological.answer.pack import build_pack
+from ontological.answer.pack import QUESTION_K, build_pack
 from ontological.catalog.ingest import ingest
 from ontological.compile.split import Compiled, compile_database
 from ontological.embed import model
 from ontological.embed.embedder import LocalEmbedder
-from ontological.embed.search import semantic_vdb
+from ontological.embed.search import dense_search, semantic_vdb
 from ontological.embed.semantic import Synced, sync_database
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.store import pg
@@ -176,7 +176,7 @@ def test_the_pack_for_a_question_within_a_scope(
     pack = build_pack(vdb, "which country is each invoice billed to", database="chinook")
 
     assert pack.database == "chinook" and pack.coverage == []
-    assert len(pack.attributes) == 10
+    assert len(pack.attributes) == QUESTION_K
     assert place(pack.attributes[0]) == "Invoice.BillingCountry"
     assert [a["score"] for a in pack.attributes] == sorted(a["score"] for a in pack.attributes)
     assert {a["query_entities"][0] for a in pack.attributes} == {
@@ -191,6 +191,37 @@ def test_the_pack_for_a_question_within_a_scope(
     assert paths["Invoice.BillingCity"] == []  # the same table
     assert paths["Customer.Country"] == ["Invoice.CustomerId -> Customer.CustomerId"]
     assert paths["InvoiceLine.InvoiceLineId"] == ["Invoice.InvoiceId -> InvoiceLine.InvoiceId"]
+
+
+def test_the_pack_runs_on_the_search_it_is_given(
+    chinook_compiled: Compiled, vdb: PostgresVDB
+) -> None:
+    """The retrieval benchmark's seam (§7.4): every search the pack makes goes through `search`,
+    and `question_k` sets how many attributes the raw question takes."""
+    calls: list[tuple[str, int, dict[str, Any] | None]] = []
+
+    def search(
+        vdb: PostgresVDB, query: str, *, k: int = 10, where: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        calls.append((query, k, where))
+        return dense_search(vdb, query, k=k, where=where)
+
+    question = "which country is each invoice billed to"
+    pack = build_pack(
+        vdb,
+        question,
+        evidence="billed means invoiced",
+        database="chinook",
+        question_k=4,
+        search=search,
+    )
+    assert len(pack.attributes) <= 4 + 3
+    assert [(q, k, (w or {}).get("label")) for q, k, w in calls] == [
+        (question, 4, "ColumnAttribute"),
+        ("billed means invoiced", 3, "ColumnAttribute"),
+        (question, 1, "Term"),
+    ]
+    assert all((w or {}).get("database_name") == "chinook" for _, _, w in calls)
 
 
 def test_the_plan_pack_searches_each_entity_and_joins_from_the_given_anchor(

@@ -171,6 +171,7 @@ def read_catalog_index(database_name: str) -> CatalogIndex:
         )
         if r["column_id"] is not None:
             table.columns.setdefault(str(r["column"]).lower(), r["column_id"])
+            table.spellings.setdefault(str(r["column"]).lower(), str(r["column"]))
     return CatalogIndex(schemas)
 
 

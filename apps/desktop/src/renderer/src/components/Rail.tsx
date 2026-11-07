@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { CloseIcon } from './icons'
 
 interface RailProps {
@@ -5,8 +6,8 @@ interface RailProps {
   /** Below 1100 px the rail is a sheet over the main column (DESIGN.md §3.3). */
   sheet: boolean
   onClose(): void
-  /** The screen's rail content; "Nothing selected." without it. */
-  children?: React.ReactNode
+  /** The rail's content; without it, the rail says nothing is selected. */
+  children?: ReactNode
 }
 
 export function Rail({ label, sheet, onClose, children }: RailProps) {

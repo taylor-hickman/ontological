@@ -1,6 +1,8 @@
 import type { ScreenId, ThemeSource } from '@shared/shell'
+import type { ComponentProps } from 'react'
 import { JobsMain, type JobsScreenState } from '../jobs/JobsScreen'
 import type { ScreenFrame } from '../screens'
+import { Catalog } from '../screens/Catalog'
 import { EngineBanner } from './EngineBanner'
 import { Settings } from './Settings'
 
@@ -10,10 +12,11 @@ interface ScreenBodyProps {
   theme: ThemeSource
   jobs: JobsScreenState
   onThemeChange(theme: ThemeSource): void
+  catalog: ComponentProps<typeof Catalog>
 }
 
 /** The main column. Until a screen is built, it is an empty frame that says what will go here. */
-export function ScreenBody({ screen, frame, theme, jobs, onThemeChange }: ScreenBodyProps) {
+export function ScreenBody({ screen, frame, theme, jobs, onThemeChange, catalog }: ScreenBodyProps) {
   return (
     <section
       aria-label={frame.main}
@@ -23,6 +26,8 @@ export function ScreenBody({ screen, frame, theme, jobs, onThemeChange }: Screen
       <EngineBanner />
       {screen === 'settings' ? (
         <Settings theme={theme} onThemeChange={onThemeChange} />
+      ) : screen === 'catalog' ? (
+        <Catalog {...catalog} />
       ) : screen === 'jobs' ? (
         <JobsMain state={jobs} />
       ) : (

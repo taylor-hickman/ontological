@@ -3,16 +3,17 @@ paused, stopped or crashed one resumes where it was.
 
 A job is `running`, `paused` until a time, `held` by the person until they resume it, `stopped` by
 an error a person has to fix (a logged-out `claude`, say), or `done`. A database has at most one
-unfinished compile, and the next run resumes it. An `ingest` job is a staleness refresh, recorded
-once it ends (`record_ingest`), `done` or `stopped` with its error, with the tables it found in
-`result`; the Jobs screen offers to compile them until the person dismisses the prompt. A crashed
-job is left `running`, which is why the engine counts the jobs it is running in memory
-(`ActiveJobs`), never from this table.
+unfinished compile and one unfinished re-embed, and the next run resumes it. An `ingest` job is a
+staleness refresh, recorded once it ends (`record_ingest`), `done` or `stopped` with its error,
+with the tables it found in `result`; the Jobs screen offers to compile them until the person
+dismisses the prompt. A crashed job is left `running`, which is why the engine counts the jobs it
+is running in memory (`ActiveJobs`), never from this table.
 
-Each step is one table, `pending` until it is `done` or `skipped`. Writes go through the DAL's
-session, so `finish_step` inside a `write_transaction` commits with whatever else the block
-writes: a compiled table's Terms and its checkpoint commit together or not at all. Every call
-blocks; async callers run them in a thread.
+A compile's steps are its tables, each `pending` until it is `done` or `skipped`. A `reembed`
+job (ontological/embed/reembed.py) has no steps. Writes go through the DAL's session, so
+`finish_step` inside a `write_transaction` commits with whatever else the block writes: a
+compiled table's Terms and its checkpoint commit together or not at all. Every call blocks; async
+callers run them in a thread.
 """
 
 # The vendored DAL is untyped.
@@ -30,7 +31,7 @@ from typing import Any, Literal
 from auto_ontology.dal.session import store, write_transaction
 from ontological.compile.packing import PlannedStep
 
-Kind = Literal["compile", "ingest"]
+Kind = Literal["compile", "ingest", "reembed"]
 JobState = Literal["running", "paused", "held", "stopped", "done"]
 StepState = Literal["pending", "done", "skipped"]
 
@@ -75,8 +76,8 @@ def job(job_id: int) -> Job:
     return _job(row)
 
 
-def open_job(kind: Literal["compile"], database_name: str) -> Job | None:
-    """The database's unfinished compile: the one to resume."""
+def open_job(kind: Literal["compile", "reembed"], database_name: str) -> Job | None:
+    """The database's unfinished compile or re-embed: the one to resume."""
     found = store().query_read(
         f"{_JOB} WHERE kind = :kind AND database_name = :db AND state <> 'done'",
         {"kind": kind, "db": database_name},

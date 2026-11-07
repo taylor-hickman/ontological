@@ -18,8 +18,9 @@ upstream's `_select_candidate_database` picks it, and entities it doesn't cover 
 The subject searches that database only, where upstream searches every database and drops the
 other databases' tables later.
 Hits keep upstream's `{text, id, label, score, ...}` shape, `score` being cosine distance (lower
-is nearer). M4.3 puts hybrid search (`ontological.embed.hybrid`) under `search_by_label` in place
-of the dense one.
+is nearer). The search is dense unless the caller passes another (`Search`): the retrieval
+benchmark (§7.4) runs the pack on each of hybrid search's rankings, and M4.3 puts hybrid search
+(`ontological.embed.hybrid`) under it for good.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from auto_ontology.semantic.constants import LABEL_COLUMN_ATTRIBUTE, LABEL_TERM
 from auto_ontology.vdb.postgres import PostgresVDB
@@ -46,15 +47,29 @@ _HIT_FIELDS = ("name", "schema_name", "database_name", "data_type", "source")
 Hit = dict[str, Any]
 
 
+class Search(Protocol):
+    """`dense_search`'s shape: the `k` best rows for `query` that `where` keeps, best first, as
+    upstream's `{text, metadata, _distance}`."""
+
+    def __call__(
+        self, vdb: PostgresVDB, query: str, *, k: int = 10, where: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]: ...
+
+
 def search_by_label(
-    vdb: PostgresVDB, text: str, label: str, k: int, database_name: str | None = None
+    vdb: PostgresVDB,
+    text: str,
+    label: str,
+    k: int,
+    database_name: str | None = None,
+    search: Search = dense_search,
 ) -> list[Hit]:
-    """The `k` nearest rows of one label, nearest first, as upstream's candidate dicts."""
+    """The `k` best rows of one label, best first, as upstream's candidate dicts."""
     where: dict[str, Any] = {"label": label}
     if database_name:
         where["database_name"] = database_name
     hits: list[Hit] = []
-    for raw in dense_search(vdb, text, k=k, where=where):
+    for raw in search(vdb, text, k=k, where=where):
         metadata: dict[str, Any] = raw.get("metadata") or {}
         if metadata.get("id") is None:
             continue
@@ -159,6 +174,7 @@ def retrieve(
     entity_k: int = ENTITY_K,
     evidence_k: int = EVIDENCE_K,
     subject_k: int = SUBJECT_K,
+    search: Search = dense_search,
 ) -> Retrieved:
     """Search the attributes per entity and for the evidence, and the Terms for the subject,
     within `database` when it is given. Without one, keep the database that covers the most
@@ -173,11 +189,11 @@ def retrieve(
     attributes: list[Hit] = []
     voters: list[Hit] = []
     for entity in entities:
-        found = search_by_label(vdb, entity, LABEL_COLUMN_ATTRIBUTE, entity_k, database)
+        found = search_by_label(vdb, entity, LABEL_COLUMN_ATTRIBUTE, entity_k, database, search)
         attributes += _tagged(found, query_entity=entity)
         voters += _tagged(found[:ENTITY_K], query_entity=entity)
     if evidence:
-        found = search_by_label(vdb, evidence, LABEL_COLUMN_ATTRIBUTE, evidence_k, database)
+        found = search_by_label(vdb, evidence, LABEL_COLUMN_ATTRIBUTE, evidence_k, database, search)
         attributes += _tagged(found, query_evidence=evidence)
         voters += found
 
@@ -191,7 +207,7 @@ def retrieve(
         attributes = [h for h in attributes if _database_name(h) == database]
         covered = {str(h.get("query_entity") or "").strip() for h in attributes}
         for entity in (e for e in entities if e not in covered):
-            found = search_by_label(vdb, entity, LABEL_COLUMN_ATTRIBUTE, entity_k, database)
+            found = search_by_label(vdb, entity, LABEL_COLUMN_ATTRIBUTE, entity_k, database, search)
             attributes += _tagged(found, query_entity=entity)
         logger.info(
             "chose database %r: %d of %d entities covered",
@@ -200,5 +216,7 @@ def retrieve(
             len(entities),
         )
 
-    terms = search_by_label(vdb, subject, LABEL_TERM, subject_k, database) if subject else []
+    terms = (
+        search_by_label(vdb, subject, LABEL_TERM, subject_k, database, search) if subject else []
+    )
     return Retrieved(database, dedupe_best_score(attributes), terms, ranking)

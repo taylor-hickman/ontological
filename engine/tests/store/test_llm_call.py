@@ -71,7 +71,8 @@ def test_only_a_valid_structured_answer_from_the_routes_model_is_served(apps: Ap
         log.record(replace(CALL, cache_key="3" * 64, fallback=True))
         log.record(replace(CALL, cache_key="4" * 64, outcome="error", output=None))
         log.record(replace(CALL, cache_key="5" * 64, cached=True, output={"pk": ["hit"]}))
-        for key in "12345":
+        log.record(replace(CALL, cache_key="6" * 64, kind="agent", task="answer_agent"))
+        for key in "123456":
             assert log.lookup(key * 64) is None, key
 
         log.record(replace(CALL, output={"pk": ["old"]}))

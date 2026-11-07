@@ -140,7 +140,7 @@ The agent is a LangGraph `StateGraph` used only as control flow. Each node is pl
 - Worst case: 40+.
 - Plus 3–8 query embeddings. Rerank is not used here.
 
-**`check_answerable`.** One extraction call, then vector search, then a deterministic score: the fraction of entities that have a column-attribute hit with cosine distance ≤ 0.75.
+**`check_answerable`.** One extraction call, then vector search, then a deterministic score: the fraction of entities that have a column-attribute hit within the embedding model's coverage distance (0.636 for the default, §7.4). Upstream's 0.75 was tuned to Nemotron.
 
 **Learning loop.** Nothing is automatic. Editing a custom analysis, a SQL attribute or a description re-embeds it, so it shows up in future retrieval.
 
@@ -386,7 +386,7 @@ Port `connectors/base.py::SQLDatabase` as-is, and finish the DuckDB reference co
 ### 5.7 History
 
 Upstream keeps no ontology history. Ontological adds:
-- `ops.change_log(ts, entity, entity_id, field, old, new, actor)`, where actor is `user | compile | import`. It is written by the same functions that apply edits, and it drives undo and "what did compile change".
+- `ops.change_log(id, edit, ts, entity, entity_id, field, old, new, actor, undoes)`, where actor is `user | compile | import`. It is written by the same functions that apply edits (`curate/edits.py`), in the edit's transaction: one row per field changed, sharing the edit's id, with `old` and `new` as JSON. It drives undo and "what did compile change". An undo is an edit whose rows name the edit they revert in `undoes`. An edit is undone once, and not while a later edit holds one of its fields.
 - A native-YAML snapshot written to `backups/` at the end of every compile run. This reuses the export code (§9.3).
 - `pg_dump` files before migrations, after compiles and at quit (§5.1). Ontological keeps the newest 10 by name (UTC timestamps, §5.3) and removes older ones, except the dump just written: if the clock was set back, ten older dumps can sort after it.
 
@@ -431,8 +431,9 @@ class ClaudeGateway:
                          *, prompt_version: str = "") -> M | None: ...
     async def text(self, task: str, system: str, user: str,
                    *, prompt_version: str = "") -> str | None: ...
-    def agent(self, task: str, system: str, tools: list[SdkTool],
-              output: type[BaseModel], max_turns: int) -> AgentRun: ...  # async-iterable events + tool log
+    def agent(self, task: str, system: str, user: str, tools: list[SdkMcpTool],
+              output: type[M], max_turns: int = 16,
+              *, prompt_version: str = "") -> AgentRun[M]: ...  # async-iterable events + tool log
     async def check(self) -> GatewayStatus: ...   # claude --version, then a ping
     status: GatewayStatus   # installed? logged in? limited until? utilization?
 ```
@@ -559,7 +560,7 @@ The runtime is ONNX Runtime (the macOS arm64 wheel is 20.9 MB) on the CPU provid
 - The int8 file quantizes activations per batch, so a passage's vector shifts slightly with its batch-mates (cosine against the same text embedded alone: ≥ 0.996 on an M5 Max, about 0.98 on GitHub's Linux x86 and macOS runners). The engine embeds each query alone, so query vectors are deterministic. `content_hash`, not vector equality, decides whether a text needs re-embedding.
 
 - Upstream embeds asymmetrically (`input_type=query|passage`). Use the model's query/passage prefixes where it defines them.
-- Every vector's metadata stores `model` and `content_hash`. Changing the embedding model triggers a re-embed job; vectors from different models are never compared.
+- Every vector's metadata stores `model` and `content_hash`. Changing the embedding model triggers a re-embed job (`embed/reembed.py`, an `ops.job` of kind `reembed` per database); vectors from different models are never compared. An edit re-embeds only the texts whose `content_hash` it changed (§5.7).
 - **Fix upstream's ordering bug**: build data-layer texts *after* profiling so that `sample_values` are included. Ingest profiles each table through its executor, writes the result to the store, and then builds the texts from the store (`catalog/data_layer.py`, M2.5).
 
 ### 7.2 Choosing the model
@@ -580,7 +581,7 @@ Candidates (ONNX files and licenses checked on Hugging Face, 2026-11-04):
 | `nomic-embed-text-v1.5` int8 | 768 | 137.3 MB | Apache-2.0 |
 | `bge-base-en-v1.5` fp32 | 768 | 435.8 MB | MIT |
 
-The default is `snowflake-arctic-embed-m-v1.5` int8 until the retrieval benchmark (§7.4) runs. After that, it is the model with the best recall. A smaller model wins only on a tie; app size is not the deciding factor.
+The default is the model with the best recall in the retrieval benchmark (§7.4). A smaller model wins only on a tie; app size is not the deciding factor. The benchmark kept `snowflake-arctic-embed-m-v1.5` int8 (2026-11-06, docs/BUILD_PLAN.md M3.9). Under hybrid search it had the best column recall at every k, and its table recall was within 0.015 of the best at k = 10. `bge-base` is four times its size and no better. `bge-small` trails it by 0.02–0.04 on columns, which is not a tie. All four are pinned in `embed/model.py`, so the benchmark can be rerun on each one.
 
 Dropping embeddings entirely was considered and rejected. It would save 66–440 MB and lose the paraphrase cases above. Semantic-FK candidate search would survive on name matching plus the value-overlap probe, but few-shot retrieval and `check_answerable` would get worse in ways that are hard to measure.
 
@@ -599,13 +600,15 @@ score = rrf( dense_rank(embedding <=> query_vec),                 # pgvector
 - **Identifier-aware tokens.** Before indexing and querying, identifiers are split on snake_case and camelCase, and glossary acronyms (Settings → Glossary) are expanded. `cust_acct_no` matches "customer account number".
 - **Why not BM25 inside Postgres.** `ts_rank_cd` is not BM25 and has the start-of-token problem. ParadeDB's `pg_search` is BM25 but AGPL-3.0. Timescale's `pg_textsearch` is BM25 under the PostgreSQL license, but it is one more native extension to build, sign and upgrade per platform. Revisit it only if the in-engine index becomes a bottleneck.
 - Fusion runs in Python over the three ranked lists. It keeps upstream's filters (collection, label, database_name) and its `{text, metadata, distance}` result contract, so ported upstream code works unchanged. Each ranking contributes its top 50 to RRF (k = 60). Every hit's `_distance` is its cosine distance to the query, whichever ranking found it. The trigram ranking keeps names over pg_trgm's similarity threshold (0.3), through a GIN index on the name. The vendored `PostgresVDB` reports every write and delete to a listener (`on_change`), which is how a change reaches the BM25 index whoever made it.
-- Certified items (metadata `certified: true`) get a small RRF bonus, 0.002, about what moving from 10th to 1st in one ranking adds, and are labeled "certified" in the grounding pack (§8.3). The retrieval benchmark (§7.4) tunes it.
+- Certified items (metadata `certified: true`) get a small RRF bonus, 0.002, about what moving from 10th to 1st in one ranking adds, and are labeled "certified" in the grounding pack (§8.3). The eval has no certified items, so the retrieval benchmark (§7.4) can't tune it.
 
-**Recalibrate thresholds.** Upstream's coverage threshold (cosine distance ≤ 0.75) and its k values are tuned to Nemotron and won't transfer. Re-derive them per model on the eval set (§12).
+**Recalibrate thresholds.** Upstream's coverage threshold (cosine distance ≤ 0.75) and its k values are tuned to Nemotron and won't transfer, so they are re-derived per model on the dev set by the retrieval benchmark (§7.4). Each model's coverage distance is on its spec in `embed/model.py`. The default's is 0.636: at upstream's 0.75 it would cover 79% of questions asked against the wrong database. The raw question takes 30 attributes in the pack (`QUESTION_K`) instead of upstream's 10, which is where recall levels off. `plan`'s per-entity k values (2 per entity, 3 for evidence, 1 Term) and the certified bonus stay at upstream's numbers. The benchmark has no extracted entities and the eval has no certified items, so M4.7 and real use set those.
 
 ### 7.4 Retrieval benchmark
 
-The benchmark costs no quota after one compile. For each eval question, sqlglot extracts the gold tables and columns from the gold SQL. The benchmark then measures recall@k of the grounding pack for each configuration: dense only, BM25 only, trigram only and hybrid, for each candidate model.
+The benchmark costs no quota after one compile (`ontological_eval compile`; the five eval databases took 256 calls, $1.49 at API prices and 14 minutes). For each eval question, the engine's SQL parser, through sqlglot, resolves the gold SQL to the tables and columns it reads. The benchmark then measures recall@k of the grounding pack for each configuration: dense only, BM25 only, trigram only and hybrid, for each candidate model. Column recall counts the gold columns that have an attribute. It can also run on the data layer, which needs no compile.
+
+The coverage distance is calibrated from the same run. A question's nearest attribute in its own database is a positive, and its nearest in each other eval database a negative, since the question can't be answered there. The distance that best separates them (Youden's J) is the threshold. The calibration uses the raw question; `check_answerable` scores extracted entities, so M4.4 checks the value on those. `eval/README.md` says how to run the benchmark, and BUILD_PLAN.md M3.9 has the numbers.
 
 ### 7.5 Rerank
 
@@ -640,15 +643,15 @@ question
 | Tool | Precondition | What it does |
 |---|---|---|
 | `plan(intent, calc_subtype?, entities[], evidence[], anchor_attribute_id?, database?)` | none; must be the first call | Records what upstream's `question_intent` and `question_extraction` produced, and the target database: the scope if one was given, otherwise the model's choice from the grounding pack's coverage ranking. Later tools work against that database only. The engine runs upstream's per-entity retrieval for those entities, computes BFS join paths from the anchor, and returns the candidates plus the subtype's SQL template. Returns a `plan_id`. |
-| `search_ontology(query, kinds?)` | none | Hybrid search for more candidates |
-| `get_term(id)`, `describe_table(id)` | none | Detail |
-| `join_path(from_table, to_table)` | none | BFS over semantic FKs |
-| `column_values(column, like?, limit)` | none | DISTINCT/MIN/MAX probe, read-only and capped |
+| `search_ontology(query, kinds?)` | a `plan_id` exists | Hybrid search for more candidates |
+| `get_term(id)`, `describe_table(id)` | a `plan_id` exists | Detail |
+| `join_path(from_table, to_table)` | a `plan_id` exists | BFS over semantic FKs |
+| `column_values(column, like?, limit)` | a `plan_id` exists | DISTINCT/MIN/MAX probe, read-only and capped |
 | `validate_sql(sql)` | a `plan_id` exists | The §8.2 gate. Returns ok + `validation_id`, or a list of issues. At most 7 calls per session, as upstream; after 5, the soft checks (literal, case-dirty join) become warnings, as upstream. |
 | `run_sql(validation_id)` | the id passed `validate_sql` | Executes in the source executor and returns columns + ≤ 200 rows. **On an empty result it runs upstream's empty-result handling** (drop LIKE predicates, value-repair probes) and returns the hints with the zero rows. |
 | `review_answer(validation_id, answer_draft)` | the id was executed; critic enabled | Runs upstream's intent-validation prompt as an `answer_review` `structured()` call (Sonnet, §6.3) on (question, plan, SQL, columns, first rows). Returns pass, or issues for the model to fix. At most 2 rounds. Returns a `review_id`. |
 
-**Post-run check.** After the session, the engine reads the tool log and confirms the sequence plan → validate → run → review for the final SQL. If any step is missing or the ids don't match, the answer is shown as "unverified" with the reason; it is never silently accepted. The required sequence depends on the session: `information` answers need only `plan`; with the critic off, review is not required; an answer with `answerable=false` needs a `plan` and no SQL.
+**Post-run check.** After the session, the engine reads the tool log and confirms the sequence plan → validate → run → review for the final SQL. If any step is missing or the ids don't match, the answer is shown as "unverified" with the reason; it is never silently accepted. The required sequence depends on the session: `information` answers need only `plan` and carry no SQL; with the critic off, review is not required; an answer with `answerable=false` needs a `plan` and no SQL. Once `run_sql` has returned rows in the session, an `information` or `answerable=false` answer is unverified: it would rest on rows nobody checked.
 
 **Source scope.** Chat has a source selector that defaults to "auto", which lets pre-work pick the database by coverage. MCP's `ask_question` and the eval runner can pass a scope; the eval passes each question's database. A question is answered from one source; cross-source SQL is out of scope.
 
@@ -672,7 +675,7 @@ question
 
 1. Parse with sqlglot in the source dialect. Exactly one `SELECT`/`WITH` statement is allowed; DML, DDL, `ATTACH`, `COPY`, `PRAGMA`, `INSTALL` and `LOAD` are rejected.
 2. Resolve every table and column against the catalog (`parse_query_single`).
-3. Degenerate SQL (`SELECT NULL`, `WHERE 1=0`, `LIMIT 0`), vacuous GROUP BY / PARTITION BY, and missing aggregation on the many side.
+3. Degenerate SQL (`SELECT NULL`, `WHERE 1=0`, `LIMIT 0`), vacuous GROUP BY / PARTITION BY, and missing aggregation on the many side. The vacuous GROUP BY check is off, as upstream ships it (`DETECT_VACUOUS_GROUP_BY`): it misfires on incomplete key metadata.
 4. Join-path check against semantic FKs, with a value-overlap fallback probe. Includes the case-dirty join check.
 5. Literal check: near-miss filter values and percent-vs-fraction scale errors.
 6. JSON path check. For duckdb-dialect sources it is **rewritten for DuckDB** (`json_keys` / `->>`) in place of the Postgres-only `jsonb_object_keys` version; native Postgres sources keep upstream's version.
@@ -765,11 +768,12 @@ ontological/
       profile/                  sampling, date_format, json paths (run inside the executor)     (ported)
       compile/                  stages with their prompts (versioned), merged/split call shapes, batching/packing, checkpoints
       pii/                      rules (ported) + batched Claude fallback
-      embed/                    ONNX embedder (LangChain Embeddings interface), BM25 index + tokenizer, hybrid search, retrieval benchmark
+      embed/                    ONNX embedder (LangChain Embeddings interface), BM25 index + tokenizer, hybrid search, the candidate models (the retrieval benchmark is in eval/)
       answer/                   grounding pack, agent tools + preconditions, validation gate, probes (ported)
       llm/                      ClaudeGateway, route table, cache, limits
       interchange/              native YAML + Ossie
       mcp/                      stdio shim
+      curate/                   edits with ops.change_log, history and undo
       jobs/                     runner, staleness check, pause/resume
     tests/
       upstream_fixtures/        test-only vendored upstream connectors, services and golden seed (§5.4)

@@ -54,7 +54,7 @@ test('isolates the renderer: no Node, only the typed bridge', async () => {
     expect(globals.require).toBe('undefined')
     expect(globals.process).toBe('undefined')
     expect(globals.bridge).toEqual(
-      ['engine', 'initial', 'notify', 'onCommand', 'onEngine', 'openFile', 'platform', 'reconnectEngine', 'saveFile', 'setScreen', 'setTheme', 'showContextMenu'].sort()
+      ['closeSetup', 'engine', 'initial', 'notify', 'onCommand', 'onEngine', 'openFile', 'pathForFile', 'platform', 'reconnectEngine', 'saveFile', 'setScreen', 'setTheme', 'showContextMenu'].sort()
     )
   } finally {
     await app.close()

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
@@ -24,21 +24,46 @@ export const STUB = join(ENGINE_DIR, 'tests/engine/serve_stub.py')
  */
 export const QUICK_ENGINE = ['--idle-timeout', '2', '--lease-renew', '0.5']
 
-export function freshUserData(): string {
-  return mkdtempSync(join(tmpdir(), 'ontological-e2e-'))
+/**
+ * A new userData folder. Unless `onboarding` is set, it is one where the user already left
+ * onboarding, so the app opens on its shell even with no sources.
+ */
+export function freshUserData({ onboarding = false }: { onboarding?: boolean } = {}): string {
+  const dir = mkdtempSync(join(tmpdir(), 'ontological-e2e-'))
+  if (!onboarding) writeFileSync(join(dir, 'shell-state.json'), JSON.stringify({ setupClosed: true }))
+  return dir
+}
+
+/**
+ * A stand-in for the login shell main reads its environment from (src/main/shell-env.ts), so the
+ * tests never pick up the developer's own rc files. `exports` are what its "rc" exports.
+ */
+export function fakeShell(exports: Record<string, string> = {}): string {
+  const path = join(mkdtempSync(join(tmpdir(), 'ontological-shell-')), 'shell')
+  const lines = Object.entries(exports).map(([k, v]) => `export ${k}="${v}"`)
+  writeFileSync(path, ['#!/bin/sh', ...lines, 'exec /bin/sh -c "$2"', ''].join('\n'))
+  chmodSync(path, 0o755)
+  return path
 }
 
 /** Launches the built app against its own userData folder, so tests don't share state or engines. */
-export async function launch(userData: string, engineArgs: string[] = QUICK_ENGINE): Promise<Launched> {
+export async function launch(
+  userData: string,
+  engineArgs: string[] = QUICK_ENGINE,
+  env: Record<string, string | undefined> = {}
+): Promise<Launched> {
   if (!existsSync(PYTHON)) throw new Error(`No Python at ${PYTHON}: run \`uv sync\` in engine/`)
-  const app = await electron.launch({
-    args: ['.'],
-    env: {
+  // An `undefined` in `env` removes that variable.
+  const merged = Object.fromEntries(
+    Object.entries({
       ...process.env,
       ONTOLOGICAL_USER_DATA: userData,
-      ONTOLOGICAL_ENGINE_CMD: JSON.stringify([PYTHON, STUB, ...engineArgs])
-    }
-  })
+      ONTOLOGICAL_ENGINE_CMD: JSON.stringify([PYTHON, STUB, ...engineArgs]),
+      SHELL: fakeShell(),
+      ...env
+    }).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  )
+  const app = await electron.launch({ args: ['.'], env: merged })
   const page = await app.firstWindow()
   await page.waitForSelector('[data-testid="status-bar"]')
   return { app, page }

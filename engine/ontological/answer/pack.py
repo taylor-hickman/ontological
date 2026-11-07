@@ -39,14 +39,19 @@ from ontological.answer.retrieval import (
     SUBJECT_K,
     Coverage,
     Hit,
+    Search,
     retrieve,
 )
+from ontological.embed.search import dense_search
 
 logger = logging.getLogger(__name__)
 
-# Before the agent extracts entities, the raw question is the one entity, with upstream's
-# per-label default (`PER_LABEL_LIMIT`) in place of its per-entity 2. M4.7 tunes it (§7.3).
-QUESTION_K = 10
+# Before the agent extracts entities, the raw question is the one entity. Upstream took its
+# per-label default, 10. The retrieval benchmark (M3.9, BUILD_PLAN.md) put it at 30, where recall
+# levels off: on dev, hybrid search with the default model finds 0.94 of the gold tables and 0.81
+# of the gold columns at 30, against 0.80 and 0.56 at 10, for a pack of about 9 tables rather
+# than 6. M4.7 checks it against answer accuracy.
+QUESTION_K = 30
 
 # The context fields an attribute and its join-path entry carry (upstream's
 # `primary_attribute` and `attribute_join_paths`).
@@ -82,10 +87,12 @@ def build_pack(
     subject: str | None = None,
     database: str | None = None,
     anchor_attribute_id: str | None = None,
+    question_k: int = QUESTION_K,
+    search: Search = dense_search,
 ) -> GroundingPack:
     """The grounding pack for `question`, within `database` when it is given.
 
-    Without `entities`, the raw question searches the attributes (`QUESTION_K` of them) and the
+    Without `entities`, the raw question searches the attributes (`question_k` of them) and the
     Terms, as the agent's pre-work. With them, each entity searches the attributes and `subject`
     the Terms, with upstream's k values, as `plan` does. Join paths start at
     `anchor_attribute_id` when it is among the attributes, otherwise at the nearest one."""
@@ -96,7 +103,8 @@ def build_pack(
             evidence=evidence,
             subject=question if subject is None else subject,
             database=database,
-            entity_k=QUESTION_K,
+            entity_k=question_k,
+            search=search,
         )
     else:
         found = retrieve(
@@ -107,6 +115,7 @@ def build_pack(
             database=database,
             entity_k=ENTITY_K,
             subject_k=SUBJECT_K,
+            search=search,
         )
 
     attr_ids = [str(hit["id"]) for hit in found.attributes]

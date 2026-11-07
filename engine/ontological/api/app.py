@@ -5,6 +5,9 @@ processes can't reach the API; there are no open routes, docs included. Authoris
 as activity for idle shutdown, for as long as they are in flight (an SSE stream keeps the engine
 up). Unauthorised ones don't.
 
+Onboarding and the catalog screen read the routes in `setup.py`: Claude Code's install and login,
+and the sources and their catalogs.
+
 Jobs (DESIGN.md §5.4): `GET /jobs` lists the latest, `GET /jobs/{id}` adds a compile's tables
 and their stages, `GET /jobs/{id}/calls` is its call log. `POST /jobs/compile` starts or resumes
 a database's compile, which uses Claude quota; `POST /jobs/{id}/hold` pauses one until
@@ -31,11 +34,14 @@ from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ontological.api.setup import add_setup_routes
+from ontological.catalog.sources import Sources
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine.lifetime import Closing, Lease, Lifetime
 from ontological.jobs.active import ActiveJobs, JobBusy
 from ontological.jobs.service import JobsService, NoSource, NoSuchJob, NotNow
 from ontological.jobs.view import CallRow, JobDetail, JobSummary
+from ontological.llm.install import Claude
 
 log = logging.getLogger(__name__)
 
@@ -120,6 +126,8 @@ def create_app(
     version: str,
     embedder: LocalEmbedder | None = None,
     jobs: ActiveJobs | None = None,
+    claude: Claude | None = None,
+    sources: Sources | None = None,
     jobs_service: JobsService | None = None,
 ) -> FastAPI:
     app = FastAPI(
@@ -167,6 +175,8 @@ def create_app(
             raise HTTPException(404, "no such lease")
         log.info("lease %s released", lease_id[:6])
         return Response(status_code=204)
+
+    add_setup_routes(app, claude=claude, sources=sources)
 
     @app.get("/jobs")
     async def list_jobs() -> JobList:  # pyright: ignore[reportUnusedFunction]

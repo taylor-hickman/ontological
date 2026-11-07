@@ -23,7 +23,7 @@ from auto_ontology.vdb import get_vdb
 from auto_ontology.vdb.postgres import PostgresVDB, on_change
 from auto_ontology.vdb.records import embed_rows_into_vdb
 from ontological.embed.embedder import LocalEmbedder, Tokens, Vectors
-from ontological.embed.hybrid import CERTIFIED_BONUS, HybridSearch, rrf
+from ontological.embed.hybrid import CERTIFIED_BONUS, RANKINGS, HybridSearch, rrf
 from ontological.embed.search import dense_search, semantic_vdb
 from ontological.store import pg
 
@@ -192,6 +192,23 @@ def test_filters_hold_for_every_ranking(hashed: PostgresVDB, search: HybridSearc
     assert search.search("invoice", where={"label": {"$nin": ["Table", "Column"]}}) == []
     with pytest.raises(ValueError):
         search.search("invoice", where={"name": "invoice"})
+
+
+def test_one_ranking_alone_keeps_its_own_order(hashed: PostgresVDB, search: HybridSearch) -> None:
+    """The retrieval benchmark's configurations (§7.4): BM25 alone ranks as the BM25 index does,
+    trigram alone finds only names over pg_trgm's threshold."""
+    write(hashed, CATALOG)
+    ready(search)
+    bm25 = search.search("invoice total", k=5, rankings=("bm25",))
+    by_row = {langchain_id(hashed, h["metadata"]["id"]): h for h in bm25}
+    assert list(by_row) == [id_ for id_, _ in search.bm25.search("invoice total", 5)]
+
+    assert names(search.search("zorblaxan", k=5, rankings=("trgm",))) == ["Zorblaxian"]
+    assert search.search("zorblaxan", k=5, rankings=("bm25",)) == []
+    assert len(search.search("zorblaxan", k=5, rankings=("dense",))) == 5
+    assert search.search("zorblaxan", k=5, rankings=RANKINGS)[0]["metadata"]["name"] == "Zorblaxian"
+    with pytest.raises(ValueError, match="unknown rankings"):
+        search.search("invoice", rankings=("bm25", "vibes"))
 
 
 def test_a_certified_row_wins_a_tie(hashed: PostgresVDB, search: HybridSearch) -> None:

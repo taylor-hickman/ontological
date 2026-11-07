@@ -128,3 +128,86 @@ export function StopIcon() {
     </Svg>
   )
 }
+
+export function CheckIcon({ size = 13 }: IconProps) {
+  return (
+    <Svg size={size} strokeWidth={2.6}>
+      <path d="M5 12.5l4.5 4.5L19 7" />
+    </Svg>
+  )
+}
+
+/** The round "look here" mark on amber notes. */
+export function NoteIcon({ size = 16 }: IconProps) {
+  return (
+    <Svg size={size} strokeWidth={2}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 8v5M12 16.5v.5" />
+    </Svg>
+  )
+}
+
+export function UploadIcon({ size = 28 }: IconProps) {
+  return (
+    <Svg size={size} strokeWidth={1.5}>
+      <path d="M12 15V4M7 9l5-5 5 5" />
+      <path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
+    </Svg>
+  )
+}
+
+export function FileIcon({ size = 18 }: IconProps) {
+  return (
+    <Svg size={size} strokeWidth={1.8}>
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M14 3v4h4" />
+    </Svg>
+  )
+}
+
+export function LockIcon({ size = 13 }: IconProps) {
+  return (
+    <Svg size={size} strokeWidth={1.8}>
+      <rect x="5" y="11" width="14" height="9" rx="2" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+    </Svg>
+  )
+}
+
+export function ServerIcon({ size = 20 }: IconProps) {
+  return <Svg size={size}>{DATABASE}</Svg>
+}
+
+export function ArrowRightIcon({ size = 14 }: IconProps) {
+  return (
+    <Svg size={size} strokeWidth={2}>
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </Svg>
+  )
+}
+
+export function ChevronRightIcon({ size = 14 }: IconProps) {
+  return (
+    <Svg size={size} strokeWidth={2}>
+      <path d="M9 6l6 6-6 6" />
+    </Svg>
+  )
+}
+
+export function TableIcon({ size = 14 }: IconProps) {
+  return (
+    <Svg size={size}>
+      <rect x="4" y="5" width="16" height="14" rx="2" />
+      <path d="M4 10h16M10 10v9" />
+    </Svg>
+  )
+}
+
+export function KeyIcon({ size = 12 }: IconProps) {
+  return (
+    <Svg size={size} strokeWidth={1.8}>
+      <circle cx="8" cy="15" r="4" />
+      <path d="M11 12l8-8M16 7l2 2" />
+    </Svg>
+  )
+}
