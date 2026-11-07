@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,7 @@ from keyring.backend import KeyringBackend
 from langchain_core.embeddings import Embeddings
 from pydantic import BaseModel
 
+from ontological.compile import merged
 from ontological.llm.calls import Outcome
 from ontological.llm.gateway import GatewayStatus, State
 
@@ -76,6 +78,48 @@ class NoAnswer:
 
 # The model's JSON, None for an answer that failed validation, or NoAnswer
 Answer = Callable[[str, str], dict[str, Any] | NoAnswer | None]
+
+# Each section of a `table_semantics` prompt, the split stage it stands for, and the field of the
+# merged answer that stage's answer goes in
+MERGED_SECTIONS = {
+    merged.KEYS: ("table_keys", None),
+    merged.DESCRIPTIONS: ("column_descriptions", "column_descriptions"),
+    merged.TERMS: ("table_terms", None),
+    merged.SYNONYMS: ("table_synonyms", None),
+}
+
+
+def merged_sections(user: str) -> dict[str, str]:
+    """A `table_semantics` prompt's sections: each heading, and its body."""
+    out: dict[str, str] = {}
+    for chunk in re.split(r"^## ", user, flags=re.M)[1:]:
+        heading, _, body = chunk.partition("\n")
+        out[heading] = body.rstrip("\n") + "\n"
+    return out
+
+
+def answering_merged(stages: Answer) -> Answer:
+    """`stages`, also answering `table_semantics`: each section as `stages` answers its stage's
+    own prompt, and the whole answer invalid when one of them is. So a merged compile and a
+    split one hear the same Claude."""
+
+    def answer(task: str, user: str) -> dict[str, Any] | NoAnswer | None:
+        if task != merged.TASK:
+            return stages(task, user)
+        out: dict[str, Any] = {}
+        for heading, body in merged_sections(user).items():
+            if body.strip() == merged.NOTHING:
+                continue
+            stage, field_name = MERGED_SECTIONS[heading]
+            said = stages(stage, body)
+            if said is None or isinstance(said, NoAnswer):
+                return said
+            if field_name is not None:
+                said = {field_name: next(iter(said.values()))}
+            out |= said
+        return out
+
+    return answer
 
 
 @dataclass

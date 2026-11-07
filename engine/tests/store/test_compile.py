@@ -1,7 +1,9 @@
-"""The split compile (BUILD_PLAN.md M1.4, M3.2) on Chinook: ingested through a real source
+"""The compile (BUILD_PLAN.md M1.4, M3.2, M3.3) on Chinook: ingested through a real source
 executor into the bundled store, profiled through the same executor, then compiled with a
-scripted gateway, one call at a time, the small tables sharing their pack's calls, and given
-semantic FKs from its declared foreign keys."""
+scripted gateway, one call at a time, and given semantic FKs from its declared foreign keys.
+Split runs the four stages, the small tables sharing their pack's calls; merged asks one
+`table_semantics` call a table. Both hear the same Claude (`fakes.answering_merged`), and every
+test of what the store holds afterwards runs on each, so merged writes what split writes."""
 
 from __future__ import annotations
 
@@ -13,12 +15,12 @@ from typing import Any
 
 import pytest
 from conftest import sql
-from fakes import NoAnswer, ScriptedGateway
+from fakes import NoAnswer, ScriptedGateway, answering_merged
 
 from ontological.catalog.ingest import ingest
 from ontological.compile.descriptions import to_term_name
 from ontological.compile.semantic_fk import SemanticFks
-from ontological.compile.split import Compiled, compile_database, compile_pack
+from ontological.compile.split import Compiled, TableCalls, compile_database, compile_pack
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.store import pg
 
@@ -86,7 +88,7 @@ def answer_table(task: str, table: str, user: str) -> dict[str, Any] | None:
     }
 
 
-def claude(task: str, user: str) -> dict[str, Any] | NoAnswer | None:
+def stages(task: str, user: str) -> dict[str, Any] | NoAnswer | None:
     """What the scripted Claude says to each stage: an entry per table to a packed call, which
     leaves out a table whose own answer would be invalid."""
     found = sections(user)
@@ -100,19 +102,29 @@ def claude(task: str, user: str) -> dict[str, Any] | NoAnswer | None:
     return answer_table(task, table_of(user) if found else "", user)
 
 
+# The same Claude to a merged call: each section as it answers that stage
+claude = answering_merged(stages)
+
+
 @pytest.fixture
 def executor(chinook: Path) -> Iterator[SourceExecutor]:
     with SourceExecutor(SqliteSource(chinook)) as ex:
         yield ex
 
 
+@pytest.fixture(params=["split", "merged"])
+def table_calls(request: pytest.FixtureRequest) -> TableCalls:
+    return request.param
+
+
 @pytest.fixture
 def compiled(
-    store: pg.Layout, executor: SourceExecutor
+    store: pg.Layout, executor: SourceExecutor, table_calls: TableCalls
 ) -> tuple[Compiled, ScriptedGateway, pg.Layout]:
     ingest(executor)
     gateway = ScriptedGateway(claude)
-    return asyncio.run(compile_database("chinook", executor, gateway)), gateway, store
+    got = asyncio.run(compile_database("chinook", executor, gateway, table_calls=table_calls))
+    return got, gateway, store
 
 
 def rows(lay: pg.Layout, q: str) -> list[str]:
@@ -120,7 +132,8 @@ def rows(lay: pg.Layout, q: str) -> list[str]:
     return out.splitlines() if out else []
 
 
-def test_compile_runs_each_stage_once_a_pack_one_call_at_a_time(
+@pytest.mark.parametrize("table_calls", ["split"])
+def test_split_runs_each_stage_once_a_pack_one_call_at_a_time(
     compiled: tuple[Compiled, ScriptedGateway, pg.Layout],
 ) -> None:
     got, gateway, _ = compiled
@@ -146,6 +159,28 @@ def test_compile_runs_each_stage_once_a_pack_one_call_at_a_time(
     assert [t.name for t in got.tables if t.skipped] == ["PlaylistTrack"]
 
 
+@pytest.mark.parametrize("table_calls", ["merged"])
+def test_merged_asks_one_call_a_table_one_call_at_a_time(
+    compiled: tuple[Compiled, ScriptedGateway, pg.Layout],
+) -> None:
+    got, gateway, _ = compiled
+
+    assert [t.name for t in got.tables] == PACK_ORDER
+    # PlaylistTrack has no column to describe or assign, so it is left to split, which asks
+    # nothing for it. Genre's answer is invalid, so it is asked split's calls, and its Term is
+    # the fallback.
+    asked = [(c.task, sorted(set(tables_of(c.user)))) for c in gateway.calls]
+    assert asked == [
+        *[("table_semantics", [t]) for t in SMALL if t != "PlaylistTrack"],
+        ("table_keys", ["Genre"]),
+        ("column_descriptions", []),
+        ("table_terms", ["Genre"]),
+        *[("table_semantics", [t]) for t in PACK_ORDER[7:]],
+    ]
+    assert gateway.peak == 1
+    assert [t.name for t in got.tables if t.skipped] == ["PlaylistTrack"]
+
+
 def test_profiling_is_stored_and_reaches_the_keys_prompt(
     compiled: tuple[Compiled, ScriptedGateway, pg.Layout],
 ) -> None:
@@ -164,7 +199,9 @@ def test_profiling_is_stored_and_reaches_the_keys_prompt(
         'BillingCountry|false||["USA", "Canada", "France", "Brazil", "Germany"]',
     ]
     [keys] = [
-        c.user for c in gateway.calls if c.task == "table_keys" and "main.Invoice\n" in c.user
+        c.user
+        for c in gateway.calls
+        if c.task in ("table_keys", "table_semantics") and "main.Invoice\n" in c.user
     ]
     assert "Primary key columns (exclude from suggestions): InvoiceId\n" in keys
     assert "Known foreign key columns (exclude from suggestions): CustomerId\n" in keys
@@ -251,7 +288,9 @@ def test_semantic_fks_come_from_declared_fks_only(
 
 
 def test_a_second_compile_asks_nothing_and_writes_nothing(
-    compiled: tuple[Compiled, ScriptedGateway, pg.Layout], executor: SourceExecutor
+    compiled: tuple[Compiled, ScriptedGateway, pg.Layout],
+    executor: SourceExecutor,
+    table_calls: TableCalls,
 ) -> None:
     _, _, store = compiled
     before = rows(
@@ -259,7 +298,7 @@ def test_a_second_compile_asks_nothing_and_writes_nothing(
     )
     gateway = ScriptedGateway(claude)
 
-    again = asyncio.run(compile_database("chinook", executor, gateway))
+    again = asyncio.run(compile_database("chinook", executor, gateway, table_calls=table_calls))
 
     assert [(t.name, t.skipped) for t in again.tables] == [("PlaylistTrack", "no non-FK columns")]
     assert gateway.calls == []
@@ -271,7 +310,7 @@ def test_a_second_compile_asks_nothing_and_writes_nothing(
 
 
 def test_synonyms_written_in_a_table_s_description_go_on_its_terms(
-    store: pg.Layout, executor: SourceExecutor
+    store: pg.Layout, executor: SourceExecutor, table_calls: TableCalls
 ) -> None:
     ingest(executor)
     sql(
@@ -283,18 +322,22 @@ def test_synonyms_written_in_a_table_s_description_go_on_its_terms(
     )
     gateway = ScriptedGateway(claude)
 
-    asyncio.run(compile_database("chinook", executor, gateway))
+    asyncio.run(compile_database("chinook", executor, gateway, table_calls=table_calls))
 
-    # The pack's two described tables share a call; Customer is a pack of its own
     asked = [(tables_of(c.user), c.user) for c in gateway.calls if c.task == "table_synonyms"]
-    assert asked == [
-        (
-            ["Artist", "Genre"],
-            "Table: Artist\nDescription: Recording artists (ART).\n\n"
-            "Table: Genre\nDescription: Music genres (GN).\n",
-        ),
-        ([], "Description: Buyers, also known as clients (CL)."),
-    ]
+    if table_calls == "split":
+        # The pack's two described tables share a call; Customer is a pack of its own
+        assert asked == [
+            (
+                ["Artist", "Genre"],
+                "Table: Artist\nDescription: Recording artists (ART).\n\n"
+                "Table: Genre\nDescription: Music genres (GN).\n",
+            ),
+            ([], "Description: Buyers, also known as clients (CL)."),
+        ]
+    else:
+        # Artist's and Customer's are sections of their merged calls; Genre's call is split's
+        assert asked == [([], "Description: Music genres (GN).")]
     # Genre's Term is the fallback, and still gets them
     assert rows(
         store,
@@ -304,7 +347,9 @@ def test_synonyms_written_in_a_table_s_description_go_on_its_terms(
 
 
 def test_a_recompile_keeps_certified_descriptions(
-    compiled: tuple[Compiled, ScriptedGateway, pg.Layout], executor: SourceExecutor
+    compiled: tuple[Compiled, ScriptedGateway, pg.Layout],
+    executor: SourceExecutor,
+    table_calls: TableCalls,
 ) -> None:
     """ARCHITECTURE.md §1.3: upstream let a compile overwrite a description a person certified."""
     _, _, store = compiled
@@ -324,7 +369,14 @@ def test_a_recompile_keeps_certified_descriptions(
         for name in ("Customer", "Invoice")
     ]  # fmt: skip
 
-    asyncio.run(compile_pack([(t, None) for t in tables], executor, ScriptedGateway(claude)))
+    asyncio.run(
+        compile_pack(
+            [(t, None) for t in tables],
+            executor,
+            ScriptedGateway(claude),
+            table_calls=table_calls,
+        )
+    )
 
     assert rows(
         store,

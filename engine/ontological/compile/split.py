@@ -11,7 +11,7 @@
 # table commits (ontological/embed/semantic.py). The SQL-attribute and bridge stages are later
 # work.
 
-"""The split compile (BUILD_PLAN.md M1.4, M3.1, M3.2; ARCHITECTURE.md §1.3, §6.4, §6.5).
+"""The compile (BUILD_PLAN.md M1.4, M3.1, M3.2, M3.3; ARCHITECTURE.md §1.3, §6.4, §6.5).
 
 A compile is a job (ops.job) with a step per table (ops.job_step), planned when it starts from
 the tables with no Term yet: canonical order, and the packs small tables share
@@ -28,16 +28,19 @@ the tables with no Term yet: canonical order, and the packs small tables share
 
 Each stage asks once for the pack's tables that have something to ask (`compile.packed`); a
 table that is alone in that, and a wide table, which is a pack of its own, gets upstream's prompt
-unchanged. Then semantic FKs from the declared foreign keys, and, given an embedder, the Terms'
-and attributes' vectors in the semantic layer (`ontological.embed.semantic`), for retrieval.
+unchanged. With `table_calls="merged"`, steps 2 to 5 are one `table_semantics` call per table
+instead (`compile.merged`), cleaned up as each stage cleans up its own; a table merged doesn't
+suit, or whose answer is invalid, takes the split stages.
+
+Then semantic FKs from the declared foreign keys, and, given an embedder, the Terms' and
+attributes' vectors in the semantic layer (`ontological.embed.semantic`), for retrieval.
 Every Claude call goes through the gateway, one at a time. An answer that fails validation takes
 upstream's deterministic fallback. When Claude doesn't answer at all, nothing is written for the
 pack: on a rate limit or an overload the job pauses until the usage window resets and retries
 the pack; for anything else (a logged-out or missing `claude`) it stops, still embedding the
 tables it wrote, and the next run resumes it. A crashed job is resumed the same way, and a
 resumed pack's calls are the ones its first try made, so the gateway's cache answers those that
-were answered. A certified description is never overwritten (the DAL's writes guard it). The
-`merged` option is M3.3's.
+were answered. A certified description is never overwritten (the DAL's writes guard it).
 """
 
 # The vendored DAL is untyped.
@@ -68,7 +71,8 @@ from auto_ontology.dal.terms import upsert_table_term
 from ontological.compile.descriptions import DescriptionsRequest, column_attribute_specs_pack
 from ontological.compile.gateway import ClaudeUnavailable, Structured
 from ontological.compile.keys import KeysRequest, fk_source_columns, suggest_keys_pack
-from ontological.compile.models import ColumnAttributeSpec, TermProposal
+from ontological.compile.merged import table_semantics
+from ontological.compile.models import ColumnAttributeSpec, TableKeys, TermProposal
 from ontological.compile.packing import PlannedTable, plan
 from ontological.compile.semantic_fk import SemanticFks, resolve_declared_fks
 from ontological.compile.synonyms import extract_synonyms_pack
@@ -89,6 +93,9 @@ logger = logging.getLogger(__name__)
 RESUME_MARGIN_S = 5
 # How long a limit with no `resets_at` (an overload, or a rate limit with no event) pauses for.
 RETRY_WITHOUT_RESET_S = 60
+
+# The `compile.table_calls` setting (ARCHITECTURE.md §6.4).
+type TableCalls = Literal["split", "merged"]
 
 
 @dataclass(frozen=True)
@@ -152,10 +159,13 @@ async def compile_database(
     jobs: ActiveJobs | None = None,
     clock: Clock | None = None,
     embedder: LocalEmbedder | None = None,
+    table_calls: TableCalls = "split",
 ) -> Compiled:
     """Compile every table of `database_name` that has no Term yet, then its semantic FKs, then,
     given an `embedder`, sync the database's vectors in the semantic layer. `executor` holds the
-    database's source.
+    database's source. `table_calls` is the `compile.table_calls` setting (§6.4): `"split"`
+    runs the four stages, `"merged"` one `table_semantics` call a table. It applies to the
+    tables this run compiles, so a resumed job may take the other.
 
     Resumes the database's unfinished compile job, on the plan it began with, or starts one.
     A job paused when an earlier engine stopped waits out the rest of its pause first. `jobs`
@@ -173,11 +183,12 @@ async def compile_database(
         pending = await asyncio.to_thread(_pending, job.id, database_name)
         packs = _by_pack(pending)
         logger.info(
-            "compile job %d: %d table(s) of %s in %d pack(s)",
+            "compile job %d: %d table(s) of %s in %d pack(s), %s",
             job.id,
             len(pending),
             database_name,
             len(packs),
+            table_calls,
         )
         done: list[CompiledTable] = []
         left = len(pending)
@@ -200,7 +211,11 @@ async def compile_database(
             while True:
                 try:
                     compiled = await compile_pack(
-                        work, executor, gateway, probe_distinct_values=probe_distinct_values
+                        work,
+                        executor,
+                        gateway,
+                        probe_distinct_values=probe_distinct_values,
+                        table_calls=table_calls,
                     )
                     break
                 except ClaudeUnavailable as e:
@@ -337,10 +352,12 @@ async def compile_pack(
     gateway: Structured,
     *,
     probe_distinct_values: bool = True,
+    table_calls: TableCalls = "split",
 ) -> list[CompiledTable]:
-    """Compile a pack's tables: profile each, then run each stage once for the pack (packed
-    calls, `compile.packed`), then write every table, and mark each `checkpoint` done or
-    skipped, in one transaction. Raises `ClaudeUnavailable`, having written nothing, when
+    """Compile a pack's tables: profile each, then run each split stage once for the pack
+    (packed calls, `compile.packed`), or, with `table_calls="merged"`, ask each table's
+    `table_semantics` (`compile.merged`), then write every table, and mark each `checkpoint`
+    done or skipped, in one transaction. Raises `ClaudeUnavailable`, having written nothing, when
     Claude doesn't answer."""
     work = [_Table(table, checkpoint) for table, checkpoint in tables]
     for t in work:
@@ -353,18 +370,20 @@ async def compile_pack(
         t.profiling = dict(profile["columns"])
 
     live = [t for t in work if t.skipped is None]
+    if table_calls == "merged":
+        live = await _merged_stage(gateway, live)
+    await _split_stages(gateway, live)
+    return await asyncio.to_thread(_commit_pack, work)
+
+
+async def _split_stages(gateway: Structured, live: list[_Table]) -> None:
+    """The four split stages for `live`, each once for all of them."""
+    if not live:
+        return
     found = await suggest_keys_pack(
         gateway, [KeysRequest(t.table, t.ctx, t.profiling) for t in live]
     )
-    fk_names: list[set[str]] = []
-    for t, keys in zip(live, found, strict=True):
-        names = fk_source_columns(t.ctx.get("fks", [])) | {s.column_name for s in keys.suggestions}
-        # Payload-bearing junctions are wider than the two-key shape the bridge pass handles, so
-        # the model's decision needs structural evidence of two FK roles too.
-        t.junction = (
-            len(t.ctx.get("columns", [])) > 2 and keys.is_junction_table and len(names) >= 2
-        )
-        fk_names.append(names)
+    fk_names = [_apply_keys(t, keys) for t, keys in zip(live, found, strict=True)]
 
     specs = await column_attribute_specs_pack(
         gateway,
@@ -392,7 +411,31 @@ async def compile_pack(
             for term in terms:
                 term.synonyms = words
 
-    return await asyncio.to_thread(_commit_pack, work)
+
+async def _merged_stage(gateway: Structured, live: list[_Table]) -> list[_Table]:
+    """One `table_semantics` call for each table; returns the tables left to the split stages
+    (`compile.merged`)."""
+    left: list[_Table] = []
+    for t in live:
+        found = await table_semantics(gateway, t.table, t.ctx, t.profiling)
+        if found is None:
+            left.append(t)
+            continue
+        _apply_keys(t, found.keys)
+        t.specs, t.terms = found.specs, found.terms
+        if not t.specs:
+            logger.warning("[%s] has no non-FK columns; no Term", t.name)
+            t.skipped = "no non-FK columns"
+    return left
+
+
+def _apply_keys(t: _Table, keys: TableKeys) -> set[str]:
+    """Decide whether the table is a junction; returns its FK columns, declared and suggested."""
+    names = fk_source_columns(t.ctx.get("fks", [])) | {s.column_name for s in keys.suggestions}
+    # Payload-bearing junctions are wider than the two-key shape the bridge pass handles, so the
+    # model's decision needs structural evidence of two FK roles too.
+    t.junction = len(t.ctx.get("columns", [])) > 2 and keys.is_junction_table and len(names) >= 2
+    return names
 
 
 def _profile(
