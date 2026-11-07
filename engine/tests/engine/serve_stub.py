@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from fake_answers import FakeAnswers
@@ -27,6 +28,7 @@ from ontological.engine import main
 from ontological.jobs.active import ActiveJobs
 from ontological.jobs.service import JobsService
 from ontological.jobs.staleness import StalenessCheck
+from ontological.jobs.store import Job
 
 
 class FakeStore:
@@ -52,7 +54,7 @@ class FakeStore:
             time.sleep(float(self.slow_stop.read_text()))
         self._write("stop")
 
-    def staleness_check(self) -> StalenessCheck:
+    def staleness_check(self, new_tables: Callable[[Job], object]) -> StalenessCheck:
         return StalenessCheck(find=lambda: [])  # no catalog, so no sources to refresh
 
     def sources(self, jobs: ActiveJobs, embedder: LocalEmbedder | None) -> FakeSources:
