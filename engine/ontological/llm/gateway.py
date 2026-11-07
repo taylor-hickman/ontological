@@ -4,7 +4,8 @@ Callers name a task, never a model; the route table picks the model and effort (
 is one `claude_agent_sdk.query()` with §6.2's options: the user's own `claude`, an empty
 sandbox cwd, no settings, no built-in tools, deny-by-default permissions, no session
 persistence, and the auth variables blanked. `structured()` keeps upstream's contract: it
-returns None on any failure, so the caller falls back deterministically.
+returns None on any failure, so the caller falls back deterministically. `agent()` runs one
+session with Ontological's SDK MCP tools and records each tool call in order (§8.1).
 
 Every spawn is logged in ops.llm_call (`calls.CallLog`), and so is every cache hit, with the job
 and pack the caller's `calls.call_scope` names and the model that answered, read from
@@ -18,11 +19,13 @@ There is no warm pool: a spawn and close cost 0.53 s at p50 (spike S2).
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import os
 import re
 import shutil
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,11 +37,16 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKError,
     CLINotFoundError,
+    McpSdkServerConfig,
+    McpServerConfig,
     Message,
     RateLimitEvent,
     RateLimitInfo,
     ResultMessage,
+    SdkMcpTool,
     SystemMessage,
+    TextBlock,
+    create_sdk_mcp_server,
 )
 from claude_agent_sdk.types import EffortLevel
 from pydantic import BaseModel, ValidationError
@@ -53,6 +61,8 @@ VERSION_TIMEOUT_S = 10
 DEFAULT_CONCURRENCY = 3  # §6.4; a user setting
 STRUCTURED_MAX_TURNS = 2  # output_format answers through a StructuredOutput tool call
 TEXT_MAX_TURNS = 1
+AGENT_MAX_TURNS = 16  # §6.2: about 16 for the agent
+AGENT_SERVER = "ontological"  # the SDK MCP server's name: its tools are mcp__ontological__<name>
 
 RETRY_NOTE = (
     "\n\nYour previous answer was rejected: {error}\n"
@@ -65,6 +75,11 @@ SYNTHETIC_MODEL = "<synthetic>"  # the model Claude Code puts on the error messa
 LIMIT_STATUSES = (429, 529)  # rate limited, overloaded: §6.5 handles both
 
 State = Literal["unknown", "ready", "not_installed", "outdated", "needs_login", "limited"]
+
+# Set while an agent session's tool runs. A Claude call the tool makes, such as the critic's,
+# runs in the session's slot: the session is waiting on the tool, and taking a second slot
+# would deadlock at a concurrency of 1.
+_IN_TOOL: contextvars.ContextVar[bool] = contextvars.ContextVar("in_agent_tool", default=False)
 
 
 class Query(Protocol):
@@ -132,6 +147,75 @@ class _Verdict:
     outcome: Outcome
     error: str | None = None
     output: Any = None
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One call the model made to a session's tool, as its handler answered it. `text` is what
+    the model read; `data` is the handler's structured record (its result's `data` key), which
+    the model doesn't see and the post-run check reads (§8.1). A call the SDK refused before the
+    handler ran, for arguments that fail the input schema or a tool the session doesn't allow,
+    isn't a call and isn't logged."""
+
+    name: str
+    args: dict[str, Any]
+    is_error: bool
+    text: str
+    data: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Said:
+    """Text the model wrote between tool calls."""
+
+    text: str
+
+
+AgentEvent = ToolCall | Said
+
+
+class AgentRun[M: BaseModel]:
+    """One agent session (§6.1). Iterate it for events as they happen, or `await run.wait()`;
+    the session starts on the first of either. Afterwards `output` is the validated answer, or
+    None with `outcome` and `error` saying why, and `tool_log` holds every tool call in order."""
+
+    def __init__(self, drive: Callable[[AgentRun[M]], Awaitable[None]]) -> None:
+        self.tool_log: list[ToolCall] = []
+        self.output: M | None = None
+        self.outcome: Outcome | None = None
+        self.error: str | None = None
+        self.answered_model: str | None = None  # after a fallback, the fallback model
+        self._drive = drive
+        self._events: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+        self._task: asyncio.Task[None] | None = None
+        self._drained = False
+
+    async def __aiter__(self) -> AsyncIterator[AgentEvent]:
+        if self._task is None:
+            self._task = asyncio.create_task(self._run())
+        while not self._drained:
+            event = await self._events.get()
+            if event is None:
+                self._drained = True
+                break
+            yield event
+        await self._task  # raises what the session raised
+
+    async def wait(self) -> AgentRun[M]:
+        async for _ in self:
+            pass
+        return self
+
+    def emit(self, event: AgentEvent) -> None:
+        if isinstance(event, ToolCall):
+            self.tool_log.append(event)
+        self._events.put_nowait(event)
+
+    async def _run(self) -> None:
+        try:
+            await self._drive(self)
+        finally:
+            self._events.put_nowait(None)
 
 
 def install_locations(home: Path | None = None) -> list[Path]:
@@ -271,6 +355,57 @@ class ClaudeGateway:
         await self._record(task, "text", prompt_version, key, route, 1, session, verdict)
         return cast(str, verdict.output) if verdict.outcome == "ok" else None
 
+    def agent[M: BaseModel](
+        self,
+        task: str,
+        system: str,
+        user: str,
+        tools: Sequence[SdkMcpTool[Any]],
+        output: type[M],
+        max_turns: int = AGENT_MAX_TURNS,
+        *,
+        prompt_version: str = "",
+    ) -> AgentRun[M]:
+        """One session in which the model may call `tools`, and only those, and ends with an
+        `output`, which `output_format` carries in the same session (spike S1). Logged, never
+        served from the cache, and not retried: a session that ends without a valid answer has
+        `output` None, and the caller decides on a fresh one (§8.1's restart)."""
+        route = self._route(task)
+        key = cache_key(
+            task=task,
+            prompt_version=prompt_version,
+            model=route.model,
+            effort=route.effort,
+            system=system,
+            user=user,
+            schema=output,
+        )
+        output_format = {"type": "json_schema", "schema": output.model_json_schema()}
+
+        async def drive(run: AgentRun[M]) -> None:
+            server = create_sdk_mcp_server(AGENT_SERVER, tools=[_logged(t, run) for t in tools])
+            session = await self._spawn(
+                route,
+                system,
+                user,
+                output_format,
+                max_turns,
+                servers={AGENT_SERVER: server},
+                allowed=[f"mcp__{AGENT_SERVER}__{t.name}" for t in tools],
+                on_message=lambda message: _said(message, run),
+            )
+            if session is None:
+                run.outcome, run.error = "error", self._error
+                return
+            verdict = self._failure(session) or _validate(session, output)
+            await self._record(task, "agent", prompt_version, key, route, 1, session, verdict)
+            run.outcome, run.error = verdict.outcome, verdict.error
+            run.answered_model = session.answered_model or session.fallback_model
+            if verdict.outcome == "ok":
+                run.output = output.model_validate(verdict.output)
+
+        return AgentRun(drive)
+
     # --- status ---------------------------------------------------------------------------------
 
     async def check(self) -> GatewayStatus:
@@ -325,14 +460,21 @@ class ClaudeGateway:
             raise ValueError(f"no route for task {task!r}") from None
 
     def _options(
-        self, route: Route, system: str, output_format: dict[str, Any] | None, max_turns: int
+        self,
+        route: Route,
+        system: str,
+        output_format: dict[str, Any] | None,
+        max_turns: int,
+        servers: dict[str, McpSdkServerConfig],
+        allowed: list[str],
     ) -> ClaudeAgentOptions:
         return ClaudeAgentOptions(
             cli_path=self.cli_path,
             cwd=self.sandbox,
             setting_sources=[],
             tools=[],
-            allowed_tools=[],
+            mcp_servers=cast(dict[str, McpServerConfig], servers),
+            allowed_tools=allowed,
             permission_mode="dontAsk",
             system_prompt=system,
             model=route.model,
@@ -351,19 +493,28 @@ class ClaudeGateway:
         prompt: str,
         output_format: dict[str, Any] | None,
         max_turns: int,
+        *,
+        servers: dict[str, McpSdkServerConfig] | None = None,
+        allowed: list[str] | None = None,
+        on_message: Callable[[Message], None] | None = None,
     ) -> _Session | None:
         """Run one `query()`; None, without spawning, when there is no `claude` to run."""
         if self.cli_path is None:
             self._installed = False
             self._error = "claude not found"
             return None
-        options = self._options(route, system, output_format, max_turns)
+        options = self._options(
+            route, system, output_format, max_turns, servers or {}, allowed or []
+        )
         self.sandbox.mkdir(parents=True, exist_ok=True)
         session = _Session()
-        async with self._slots:
+        slot = contextlib.nullcontext() if _IN_TOOL.get() else self._slots
+        async with slot:
             try:
                 async for message in self._query(prompt=prompt, options=options):
                     self._take(message, session)
+                    if on_message is not None:
+                        on_message(message)
             except CLINotFoundError as e:
                 session.cli_missing = True
                 session.exception = f"{type(e).__name__}: {e}"
@@ -485,6 +636,48 @@ class ClaudeGateway:
             table_name=scope.table_name,
         )
         await asyncio.to_thread(self.calls.record, call)
+
+
+def _logged[M: BaseModel](tool: SdkMcpTool[Any], run: AgentRun[M]) -> SdkMcpTool[Any]:
+    """`tool` with its calls logged in `run`, and its `data` kept from the model. A handler that
+    raises is logged as an error, and the model is told it failed."""
+
+    async def handler(args: Any) -> dict[str, Any]:
+        token = _IN_TOOL.set(True)
+        try:
+            result = await tool.handler(args)
+        except Exception as e:
+            result = {
+                "content": [{"type": "text", "text": f"The tool failed: {type(e).__name__}: {e}"}],
+                "is_error": True,
+            }
+        finally:
+            _IN_TOOL.reset(token)
+        content = cast(list[dict[str, Any]], result.get("content") or [])
+        is_error = bool(result.get("is_error"))
+        text = "".join(str(c.get("text", "")) for c in content if c.get("type") == "text")
+        data = cast(dict[str, Any], result.get("data") or {})
+        run.emit(ToolCall(tool.name, dict(cast(dict[str, Any], args)), is_error, text, data))
+        return {"content": content, "is_error": is_error}
+
+    return SdkMcpTool(
+        name=tool.name,
+        description=tool.description,
+        input_schema=tool.input_schema,
+        handler=handler,
+        annotations=tool.annotations,
+    )
+
+
+def _said[M: BaseModel](message: Message, run: AgentRun[M]) -> None:
+    if (
+        isinstance(message, AssistantMessage)
+        and message.error is None
+        and message.model != SYNTHETIC_MODEL
+    ):
+        for block in message.content:
+            if isinstance(block, TextBlock) and block.text.strip():
+                run.emit(Said(block.text))
 
 
 def _validate(session: _Session, schema: type[BaseModel]) -> _Verdict:

@@ -4,7 +4,7 @@
 Each spawn writes one row. A structured call's key is `cache_key(...)`; a later call with the same
 key is answered from the newest row that holds a valid answer from the route's own model, and
 writes a `cached` row of its own with no output, so a job's log shows its cache hits. Text calls
-are logged but never served from the cache.
+and agent sessions are logged but never served from the cache.
 
 A row names the job and the pack of tables it was for when the caller set them with `call_scope`,
 as compile does for each pack; the Jobs screen reads a job's calls by them.
@@ -23,7 +23,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
 
-Kind = Literal["structured", "text"]
+Kind = Literal["structured", "text", "agent"]
 # ok: an answer. invalid: structured output missing or failing validation (§6.2's retry case).
 # limited: rate limit or overload (§6.5). error: anything else, such as a failed login.
 Outcome = Literal["ok", "invalid", "limited", "error"]
