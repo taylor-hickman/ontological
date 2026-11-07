@@ -140,7 +140,7 @@ The agent is a LangGraph `StateGraph` used only as control flow. Each node is pl
 - Worst case: 40+.
 - Plus 3–8 query embeddings. Rerank is not used here.
 
-**`check_answerable`.** One extraction call, then vector search, then a deterministic score: the fraction of entities that have a column-attribute hit with cosine distance ≤ 0.75.
+**`check_answerable`.** One extraction call, then vector search, then a deterministic score: the fraction of entities that have a column-attribute hit within the embedding model's coverage distance (0.636 for the default, §7.4). Upstream's 0.75 was tuned to Nemotron.
 
 **Learning loop.** Nothing is automatic. Editing a custom analysis, a SQL attribute or a description re-embeds it, so it shows up in future retrieval.
 
@@ -581,7 +581,7 @@ Candidates (ONNX files and licenses checked on Hugging Face, 2026-11-04):
 | `nomic-embed-text-v1.5` int8 | 768 | 137.3 MB | Apache-2.0 |
 | `bge-base-en-v1.5` fp32 | 768 | 435.8 MB | MIT |
 
-The default is `snowflake-arctic-embed-m-v1.5` int8 until the retrieval benchmark (§7.4) runs. After that, it is the model with the best recall. A smaller model wins only on a tie; app size is not the deciding factor.
+The default is the model with the best recall in the retrieval benchmark (§7.4). A smaller model wins only on a tie; app size is not the deciding factor. The benchmark kept `snowflake-arctic-embed-m-v1.5` int8 (2026-11-06, docs/BUILD_PLAN.md M3.9). Under hybrid search it had the best column recall at every k, and its table recall was within 0.015 of the best at k = 10. `bge-base` is four times its size and no better. `bge-small` trails it by 0.02–0.04 on columns, which is not a tie. All four are pinned in `embed/model.py`, so the benchmark can be rerun on each one.
 
 Dropping embeddings entirely was considered and rejected. It would save 66–440 MB and lose the paraphrase cases above. Semantic-FK candidate search would survive on name matching plus the value-overlap probe, but few-shot retrieval and `check_answerable` would get worse in ways that are hard to measure.
 
@@ -600,13 +600,15 @@ score = rrf( dense_rank(embedding <=> query_vec),                 # pgvector
 - **Identifier-aware tokens.** Before indexing and querying, identifiers are split on snake_case and camelCase, and glossary acronyms (Settings → Glossary) are expanded. `cust_acct_no` matches "customer account number".
 - **Why not BM25 inside Postgres.** `ts_rank_cd` is not BM25 and has the start-of-token problem. ParadeDB's `pg_search` is BM25 but AGPL-3.0. Timescale's `pg_textsearch` is BM25 under the PostgreSQL license, but it is one more native extension to build, sign and upgrade per platform. Revisit it only if the in-engine index becomes a bottleneck.
 - Fusion runs in Python over the three ranked lists. It keeps upstream's filters (collection, label, database_name) and its `{text, metadata, distance}` result contract, so ported upstream code works unchanged. Each ranking contributes its top 50 to RRF (k = 60). Every hit's `_distance` is its cosine distance to the query, whichever ranking found it. The trigram ranking keeps names over pg_trgm's similarity threshold (0.3), through a GIN index on the name. The vendored `PostgresVDB` reports every write and delete to a listener (`on_change`), which is how a change reaches the BM25 index whoever made it.
-- Certified items (metadata `certified: true`) get a small RRF bonus, 0.002, about what moving from 10th to 1st in one ranking adds, and are labeled "certified" in the grounding pack (§8.3). The retrieval benchmark (§7.4) tunes it.
+- Certified items (metadata `certified: true`) get a small RRF bonus, 0.002, about what moving from 10th to 1st in one ranking adds, and are labeled "certified" in the grounding pack (§8.3). The eval has no certified items, so the retrieval benchmark (§7.4) can't tune it.
 
-**Recalibrate thresholds.** Upstream's coverage threshold (cosine distance ≤ 0.75) and its k values are tuned to Nemotron and won't transfer. Re-derive them per model on the eval set (§12).
+**Recalibrate thresholds.** Upstream's coverage threshold (cosine distance ≤ 0.75) and its k values are tuned to Nemotron and won't transfer, so they are re-derived per model on the dev set by the retrieval benchmark (§7.4). Each model's coverage distance is on its spec in `embed/model.py`. The default's is 0.636: at upstream's 0.75 it would cover 79% of questions asked against the wrong database. The raw question takes 30 attributes in the pack (`QUESTION_K`) instead of upstream's 10, which is where recall levels off. `plan`'s per-entity k values (2 per entity, 3 for evidence, 1 Term) and the certified bonus stay at upstream's numbers. The benchmark has no extracted entities and the eval has no certified items, so M4.7 and real use set those.
 
 ### 7.4 Retrieval benchmark
 
-The benchmark costs no quota after one compile. For each eval question, sqlglot extracts the gold tables and columns from the gold SQL. The benchmark then measures recall@k of the grounding pack for each configuration: dense only, BM25 only, trigram only and hybrid, for each candidate model.
+The benchmark costs no quota after one compile (`ontological_eval compile`; the five eval databases took 256 calls, $1.49 at API prices and 14 minutes). For each eval question, the engine's SQL parser, through sqlglot, resolves the gold SQL to the tables and columns it reads. The benchmark then measures recall@k of the grounding pack for each configuration: dense only, BM25 only, trigram only and hybrid, for each candidate model. Column recall counts the gold columns that have an attribute. It can also run on the data layer, which needs no compile.
+
+The coverage distance is calibrated from the same run. A question's nearest attribute in its own database is a positive, and its nearest in each other eval database a negative, since the question can't be answered there. The distance that best separates them (Youden's J) is the threshold. The calibration uses the raw question; `check_answerable` scores extracted entities, so M4.4 checks the value on those. `eval/README.md` says how to run the benchmark, and BUILD_PLAN.md M3.9 has the numbers.
 
 ### 7.5 Rerank
 
@@ -766,7 +768,7 @@ ontological/
       profile/                  sampling, date_format, json paths (run inside the executor)     (ported)
       compile/                  stages with their prompts (versioned), merged/split call shapes, batching/packing, checkpoints
       pii/                      rules (ported) + batched Claude fallback
-      embed/                    ONNX embedder (LangChain Embeddings interface), BM25 index + tokenizer, hybrid search, retrieval benchmark
+      embed/                    ONNX embedder (LangChain Embeddings interface), BM25 index + tokenizer, hybrid search, the candidate models (the retrieval benchmark is in eval/)
       answer/                   grounding pack, agent tools + preconditions, validation gate, probes (ported)
       llm/                      ClaudeGateway, route table, cache, limits
       interchange/              native YAML + Ossie
