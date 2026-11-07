@@ -324,6 +324,8 @@ Produces: editing that changes answers, with history and undo.
 | M7.3 | Signing and notarization with the user's Apple Developer account | M7.1, M7.2 |
 | M7.4 | Clean-machine install test with only Claude Code installed, offline start, simulated major-version restore | M7.3 |
 
+**M7.2 done (2026-11-07).** `packaging/resources.sh` assembles S4's tree, the model's pinned files and DuckDB's three scanners, and `pnpm package` (electron-builder, signing off until M7.3) puts them in `Contents/Resources`. On an M5 Max with macOS 26 and SIP on, with outbound network denied by `sandbox-exec`, the packaged app started its engine (through `ONTOLOGICAL_ENGINE_CMD` until M7.1) on the bundled folders: `initdb` and start on the bundled Postgres, the scanners loaded from `extension_directory` with autoinstall off, a SQLite source opened, and a question was embedded. `control.sh` and `smoke.sh` pass on the packaged tree. The bundled folders come to 262 MB: 18 MB of Postgres, 111 MB of model and 134 MB of DuckDB extensions. For M7.3, the extensions can't be codesigned (DuckDB's signature trails the Mach-O), and the engine runtime will dlopen them, so its signing needs the same `disable-library-validation` answer as Postgres's.
+
 ## Test-first work
 
 These are written test-first because the tests define the behaviour and already exist upstream or follow directly from the architecture:
