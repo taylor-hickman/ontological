@@ -27,6 +27,7 @@ from collections.abc import Callable
 import pytest
 from fakes import DuckProber, FakeGraph, ScriptedProber, frame, hop
 
+from ontological.answer.gate import KeyColumns
 from ontological.answer.join_check import (
     build_case_dirty_join_repair_error,
     build_join_path_repair_error,
@@ -370,8 +371,11 @@ _SUPPORT = (
             },
             fk_columns={"customer.SupportRepId"},
         ),
+        FakeGraph(
+            fk_columns={"customer.SupportRepId"}, keys={"employee": KeyColumns(pk=["employeeid"])}
+        ),
     ],
-    ids=["no path", "graph knows another pair"],
+    ids=["no path", "graph knows another pair", "keys known"],
 )
 def test_a_parent_key_joined_to_a_child_fk_passes_whichever_side_is_written_first(
     on: str, graph: FakeGraph
@@ -401,6 +405,42 @@ def test_a_fabricated_join_is_flagged_whichever_side_is_written_first(on: str) -
     )
 
     assert [(m["verdict"], m["overlap"]) for m in mismatches] == [("unverified", 0.0)]
+
+
+_INVOICES = (
+    *_SUPPORT,
+    "CREATE TABLE invoice (InvoiceId INTEGER, Total INTEGER)",
+    "INSERT INTO invoice SELECT i, i FROM range(1, 501) t(i)",  # 500 invoices
+)
+
+
+@pytest.mark.parametrize(
+    "on",
+    [
+        "e.EmployeeId = i.InvoiceId",
+        "i.InvoiceId = e.EmployeeId",
+        "e.EmployeeId = i.Total",
+        "i.Total = e.EmployeeId",
+    ],
+)
+def test_a_key_joined_to_values_its_own_keys_merely_fall_among_is_flagged(on: str) -> None:
+    """Every employee id 1-50 is also an invoice id and a total, so the employees' share is 1.0
+    either way. Two primary keys pair the same entities, so the smaller share (0.1) is the one
+    that counts; a key and a column that isn't one are a parent and a child, so the child's
+    share in the parent (0.1) does."""
+    graph = FakeGraph(
+        fk_columns={"employee.EmployeeId"},
+        keys={"employee": KeyColumns(pk=["employeeid"]), "invoice": KeyColumns(pk=["invoiceid"])},
+    )
+
+    mismatches = find_join_path_mismatches(
+        ProbeExecutor(DuckProber(*_INVOICES)),
+        "duckdb",
+        f"SELECT e.EmployeeId FROM employee e JOIN invoice i ON {on}",
+        graph,
+    )
+
+    assert [(m["verdict"], m["overlap"]) for m in mismatches] == [("unverified", 0.1)]
 
 
 def test_an_empty_side_measures_nothing() -> None:

@@ -9,7 +9,7 @@
 # `ontological.answer.probe`, and name a table with the schema the SQL gave it. A join whose
 # overlap probe couldn't run is left alone, where upstream flags it: check 4 is a hard check
 # here, and upstream's is soft (see `_overlap`). The overlap is measured both ways in one probe,
-# so the side of `=` the model wrote first doesn't change the verdict (see `_value_overlap`). The
+# so the side of `=` the model wrote first doesn't change the verdict (see `_overlap`). The
 # self-apply rewrites (`try_self_apply_wrong_column_fixes`, `try_self_apply_missing_bridge_fixes`)
 # aren't ported: the gate reports issues, and the model rewrites its own SQL.
 
@@ -200,16 +200,11 @@ def _value_overlap(
     dialect: str | None,
     a: tuple[exp.Table, str],
     b: tuple[exp.Table, str],
-) -> float | None:
-    """The larger of two shares, from one probe: *a*'s distinct values found in *b*, and *b*'s
-    found in *a*. ``None`` when the probe couldn't run (no connector, budget exhausted, query
-    failure) or either side holds no values: callers must treat that as "can't confirm", not as
-    a verdict either way.
-
-    Upstream measures only the left operand's values in the right, so a correct FK join written
-    parent first (``e.EmployeeId = c.SupportRepId``) measures the parent's keys, most of which no
-    child references, and is flagged. Taking the larger share makes operand order irrelevant: a
-    real FK child's values are nearly all in its parent, whichever side the model wrote first.
+) -> tuple[float, float] | None:
+    """From one probe, the share of *a*'s distinct values found in *b*, and of *b*'s found in
+    *a*. ``None`` when the probe couldn't run (no connector, budget exhausted, query failure)
+    or either side holds no values: callers must treat that as "can't confirm", not as a
+    verdict either way.
 
     Identifiers are always quoted: they are the real, correctly-cased names resolved from schema
     metadata by the caller, and an unquoted reference would let the engine's case-folding rewrite
@@ -236,17 +231,35 @@ def _value_overlap(
     matched = row.get("matched") or 0
     if not a_total or not b_total:
         return None
-    return max(matched / a_total, matched / b_total)
+    return matched / a_total, matched / b_total
+
+
+def _is_key(graph: JoinGraph, table: str, column: str) -> bool:
+    keys = graph.key_columns(table)
+    return column.lower() in keys.pk + keys.unique
 
 
 def _overlap(
     executor: ProbeExecutor,
     dialect: str | None,
+    graph: JoinGraph,
     a: tuple[exp.Table, str],
     b: tuple[exp.Table, str],
 ) -> float | None:
-    """``_value_overlap`` of *a* and *b*; ``None`` when it couldn't be measured (the budget
-    spent, no source, the probe failed, or a side is empty).
+    """How far *a*'s and *b*'s values bear the join out, whichever side of ``=`` each is on;
+    ``None`` when it couldn't be measured (the budget spent, no source, the probe failed, or a
+    side is empty).
+
+    Upstream measures only the left operand's values in the right, so a correct FK join written
+    parent first (``e.EmployeeId = c.SupportRepId``) measures the parent's keys, most of which no
+    child references, and is flagged. Here the share that counts follows the columns' keys:
+
+    - one side is a key (primary or profiled unique): it's the parent, so the other side's
+      share in it, as a real FK child's values are nearly all in its parent;
+    - both are keys: the smaller share, as a 1:1 join pairs the same entities, and two
+      unrelated surrogate keys (``TrackId = AlbumId``) overlap only one way, where one id
+      range falls inside the other;
+    - neither: the larger share, as nothing says which side is the child, and check 4 is hard.
 
     Every caller leaves the join alone on ``None``, where upstream flags it anyway. Upstream's
     check is opt-in and soft; check 4 is hard, and the probe budget is shared by the question's
@@ -256,7 +269,18 @@ def _overlap(
     the overlap tells it apart from a fabricated join."""
     if not executor.budget_left:
         return None
-    return _value_overlap(executor, dialect, a, b)
+    shares = _value_overlap(executor, dialect, a, b)
+    if shares is None:
+        return None
+    a_in_b, b_in_a = shares
+    a_key, b_key = _is_key(graph, a[0].name, a[1]), _is_key(graph, b[0].name, b[1])
+    if a_key and b_key:
+        return min(shares)
+    if a_key:
+        return b_in_a
+    if b_key:
+        return a_in_b
+    return max(shares)
 
 
 def find_join_path_mismatches(
@@ -349,7 +373,7 @@ def find_join_path_mismatches(
             # also-real column pair is wrong — same reasoning as the
             # missing_bridge case above, so the same live check applies
             # before concluding it's fabricated.
-            overlap = _overlap(executor, dialect, (node_a, left.name), (node_b, right.name))
+            overlap = _overlap(executor, dialect, graph, (node_a, left.name), (node_b, right.name))
             if overlap is None:
                 continue  # nothing measured; see _overlap
             if overlap >= _OVERLAP_KEEP_THRESHOLD:
@@ -393,7 +417,7 @@ def find_join_path_mismatches(
             # direct join is fabricated, so a correct-but-unmodeled direct
             # join isn't torn out in favor of a technically-known but wrong
             # indirect route.
-            overlap = _overlap(executor, dialect, (node_a, left.name), (node_b, right.name))
+            overlap = _overlap(executor, dialect, graph, (node_a, left.name), (node_b, right.name))
             if overlap is None:
                 continue  # nothing measured; see _overlap
             if overlap >= _OVERLAP_KEEP_THRESHOLD:
@@ -484,7 +508,7 @@ def find_join_path_mismatches(
         # this join. Fall back to a live value-overlap probe as a
         # secondary signal before flagging, to avoid false-positiving on a
         # real relationship the graph never happened to model at all.
-        overlap = _overlap(executor, dialect, (node_a, left.name), (node_b, right.name))
+        overlap = _overlap(executor, dialect, graph, (node_a, left.name), (node_b, right.name))
         if overlap is None:
             continue  # nothing measured; see _overlap
         if overlap >= _OVERLAP_KEEP_THRESHOLD:
