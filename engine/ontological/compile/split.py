@@ -91,9 +91,9 @@ from ontological.compile.bridges import Bridges, build_bridge_sql_attributes
 from ontological.compile.descriptions import DescriptionsRequest, column_attribute_specs_pack
 from ontological.compile.gateway import ClaudeUnavailable, Structured
 from ontological.compile.keys import KeysRequest, fk_source_columns, suggest_keys_pack
-from ontological.compile.merged import table_semantics
+from ontological.compile.merged import suits, table_semantics
 from ontological.compile.models import ColumnAttributeSpec, TableKeys, TermProposal
-from ontological.compile.packing import PlannedTable, plan
+from ontological.compile.packing import PlannedTable, TableCalls, plan
 from ontological.compile.semantic_fk import SemanticFks, resolve_semantic_fks
 from ontological.compile.sql_attributes import SqlAttributes, suggest_sql_attributes
 from ontological.compile.synonyms import extract_synonyms_pack
@@ -103,7 +103,7 @@ from ontological.embed.search import dense_search, semantic_vdb
 from ontological.embed.semantic import Synced, sync_database
 from ontological.jobs import store as job_store
 from ontological.jobs.active import ActiveJobs
-from ontological.llm.calls import call_scope
+from ontological.llm.calls import call_scope, table_scope
 from ontological.pii.service import (
     PiiPropagation,
     PiiTagging,
@@ -125,9 +125,6 @@ RETRY_WITHOUT_RESET_S = 60
 STAGES = ("table_keys", "column_descriptions", "table_terms", "table_synonyms")
 # What the semantic-FK stage's calls are logged for: the database, not a pack.
 FK_SCOPE = "semantic FKs"
-
-# The `compile.table_calls` setting (ARCHITECTURE.md §6.4).
-type TableCalls = Literal["split", "merged"]
 
 
 @dataclass(frozen=True)
@@ -194,6 +191,10 @@ class Checkpoint:
         """Joins the caller's write transaction, when there is one."""
         job_store.finish_step(self.job_id, self.position, state, detail)
 
+    def runs(self, table_calls: TableCalls) -> None:
+        """The option the table is asked with, for the Jobs screen."""
+        job_store.mark_step(self.job_id, self.position, table_calls)
+
 
 async def compile_database(
     database_name: str,
@@ -207,15 +208,17 @@ async def compile_database(
     hold: asyncio.Event | None = None,
     pool: ParsePool | None = None,
     pii: bool = False,
-    table_calls: TableCalls = "split",
+    table_calls: TableCalls | None = None,
 ) -> Compiled:
     """Compile every table of `database_name` that has no Term yet, then run the post-stages
     (semantic FKs, SQL attributes, bridges, and PII when `pii` is on), then, given an
     `embedder`, sync the database's vectors in the semantic layer. `executor` holds the
     database's source. History fragments are extracted in `pool`, or in a pool of its own.
-    `table_calls` is the `compile.table_calls` setting (§6.4): `"split"` runs the four stages,
-    `"merged"` one `table_semantics` call a table. It applies to the tables this run compiles,
-    so a resumed job may take the other.
+    `table_calls` is the `compile.table_calls` option (§6.4): `"split"` runs the four stages,
+    `"merged"` one `table_semantics` call a table. It becomes the job's option for the tables
+    left, so a resumed job may take the other; None keeps the job's, `"split"` for a new one. The
+    job's option is read again before each pack, so a switch while it runs (`job_store.
+    set_table_calls`, from the estimate) applies from the next pack.
 
     Resumes the database's unfinished compile job, on the plan it began with, or starts one.
     A job paused when an earlier engine stopped waits out the rest of its pause first. `jobs`
@@ -226,7 +229,7 @@ async def compile_database(
     clock = clock or SystemClock()
     hold = hold or asyncio.Event()
     with (jobs or ActiveJobs()).track("compile", database_name):
-        job = await asyncio.to_thread(_open_or_start, database_name)
+        job = await asyncio.to_thread(_open_or_start, database_name, table_calls)
         if job.state == "paused" and job.paused_until is not None:
             logger.info("compile job %d is paused until %s", job.id, job.paused_until)
             await _wait_until(clock, job.paused_until, hold)
@@ -242,7 +245,7 @@ async def compile_database(
             len(pending),
             database_name,
             len(packs),
-            table_calls,
+            job.table_calls,
         )
         done: list[CompiledTable] = []
         left = len(pending)
@@ -263,7 +266,8 @@ async def compile_database(
             if not work:
                 continue
             names = ", ".join(str(table["name"]) for table, _ in work)
-            logger.info("[pack %d/%d] %s", number, len(packs), names)
+            option = await asyncio.to_thread(job_store.table_calls_of, job.id)
+            logger.info("[pack %d/%d, %s] %s", number, len(packs), option, names)
             with call_scope(job.id, members[0][0].pack, names):
                 compiled = await _answered(
                     job.id,
@@ -275,7 +279,7 @@ async def compile_database(
                         executor,
                         gateway,
                         probe_distinct_values=probe_distinct_values,
-                        table_calls=table_calls,
+                        table_calls=option,
                     ),
                 )
             if isinstance(compiled, ClaudeUnavailable):
@@ -499,11 +503,15 @@ async def _wait_until(clock: Clock, until: datetime, hold: asyncio.Event) -> Non
         sleep.result()  # raises what the sleep raised
 
 
-def _open_or_start(database_name: str) -> job_store.Job:
-    """The database's unfinished compile job, or a new one planned from its work list."""
+def _open_or_start(database_name: str, table_calls: TableCalls | None) -> job_store.Job:
+    """The database's unfinished compile job, or a new one planned from its work list, with
+    `table_calls` as its option when given."""
     found = job_store.open_job("compile", database_name)
     if found is not None:
         logger.info("resuming compile job %d of %s (%s)", found.id, database_name, found.state)
+        if table_calls is not None and table_calls != found.table_calls:
+            job_store.set_table_calls(found.id, table_calls)
+            return replace(found, table_calls=table_calls)
         return found
     tables = fetch_all_tables_without_term(database_name)
     columns = _column_counts([str(t["id"]) for t in tables])
@@ -516,7 +524,9 @@ def _open_or_start(database_name: str) -> job_store.Job:
         )
         for t in tables
     ]
-    return job_store.start_job("compile", database_name, plan(database_name, planned))
+    return job_store.start_job(
+        "compile", database_name, plan(database_name, planned), table_calls or "split"
+    )
 
 
 def _column_counts(table_ids: list[str]) -> dict[str, int]:
@@ -599,7 +609,9 @@ async def compile_pack(
 
     live = [t for t in work if t.skipped is None]
     if table_calls == "merged":
+        await _runs([t for t in live if suits(t.ctx)], "merged")
         live = await _merged_stage(gateway, live)
+    await _runs(live, "split")
     await _split_stages(gateway, live)
     return await asyncio.to_thread(_commit_pack, work)
 
@@ -640,12 +652,20 @@ async def _split_stages(gateway: Structured, live: list[_Table]) -> None:
                 term.synonyms = words
 
 
+async def _runs(tables: list[_Table], table_calls: TableCalls) -> None:
+    """Record the option each table is asked with on its step."""
+    marked = [t.checkpoint for t in tables if t.checkpoint is not None]
+    if marked:
+        await asyncio.to_thread(lambda: [c.runs(table_calls) for c in marked])
+
+
 async def _merged_stage(gateway: Structured, live: list[_Table]) -> list[_Table]:
-    """One `table_semantics` call for each table; returns the tables left to the split stages
-    (`compile.merged`)."""
+    """One `table_semantics` call for each table, logged under the table's own name; returns
+    the tables left to the split stages (`compile.merged`)."""
     left: list[_Table] = []
     for t in live:
-        found = await table_semantics(gateway, t.table, t.ctx, t.profiling)
+        with table_scope(t.name):
+            found = await table_semantics(gateway, t.table, t.ctx, t.profiling)
         if found is None:
             left.append(t)
             continue

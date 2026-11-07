@@ -4,12 +4,17 @@ import {
   clockTime,
   currentJob,
   earlierLine,
+  estimateLine,
+  estimateRange,
   isUnfinished,
   jobBanner,
   logTime,
   jobTitle,
   modelName,
   newTablePrompts,
+  OPTION_NAME,
+  OPTION_SHAPE,
+  optionsShown,
   segments,
   stageLegend,
   stateWord,
@@ -17,8 +22,8 @@ import {
   whenShort,
   type SegmentTone
 } from './format'
-import type { CallRow, JobDetail, JobSummary } from './types'
-import { useJobAction, useJobDetail } from './useJobs'
+import type { CallRow, Estimate, JobDetail, JobSummary, TableCalls } from './types'
+import { useEstimate, useJobAction, useJobDetail } from './useJobs'
 
 export interface JobsScreenState {
   loaded: boolean
@@ -28,6 +33,8 @@ export interface JobsScreenState {
   select(jobId: number): void
   detail: JobDetail | null
   calls: CallRow[]
+  /** What the shown compile has left, with split and merged; null for a finished one. */
+  estimate: Estimate | null
   act(path: string, body?: unknown): Promise<void>
   busy: boolean
   error: string | null
@@ -44,9 +51,12 @@ export function useJobsScreen(jobs: JobSummary[], loaded: boolean, open: boolean
   const [now, setNow] = useState(() => Date.now())
   const shown = jobs.find((j) => j.id === picked) ?? currentJob(jobs)
   const { detail, calls, refresh } = useJobDetail(open && shown ? shown.id : null, shown ? isUnfinished(shown) : false)
+  const left = open && shown && shown.kind === 'compile' && isUnfinished(shown) ? shown.database_name : null
+  const { estimate, refresh: refreshEstimate } = useEstimate(left, shown?.state === 'running')
   const { act, busy, error } = useJobAction(() => {
     refreshJobs()
     refresh()
+    refreshEstimate()
   })
 
   // A countdown in the banner moves on by the minute.
@@ -71,6 +81,7 @@ export function useJobsScreen(jobs: JobSummary[], loaded: boolean, open: boolean
     select: setPicked,
     detail,
     calls,
+    estimate,
     act,
     busy,
     error,
@@ -138,40 +149,44 @@ const TONE: Record<SegmentTone, string> = {
 }
 
 function Tiles({ detail }: { detail: JobDetail }) {
-  const stages = Math.max(1, detail.stages.length)
   return (
     <ul
       aria-label="Tables"
       className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2 p-0"
       data-testid="table-tiles"
     >
-      {detail.tables.map((table) => (
-        <li
-          key={table.name}
-          data-state={table.state}
-          className="flex flex-col gap-1.5 rounded-lg border border-border-subtle bg-rail px-2.5 py-2"
-        >
-          <span className="truncate font-mono text-xs text-text" title={table.name}>
-            {table.name}
-          </span>
-          <span
-            role="img"
-            aria-label={tileLabel(table, stages)}
-            className="grid gap-[3px]"
-            style={{ gridTemplateColumns: `repeat(${stages}, minmax(0, 1fr))` }}
+      {detail.tables.map((table) => {
+        const stages = Math.max(1, detail.stages[table.table_calls].length)
+        return (
+          <li
+            key={table.name}
+            data-state={table.state}
+            data-table-calls={table.table_calls}
+            className="flex flex-col gap-1.5 rounded-lg border border-border-subtle bg-rail px-2.5 py-2"
           >
-            {segments(table, stages, detail.job.state).map((tone, i) => (
-              <span key={i} data-tone={tone} className={`h-[5px] rounded-[2px] ${TONE[tone]}`} />
-            ))}
-          </span>
-          {table.state === 'skipped' && <span className="text-[11px] text-text-muted">skipped</span>}
-        </li>
-      ))}
+            <span className="truncate font-mono text-xs text-text" title={table.name}>
+              {table.name}
+            </span>
+            <span
+              role="img"
+              aria-label={tileLabel(table, stages)}
+              className="grid gap-[3px]"
+              style={{ gridTemplateColumns: `repeat(${stages}, minmax(0, 1fr))` }}
+            >
+              {segments(table, stages, detail.job.state).map((tone, i) => (
+                <span key={i} data-tone={tone} className={`h-[5px] rounded-[2px] ${TONE[tone]}`} />
+              ))}
+            </span>
+            {table.state === 'skipped' && <span className="text-[11px] text-text-muted">skipped</span>}
+          </li>
+        )
+      })}
     </ul>
   )
 }
 
-function Legend({ stages }: { stages: string[] }) {
+function Legend({ detail }: { detail: JobDetail }) {
+  const options = optionsShown(detail.tables, detail.job.table_calls)
   const swatch = (tone: SegmentTone, label: string) => (
     <span className="flex items-center gap-1.5">
       <span aria-hidden="true" className={`size-3 rounded-[3px] ${TONE[tone]}`} />
@@ -183,7 +198,15 @@ function Legend({ stages }: { stages: string[] }) {
       {swatch('done', 'Done')}
       {swatch('checkpointed', 'Stopped mid-table (checkpointed)')}
       {swatch('queued', 'Queued')}
-      <span className="text-text-muted">Each bar: {stageLegend(stages)}</span>
+      {options.length === 1 ? (
+        <span className="text-text-muted">Each bar: {stageLegend(detail.stages[options[0]!])}</span>
+      ) : (
+        options.map((o) => (
+          <span key={o} className="text-text-muted">
+            {OPTION_NAME[o]} tables: {stageLegend(detail.stages[o])}
+          </span>
+        ))
+      )}
     </div>
   )
 }
@@ -202,7 +225,7 @@ function JobCard({ state, job }: { state: JobsScreenState; job: JobSummary }) {
   const holding = state.holding.has(job.id)
   const meta =
     job.kind === 'compile'
-      ? `Split calls · started ${clockTime(job.created_at)} · ${holding ? 'pausing after the current table' : stateWord(job)}`
+      ? `${OPTION_NAME[job.table_calls]} calls · started ${clockTime(job.created_at)} · ${holding ? 'pausing after the current table' : stateWord(job)}`
       : `${job.state === 'stopped' ? `Failed: ${job.error ?? 'no reason given'}` : 'No Claude usage'} · ${clockTime(job.created_at)}`
   return (
     <article
@@ -240,7 +263,7 @@ function JobCard({ state, job }: { state: JobsScreenState; job: JobSummary }) {
       </div>
       {job.kind === 'compile' && detail && (
         <>
-          <Legend stages={detail.stages} />
+          <Legend detail={detail} />
           {detail.tables.length > 0 ? (
             <Tiles detail={detail} />
           ) : (
@@ -257,6 +280,88 @@ function JobCard({ state, job }: { state: JobsScreenState; job: JobSummary }) {
           ))}
         </ul>
       )}
+    </article>
+  )
+}
+
+/**
+ * Split and merged side by side as a radio pair (§5.4), each with its calls, time and usage.
+ * `chosen` is the option picked; `onChoose` picks another.
+ */
+function OptionChoice({
+  estimate,
+  chosen,
+  onChoose,
+  disabled,
+  current
+}: {
+  estimate: Estimate
+  chosen: TableCalls
+  onChoose(option: TableCalls): void
+  disabled: boolean
+  current?: TableCalls
+}) {
+  return (
+    <div role="radiogroup" aria-label="Call shape" className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2.5">
+      {(['split', 'merged'] as const).map((option) => {
+        const picked = option === chosen
+        const figures = estimate[option]
+        return (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={picked}
+            disabled={disabled}
+            data-option={option}
+            title={estimateRange(figures)}
+            onClick={() => {
+              if (!picked) onChoose(option)
+            }}
+            className={`flex flex-col items-start gap-1 rounded-[10px] px-3.5 py-3 text-left text-text disabled:opacity-60 ${
+              picked ? 'border-2 border-accent bg-accent-soft' : 'border border-border bg-surface hover:bg-nav-hover'
+            }`}
+          >
+            <span className="font-semibold">
+              {OPTION_NAME[option]}
+              {current === option ? ' · current' : ''}
+            </span>
+            <span className="text-[13px] text-text-2 tabular-nums">{estimateLine(figures)}</span>
+            <span className="text-xs text-text-muted">{OPTION_SHAPE[option]}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+const ROUGH = 'Rough: from measured calls, before Claude has seen your tables'
+
+/** The estimate for what an unfinished compile has left; switching applies from its next pack. */
+function EstimateCard({ state, job, estimate }: { state: JobsScreenState; job: JobSummary; estimate: Estimate }) {
+  if (estimate.tables === 0) return null
+  return (
+    <article
+      aria-label="Estimate"
+      data-testid="estimate-card"
+      className="flex flex-col gap-3.5 rounded-[14px] border border-border bg-surface px-[22px] py-[18px]"
+    >
+      <div className="flex flex-wrap items-baseline gap-2.5">
+        <h2 className="m-0 flex-[1_1_240px] text-[15px] font-semibold">
+          Remaining {estimate.tables} {estimate.tables === 1 ? 'table' : 'tables'}: estimate
+        </h2>
+        <span className="text-xs text-text-muted">{ROUGH}</span>
+      </div>
+      <OptionChoice
+        estimate={estimate}
+        chosen={job.table_calls}
+        current={job.table_calls}
+        disabled={state.busy}
+        onChoose={(option) => void state.act(`/jobs/${job.id}/table_calls`, { table_calls: option })}
+      />
+      <p className="m-0 text-xs text-text-muted">
+        Switching applies to the tables not started yet{job.state === 'running' ? ', from the next one' : ''}.
+      </p>
     </article>
   )
 }
@@ -282,6 +387,7 @@ export function JobsMain({ state }: { state: JobsScreenState }) {
         <>
           <Banner state={state} job={job} />
           <JobCard state={state} job={job} />
+          {state.estimate && <EstimateCard state={state} job={job} estimate={state.estimate} />}
         </>
       ) : (
         <div className="flex flex-col gap-1 rounded-xl border border-dashed border-text-faint px-6 py-8" data-testid="jobs-empty">
@@ -301,6 +407,8 @@ const SECTION = 'm-0 text-xs font-semibold tracking-[0.06em] text-text-muted upp
 
 function NewTables({ state, refresh }: { state: JobsScreenState; refresh: JobSummary }) {
   const n = refresh.new_tables.length
+  const { estimate } = useEstimate(refresh.database_name, false)
+  const [chosen, setChosen] = useState<TableCalls>('split')
   return (
     <div
       data-testid="new-tables"
@@ -313,11 +421,14 @@ function NewTables({ state, refresh }: { state: JobsScreenState; refresh: JobSum
         Found when metadata refreshed at {clockTime(refresh.created_at)}. That refresh used no Claude quota. Compiling{' '}
         {n === 1 ? 'it' : 'them'} will.
       </span>
+      {estimate && estimate.tables > 0 && (
+        <OptionChoice estimate={estimate} chosen={chosen} onChoose={setChosen} disabled={state.busy} />
+      )}
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
           disabled={state.busy}
-          onClick={() => void state.act('/jobs/compile', { database_name: refresh.database_name })}
+          onClick={() => void state.act('/jobs/compile', { database_name: refresh.database_name, table_calls: chosen })}
           className="min-h-9 rounded-lg bg-accent-solid px-3 font-medium text-white disabled:opacity-60"
         >
           Compile {n === 1 ? 'it' : `${n} tables`}

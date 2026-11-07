@@ -3,11 +3,15 @@ and ops.llm_call.
 
 - A job's summary: its state, its tables done of all, the Claude calls it spawned and the calls
   the cache answered, and for a refresh, the new tables it found.
-- A compile's tables, each with how many of its stages (`compile.split.STAGES`) are done. A table
-  whose step is done has done them all. One still pending has done the stages its pack's latest
-  try got through, read from the calls logged under the pack (`stages_done`): compile asks each
-  stage once for a pack's tables, and the gateway's cache keeps those answers, so a resumed pack
-  gets them back without spending quota.
+- A compile's tables, each with the option it ran with and how many of that option's stages
+  (`STAGES`) are done: split's four, or merged's one `table_semantics` call. A run can mix them,
+  since a resumed or switched job takes the other for the packs left and merged leaves some
+  tables to split, so each step records its own once its pack starts; a table whose pack hasn't
+  started shows the job's. A table whose step is done has done every stage. One still pending
+  has done the stages its pack's latest try got through, read from the calls logged under the
+  pack (`stages_done`), and for merged under the table's own name: compile asks each split stage
+  once for a pack's tables, and the gateway's cache keeps those answers, so a resumed pack gets
+  them back without spending quota.
 - A job's call log, newest first: time, task, table, model, and how it ended.
 
 Every function blocks; async callers run them in a thread.
@@ -26,12 +30,16 @@ from typing import Any
 from pydantic import BaseModel
 
 from auto_ontology.dal.session import store
-from ontological.compile.split import STAGES
+from ontological.compile.merged import TASK as MERGED_TASK
+from ontological.compile.packing import TableCalls
+from ontological.compile.split import STAGES as SPLIT_STAGES
 from ontological.jobs import store as job_store
 from ontological.llm.calls import Outcome
 
 JOBS_SHOWN = 20  # the current job and the earlier runs in the rail
 CALLS_SHOWN = 50
+# Each option's stages for a table, in the order their calls run: the tile's segments.
+STAGES: dict[TableCalls, tuple[str, ...]] = {"split": SPLIT_STAGES, "merged": (MERGED_TASK,)}
 
 
 class JobSummary(BaseModel):
@@ -49,18 +57,20 @@ class JobSummary(BaseModel):
     cache_hits: int  # calls the cache answered
     new_tables: list[str]  # a refresh's new tables, `schema.table`
     dismissed: bool  # the person put off the new-tables prompt
+    table_calls: TableCalls  # a compile's option for the tables it has left
 
 
 class TableProgress(BaseModel):
     name: str
     state: job_store.StepState
-    stages_done: int
+    table_calls: TableCalls  # the option it ran with, or will
+    stages_done: int  # of `JobDetail.stages[table_calls]`
     skipped: str | None  # why nothing was written, for a skipped table
 
 
 class JobDetail(BaseModel):
     job: JobSummary
-    stages: list[str]  # the route names of a table's stages, in order
+    stages: dict[TableCalls, list[str]]  # each option's stages, by route name, in order
     tables: list[TableProgress]
 
 
@@ -85,7 +95,7 @@ class StageCall(BaseModel):
 _FAILED: frozenset[str] = frozenset({"limited", "error"})
 
 
-def stages_done(calls: Sequence[StageCall], stages: Sequence[str] = STAGES) -> int:
+def stages_done(calls: Sequence[StageCall], stages: Sequence[str] = SPLIT_STAGES) -> int:
     """How many of a pending table's stages, from the first, its latest try got through.
 
     A try ends where Claude didn't answer (`limited`, `error`); the job pauses or stops there and
@@ -135,27 +145,42 @@ def detail(job_id: int) -> JobDetail | None:
         return None
     steps = job_store.job_steps(job_id)
     pending = sorted({s.pack for s in steps if s.state == "pending"})
-    calls: dict[int, list[StageCall]] = {}
+    calls: dict[int, list[tuple[str | None, StageCall]]] = {}
     if pending:
         rows = store().query_read(
-            "SELECT pack, task, outcome, attempt FROM ops.llm_call "
+            "SELECT pack, table_name, task, outcome, attempt FROM ops.llm_call "
             "WHERE job_id = :job AND pack = ANY(:packs) ORDER BY id",
             {"job": job_id, "packs": pending},
         )
         for row in rows:
-            calls.setdefault(int(row["pack"]), []).append(
-                StageCall(task=row["task"], outcome=row["outcome"], attempt=row["attempt"])
-            )
-    tables = [
-        TableProgress(
-            name=s.table_name,
-            state=s.state,
-            stages_done=(len(STAGES) if s.state == "done" else stages_done(calls.get(s.pack, []))),
-            skipped=(s.detail or {}).get("skipped") if s.state == "skipped" else None,
+            call = StageCall(task=row["task"], outcome=row["outcome"], attempt=row["attempt"])
+            calls.setdefault(int(row["pack"]), []).append((row["table_name"], call))
+
+    def progress(step: job_store.Step) -> TableProgress:
+        option = step.table_calls or found.table_calls
+        stages = STAGES[option]
+        if step.state == "done":
+            done = len(stages)
+        else:
+            mine = [
+                call
+                for table, call in calls.get(step.pack, [])
+                if option == "split" or table == step.table_name
+            ]
+            done = stages_done(mine, stages)
+        return TableProgress(
+            name=step.table_name,
+            state=step.state,
+            table_calls=option,
+            stages_done=done,
+            skipped=(step.detail or {}).get("skipped") if step.state == "skipped" else None,
         )
-        for s in steps
-    ]
-    return JobDetail(job=found, stages=list(STAGES), tables=tables)
+
+    return JobDetail(
+        job=found,
+        stages={option: list(names) for option, names in STAGES.items()},
+        tables=[progress(s) for s in steps],
+    )
 
 
 def calls(job_id: int, limit: int = CALLS_SHOWN) -> list[CallRow]:
@@ -207,6 +232,7 @@ def _summarize(jobs: list[job_store.Job]) -> list[JobSummary]:
             cache_hits=int(spawned.get(j.id, {}).get("hits", 0)),
             new_tables=list((j.result or {}).get("new_tables", [])),
             dismissed=j.dismissed_at is not None,
+            table_calls=j.table_calls,
         )
         for j in jobs
     ]

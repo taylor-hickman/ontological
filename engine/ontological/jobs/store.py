@@ -9,7 +9,9 @@ with the tables it found in `result`; the Jobs screen offers to compile them unt
 dismisses the prompt. A crashed job is left `running`, which is why the engine counts the jobs it
 is running in memory (`ActiveJobs`), never from this table.
 
-A compile's steps are its tables, each `pending` until it is `done` or `skipped`. A `reembed`
+A compile's steps are its tables, each `pending` until it is `done` or `skipped`. A compile job
+keeps the option its remaining tables take, split or merged (`table_calls`), which the person can
+switch while it runs, and each step the option its table ran with, once its pack starts. A `reembed`
 job (ontological/embed/reembed.py) has no steps. Writes go through the DAL's session, so
 `finish_step` inside a `write_transaction` commits with whatever else the block writes: a
 compiled table's Terms and its checkpoint commit together or not at all. Every call blocks; async
@@ -29,7 +31,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from auto_ontology.dal.session import store, write_transaction
-from ontological.compile.packing import PlannedStep
+from ontological.compile.packing import PlannedStep, TableCalls
 
 Kind = Literal["compile", "ingest", "reembed"]
 JobState = Literal["running", "paused", "held", "stopped", "done"]
@@ -48,6 +50,7 @@ class Job:
     finished_at: datetime | None
     result: dict[str, Any] | None = None  # an ingest's {"new_tables": [...]}
     dismissed_at: datetime | None = None  # when the person put off its new-tables prompt
+    table_calls: TableCalls = "split"  # a compile's option for its remaining tables
 
 
 @dataclass(frozen=True)
@@ -59,11 +62,12 @@ class Step:
     state: StepState
     detail: dict[str, Any] | None
     finished_at: datetime | None
+    table_calls: TableCalls | None = None  # the option its table ran with; None until it starts
 
 
 _JOB = (
     "SELECT id, kind, database_name, state, paused_until, error, created_at, finished_at, "
-    "result, dismissed_at FROM ops.job"
+    "result, dismissed_at, table_calls FROM ops.job"
 )
 
 
@@ -128,13 +132,18 @@ def dismiss(job_id: int) -> None:
     )
 
 
-def start_job(kind: Kind, database_name: str, steps: Sequence[PlannedStep]) -> Job:
+def start_job(
+    kind: Kind,
+    database_name: str,
+    steps: Sequence[PlannedStep],
+    table_calls: TableCalls = "split",
+) -> Job:
     """A new running job with these steps, all pending."""
     with write_transaction():
         [row] = store().query_write(
-            "INSERT INTO ops.job (kind, database_name, state) VALUES (:kind, :db, 'running') "
-            "RETURNING id",
-            {"kind": kind, "db": database_name},
+            "INSERT INTO ops.job (kind, database_name, state, table_calls) "
+            "VALUES (:kind, :db, 'running', :calls) RETURNING id",
+            {"kind": kind, "db": database_name, "calls": table_calls},
         )
         job_id = int(row["id"])
         for step in steps:
@@ -154,7 +163,7 @@ def start_job(kind: Kind, database_name: str, steps: Sequence[PlannedStep]) -> J
 
 def job_steps(job_id: int) -> list[Step]:
     rows = store().query_read(
-        "SELECT position, table_id, table_name, pack, state, detail, finished_at "
+        "SELECT position, table_id, table_name, pack, state, detail, finished_at, table_calls "
         "FROM ops.job_step WHERE job_id = :job ORDER BY position",
         {"job": job_id},
     )
@@ -168,6 +177,27 @@ def finish_step(
         "UPDATE ops.job_step SET state = :state, detail = CAST(:detail AS jsonb), "
         "finished_at = now() WHERE job_id = :job AND position = :position",
         {"job": job_id, "position": position, "state": state, "detail": json.dumps(detail)},
+    )
+
+
+def set_table_calls(job_id: int, table_calls: TableCalls) -> None:
+    """The option the job's remaining tables take, from its next pack."""
+    store().query_write(
+        "UPDATE ops.job SET table_calls = :calls, updated_at = now() WHERE id = :id",
+        {"id": job_id, "calls": table_calls},
+    )
+
+
+def table_calls_of(job_id: int) -> TableCalls:
+    [row] = store().query_read("SELECT table_calls FROM ops.job WHERE id = :id", {"id": job_id})
+    return row["table_calls"]
+
+
+def mark_step(job_id: int, position: int, table_calls: TableCalls) -> None:
+    """The option the step's table runs with, as its pack asks about it."""
+    store().query_write(
+        "UPDATE ops.job_step SET table_calls = :calls WHERE job_id = :job AND position = :position",
+        {"job": job_id, "position": position, "calls": table_calls},
     )
 
 
