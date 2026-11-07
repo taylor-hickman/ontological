@@ -26,7 +26,8 @@ the tables with no Term yet: canonical order, and the packs small tables share
 4. `table_terms`: propose each table's Terms and assign every non-FK column to one, a table
    wider than 40 such columns in chunks of 40;
 5. `table_synonyms`: the alternate names each table's description writes out, for its Terms;
-6. write the Terms and their attributes, and mark the steps done, in one transaction.
+6. write the Terms and their attributes, and mark the steps done, in one transaction, logging
+   each field a recompile changes on them in ops.change_log as actor `compile`.
 
 Each stage asks once for the pack's tables that have something to ask (`compile.packed`); a
 table that is alone in that, and a wide table, which is a pack of its own, gets upstream's prompt
@@ -98,6 +99,7 @@ from ontological.compile.semantic_fk import SemanticFks, resolve_semantic_fks
 from ontological.compile.sql_attributes import SqlAttributes, suggest_sql_attributes
 from ontological.compile.synonyms import extract_synonyms_pack
 from ontological.compile.terms import extract_terms_pack
+from ontological.curate.edits import Row, fields_of, log_write
 from ontological.embed.embedder import LocalEmbedder
 from ontological.embed.search import dense_search, semantic_vdb
 from ontological.embed.semantic import Synced, sync_database
@@ -737,8 +739,10 @@ def _commit(
     table_id: str, terms: list[TermProposal], specs: list[ColumnAttributeSpec]
 ) -> tuple[list[str], list[str]]:
     """Write the Terms and their attributes. A Term whose name another table holds is written
-    under a qualified name."""
+    under a qualified name. What a recompile changes on the table's Terms and attributes is
+    logged in ops.change_log as actor `compile`, an edit per Term; what it creates isn't."""
     spec_by_column = {spec.source_column: spec for spec in specs}
+    before = _logged_fields(table_id)
     written: list[str] = []
     attrs: list[str] = []
     for term in terms:
@@ -748,13 +752,14 @@ def _commit(
         persisted = upsert_table_term(term.name, term.description, table_id, synonyms=term.synonyms)
         if persisted is None:
             continue
-        _, term_name = persisted
+        term_id, term_name = persisted
         if term_name != term.name:
             logger.info("qualified colliding Term name %r as %r", term.name, term_name)
         written.append(term_name)
+        attribute_ids: list[str] = []
         for assignment in assignments:
             spec = spec_by_column[assignment.source_column]
-            merge_column_attribute(
+            attribute_id = merge_column_attribute(
                 term_name=term_name,
                 table_id=table_id,
                 source_column=spec.source_column,
@@ -762,5 +767,21 @@ def _commit(
                 datatype=spec.datatype,
                 description=spec.description,
             )
+            if attribute_id is not None:
+                attribute_ids.append(attribute_id)
             attrs.append(spec.display_name)
+        log_write(term_id, attribute_ids, before, actor="compile")
     return written, attrs
+
+
+def _logged_fields(table_id: str) -> dict[Row, dict[str, Any]]:
+    """The fields of the table's Terms and attributes before the compile writes them."""
+    terms = store().query_read(
+        "SELECT term_id FROM table__term WHERE table_id = :id", {"id": table_id}
+    )
+    attributes = store().query_read(
+        "SELECT id FROM column_attribute WHERE table_id = :id", {"id": table_id}
+    )
+    return fields_of("term", [str(r["term_id"]) for r in terms]) | fields_of(
+        "column_attribute", [str(r["id"]) for r in attributes]
+    )
