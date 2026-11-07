@@ -1,4 +1,4 @@
-"""The verifier: BIRD's set rule, the failure codes, and the dialect-artifact flag."""
+"""The verifier: BIRD's set rule, the failure codes, and the dialect-artifact tolerance."""
 
 from __future__ import annotations
 
@@ -43,18 +43,44 @@ def test_a_wrong_result_keeps_a_sample_of_both_sides() -> None:
     json.dumps(s.to_json())
 
 
-def test_rows_that_agree_after_normalization_are_a_dialect_artifact_and_still_miss() -> None:
-    # Postgres's numeric against DuckDB's double, and SQLite's text date against DuckDB's DATE.
+def test_rows_that_agree_under_the_tolerance_rule_match_and_are_flagged() -> None:
+    # The M1.10 review: each artifact the smoke runs flagged was the right answer.
     for gold, pred in [
+        # Postgres's numeric against DuckDB's double.
         ([(Decimal("0.1"),)], [(0.1,)]),
         ([(Decimal("33.3333333333"),)], [(33.33333333333333,)]),
-        ([("2012-03-01",)], [(dt.date(2012, 3, 1),)]),
+        # SQLite's double against DuckDB's float32, which is what `CAST(x AS REAL)` gives (bird:3).
+        ([(0.5714285714285714,)], [(0.5714285969734192,)]),
+        # SQLite's text dates against DuckDB's DATE and TIMESTAMP (bird:212).
+        ([(8489, "1993-09-18")], [(8489, dt.date(1993, 9, 18))]),
         ([("2012-03-01 10:00:00",)], [(dt.datetime(2012, 3, 1, 10),)]),
     ]:
         s = score(gold, pred)
-        assert not s.match and s.dialect_artifact, (gold, pred)
-    # SQLite's integer division against DuckDB's is a different answer, not an artifact.
-    assert not score([(3,)], [(3.5,)]).dialect_artifact
+        assert s.match and s.failure is None and s.dialect_artifact, (gold, pred)
+        assert s.gold_sample and s.pred_sample  # kept, so the report can list it
+    # An exact match isn't an artifact.
+    assert not score([(1,)], [(1.0,)]).dialect_artifact
+
+
+def test_the_tolerance_rule_keeps_whole_numbers_exact() -> None:
+    # Counts and sums agree to 6 significant digits without being the same answer.
+    for gold, pred in [
+        ([(1234567,)], [(1234568,)]),
+        ([(1234567,)], [(1234568.0,)]),
+        ([(Decimal("207324"),)], [(207325,)]),
+    ]:
+        s = score(gold, pred)
+        assert not s.match and not s.dialect_artifact, (gold, pred)
+    # Integral values of different types are already equal under BIRD's rule.
+    assert score([(Decimal("207324.00"),)], [(207324,)]).match
+
+
+def test_a_different_answer_is_still_a_miss() -> None:
+    # SQLite's integer division against DuckDB's: a different answer, not an artifact.
+    s = score([(3,)], [(3.5,)])
+    assert not s.match and not s.dialect_artifact
+    assert not score([(0.571428,)], [(0.571438,)]).match
+    assert not score([("1993-09-18",)], [(dt.date(1993, 9, 19),)]).match
 
 
 def test_failures_say_why() -> None:

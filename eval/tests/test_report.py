@@ -146,6 +146,16 @@ def test_the_report_shows_accuracy_flips_the_gate_usage_and_models() -> None:
     assert "Not pinned" not in md and "Not a score" not in md
 
 
+def test_the_report_counts_tolerated_matches_and_names_them() -> None:
+    run = a_run()
+    run["agent"][3]["score"] = scored(True, artifact=True)
+    md = report.markdown(run)
+    assert "| All | 75.0% (3/4) |" in md
+    assert "## Dialect artifacts (1)" in md and "- bird:11 (financial): match" in md
+    # A run scored before the M1.10 rule kept its artifacts as misses, and still reads so.
+    assert "- bird:11 (financial): wrong_result" in report.markdown(a_run())
+
+
 def test_a_run_mostly_without_answers_is_not_a_score() -> None:
     run = a_run()
     for r in run["agent"][:2]:

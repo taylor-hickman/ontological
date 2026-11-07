@@ -12,16 +12,21 @@ What differs from the port:
   agent's SQL through Ontological's source executor, on DuckDB. Each query gets its own time
   limit instead of BIRD's shared one; every gold query in the sets runs well inside it (M0.8).
   A gold query that fails anyway scores zero and stays in the denominator, as BIRD scores it.
-- **Dialect artifacts.** SQLite and DuckDB differ on some semantics, so a mismatch whose rows
-  agree after normalization (`normalized`: numbers to 6 significant digits, dates and times to
-  ISO text) is flagged `dialect_artifact`. It still scores zero: these get one hand review in
-  E4 and a fixed tolerance rule after that.
+- **Dialect artifacts.** SQLite, Postgres and DuckDB return some answers as different types, so
+  a mismatch whose rows agree under the tolerance rule (`normalized`) scores as a match and is
+  flagged `dialect_artifact`, so the report lists it. The rule came from M1.10's hand review of
+  what the first smoke runs flagged (BUILD_PLAN.md, Scoring and runs): dates and times compare
+  as ISO text (SQLite keeps them as text, DuckDB reads them as DATE), whole numbers compare
+  exactly, and other numbers to 6 significant digits (DuckDB's `CAST(x AS REAL)` is float32;
+  Postgres's numeric against DuckDB's double). Rounding can split two values on either side of
+  a 6-digit boundary, which leaves a true artifact a miss, never a wrong answer a match.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import decimal
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -77,12 +82,16 @@ def result_sets_match(gold: Rows, pred: Rows) -> bool:
 
 
 def normalize(value: Any) -> Any:
-    """A cell as the dialect-artifact check compares it."""
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, int | float | decimal.Decimal):
+    """A cell as the tolerance rule compares it."""
+    if isinstance(value, bool | int):
+        return int(value)
+    if isinstance(value, float | decimal.Decimal):
         f = float(value)
-        return f if f != f else float(f"{f:.6g}")  # NaN stays NaN
+        if not math.isfinite(f):
+            return f  # NaN and the infinities stay as they are
+        if value == int(value):
+            return int(value)  # a whole number is compared exactly
+        return float(f"{f:.6g}")
     if isinstance(value, dt.datetime):
         return value.isoformat(sep=" ")
     if isinstance(value, dt.date | dt.time):
@@ -114,10 +123,11 @@ def score(
         return Scored(False, "gold_error", pred_rows=len(pred), error=_message(gold))
     if result_sets_match(gold, pred):
         return Scored(True, None, gold_rows=len(gold), pred_rows=len(pred))
+    tolerated = result_sets_match(normalized(gold), normalized(pred))
     return Scored(
-        False,
-        "wrong_result",
-        dialect_artifact=result_sets_match(normalized(gold), normalized(pred)),
+        tolerated,
+        None if tolerated else "wrong_result",
+        dialect_artifact=tolerated,
         gold_rows=len(gold),
         pred_rows=len(pred),
         gold_sample=sample(gold),
