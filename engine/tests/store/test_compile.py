@@ -96,7 +96,12 @@ PLAYLIST_TRACKS = (
 
 def claude(task: str, user: str) -> dict[str, Any] | NoAnswer | None:
     """What the scripted Claude says to each stage: an entry per table to a packed call, which
-    leaves out a table whose own answer would be invalid."""
+    leaves out a table whose own answer would be invalid. It passes on every semantic FK."""
+    if task == "semantic_fk_pick":
+        named = re.findall(r"^Foreign-key column: (.+)$", user, flags=re.M)
+        if len(named) == 1:
+            return {"selected_id": None}
+        return {"columns": [{"column": c, "selected_id": None} for c in named]}
     if task == "bridge_sql":
         assert "Bridge table: main.PlaylistTrack" in user, user
         return {
@@ -238,7 +243,7 @@ def test_terms_and_attributes_are_written_for_every_non_fk_column(
     ]
 
 
-def test_semantic_fks_come_from_declared_fks_only(
+def test_without_an_embedder_semantic_fks_come_from_declared_fks_only(
     compiled: tuple[Compiled, ScriptedGateway, pg.Layout],
 ) -> None:
     got, _, store = compiled
@@ -265,10 +270,10 @@ def test_semantic_fks_come_from_declared_fks_only(
         "Track.GenreId -> Genre.GenreId true",
         "Track.MediaTypeId -> MediaType.MediaTypeId true",
     ]
-    # Employee.ReportsTo references its own table; Track.Composer has no declared FK, and
-    # inferring one is M3.4's
+    # Employee.ReportsTo references its own table; Track.Composer has no declared FK, and with
+    # no embedder to search for its candidates, it gets none
     assert got.semantic_fks == SemanticFks(
-        created=10, self_references=1, no_attribute=0, undeclared=1
+        declared=10, self_references=1, inferred=0, matched=0, unresolved=1, pruned=0
     )
 
 
@@ -285,7 +290,8 @@ def test_a_second_compile_asks_nothing_and_writes_nothing(
 
     assert [(t.name, t.skipped) for t in again.tables] == [("PlaylistTrack", "no non-FK columns")]
     assert gateway.calls == []
-    assert again.semantic_fks is not None and again.semantic_fks.created == 0
+    # ReportsTo is still a self-reference, and Composer still has no candidates
+    assert again.semantic_fks == SemanticFks(0, 1, 0, 0, 1, 0)
     after = rows(
         store, "SELECT count(*) FROM term UNION ALL SELECT count(*) FROM column__semantic_fk"
     )
