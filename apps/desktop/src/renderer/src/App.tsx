@@ -5,6 +5,8 @@ import { Rail } from './components/Rail'
 import { ScreenBody } from './components/ScreenBody'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
+import { JobsRail, useJobsScreen } from './jobs/JobsScreen'
+import { useJobs } from './jobs/useJobs'
 import { FRAMES } from './screens'
 import { applyTheme } from './theme'
 import { useMediaQuery } from './useMediaQuery'
@@ -22,6 +24,8 @@ export function App(): React.JSX.Element {
   const searchRef = useRef<HTMLInputElement>(null)
   const narrowRef = useRef(narrow)
   narrowRef.current = narrow
+  const jobs = useJobs()
+  const jobsScreen = useJobsScreen(jobs.jobs, jobs.loaded, screen === 'jobs', jobs.refresh)
 
   const changeTheme = (next: ThemeSource): void => {
     setTheme(next)
@@ -66,7 +70,7 @@ export function App(): React.JSX.Element {
   return (
     <div className="flex h-full flex-col" data-screen={screen}>
       <div className="flex min-h-0 flex-1">
-        <Sidebar screen={screen} onNavigate={navigate} />
+        <Sidebar screen={screen} onNavigate={navigate} jobs={jobs.jobs} />
         <div className="flex min-w-0 flex-1 flex-col">
           <Header title={frame.title} screen={screen} searchRef={searchRef} />
           <div className="relative flex min-h-0 flex-1 flex-wrap overflow-auto">
@@ -74,18 +78,21 @@ export function App(): React.JSX.Element {
               screen={screen}
               frame={frame}
               theme={theme}
+              jobs={jobsScreen}
               onThemeChange={(next) => {
                 changeTheme(next)
                 void api.setTheme(next)
               }}
             />
             {showRail && frame.rail !== null && (
-              <Rail label={frame.rail} sheet={narrow} onClose={() => setSheetOpen(false)} />
+              <Rail label={frame.rail} sheet={narrow} onClose={() => setSheetOpen(false)}>
+                {screen === 'jobs' ? <JobsRail state={jobsScreen} /> : undefined}
+              </Rail>
             )}
           </div>
         </div>
       </div>
-      <StatusBar />
+      <StatusBar jobs={jobs.jobs} onOpenJobs={() => navigate('jobs')} />
     </div>
   )
 }

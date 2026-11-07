@@ -258,3 +258,39 @@ def test_a_logged_out_claude_stops_the_job_in_its_post_stages(
     done = asyncio.run(compile_database("chinook", executor, resumed))
     assert done.complete and done.job_id == got.job_id
     assert resumed.tasks() == ["sql_attribute_judge", "bridge_sql"]
+
+
+def test_a_hold_during_a_post_stage_pause_holds_the_job_and_resuming_finishes_it(
+    executor: SourceExecutor, store: pg.Layout
+) -> None:
+    from fakes import FakeClock
+
+    from ontological.llm.calls import CallScope, current_scope
+
+    hold = asyncio.Event()
+    scopes: dict[str, CallScope] = {}
+
+    def limited_at_bridge(task: str, user: str) -> Any:
+        scopes[task] = current_scope()
+        if task == "bridge_sql":
+            hold.set()  # the person pauses the job while it waits out the limit
+            return NoAnswer("limited", "limited")
+        return answer(task, user)
+
+    got = asyncio.run(
+        compile_database(
+            "chinook", executor, ScriptedGateway(limited_at_bridge), clock=FakeClock(), hold=hold
+        )
+    )
+
+    assert got.held and not got.complete
+    assert got.post is not None and got.post.sql_attributes is not None
+    assert rows(store, "SELECT state FROM ops.job") == ["held"]
+    # its calls are logged under the job, with no pack, by their stage
+    job = int(rows(store, "SELECT id FROM ops.job")[0])
+    assert scopes["sql_attribute_judge"] == CallScope(job, None, "SQL attributes")
+    assert scopes["bridge_sql"] == CallScope(job, None, "bridge tables")
+
+    done = asyncio.run(compile_database("chinook", executor, ScriptedGateway(answer)))
+    assert done.complete and done.post is not None and done.post.bridges is not None
+    assert done.post.bridges.created == ["Playlist Tracks"]

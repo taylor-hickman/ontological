@@ -46,6 +46,10 @@ tables it wrote, and the next run resumes it. A crashed job is resumed the same 
 resumed pack's calls are the ones its first try made, so the gateway's cache answers those that
 were answered. A certified description is never overwritten (the DAL's writes guard it). The
 `merged` option is M3.3's.
+
+A person can pause the job too (`hold`): it stops before its next pack, or at once while it waits
+out a usage limit, and stays `held` until they resume it. Each pack's calls are logged under the
+job and the pack (`llm.calls.call_scope`), which is how the Jobs screen shows a table's stages.
 """
 
 # The vendored DAL is untyped.
@@ -89,6 +93,7 @@ from ontological.embed.search import semantic_vdb
 from ontological.embed.semantic import Synced, sync_database
 from ontological.jobs import store as job_store
 from ontological.jobs.active import ActiveJobs
+from ontological.llm.calls import call_scope
 from ontological.pii.service import (
     PiiPropagation,
     PiiTagging,
@@ -106,6 +111,8 @@ logger = logging.getLogger(__name__)
 RESUME_MARGIN_S = 5
 # How long a limit with no `resets_at` (an overload, or a rate limit with no event) pauses for.
 RETRY_WITHOUT_RESET_S = 60
+# A table's stages, in the order their calls run: the Jobs screen's segments (DESIGN.md §4.8).
+STAGES = ("table_keys", "column_descriptions", "table_terms", "table_synonyms")
 
 
 @dataclass(frozen=True)
@@ -126,11 +133,12 @@ class Compiled:
     semantic_fks: SemanticFks | None  # None when the compile stopped before them
     stopped: ClaudeUnavailable | None = None  # why it stopped; the next run resumes the job
     vectors: Synced | None = None  # the semantic layer's sync; None without an embedder
-    post: PostStages | None = None  # None when the compile stopped before them
+    held: bool = False  # the person paused it; resuming runs the rest
+    post: PostStages | None = None  # None when the compile stopped or was held before them
 
     @property
     def complete(self) -> bool:
-        return self.stopped is None
+        return self.stopped is None and not self.held
 
 
 @dataclass(frozen=True)
@@ -181,6 +189,7 @@ async def compile_database(
     jobs: ActiveJobs | None = None,
     clock: Clock | None = None,
     embedder: LocalEmbedder | None = None,
+    hold: asyncio.Event | None = None,
     pool: ParsePool | None = None,
     pii: bool = False,
 ) -> Compiled:
@@ -193,13 +202,17 @@ async def compile_database(
     A job paused when an earlier engine stopped waits out the rest of its pause first. `jobs`
     counts the job until this returns, paused or not, so the engine stays up for it. When
     Claude can't answer for a reason a wait won't fix, returns what this run did, with
-    `stopped` set."""
+    `stopped` set. Once `hold` is set, it stops before the next pack, or ends a pause early, and
+    leaves the job `held`."""
     clock = clock or SystemClock()
+    hold = hold or asyncio.Event()
     with (jobs or ActiveJobs()).track("compile", database_name):
         job = await asyncio.to_thread(_open_or_start, database_name)
         if job.state == "paused" and job.paused_until is not None:
             logger.info("compile job %d is paused until %s", job.id, job.paused_until)
-            await _wait_until(clock, job.paused_until)
+            await _wait_until(clock, job.paused_until, hold)
+        if hold.is_set():
+            return await _held(job.id, database_name, [], embedder)
         if job.state != "running":
             await asyncio.to_thread(job_store.set_state, job.id, "running")
         pending = await asyncio.to_thread(_pending, job.id, database_name)
@@ -214,6 +227,8 @@ async def compile_database(
         done: list[CompiledTable] = []
         left = len(pending)
         for number, members in enumerate(packs, start=1):
+            if hold.is_set():
+                return await _held(job.id, database_name, done, embedder)
             work: list[tuple[dict[str, Any], Checkpoint]] = []
             for step, table in members:
                 checkpoint = Checkpoint(job.id, step.position)
@@ -231,9 +246,10 @@ async def compile_database(
             logger.info("[pack %d/%d] %s", number, len(packs), names)
             while True:
                 try:
-                    compiled = await compile_pack(
-                        work, executor, gateway, probe_distinct_values=probe_distinct_values
-                    )
+                    with call_scope(job.id, members[0][0].pack, names):
+                        compiled = await compile_pack(
+                            work, executor, gateway, probe_distinct_values=probe_distinct_values
+                        )
                     break
                 except ClaudeUnavailable as e:
                     if e.outcome != "limited":
@@ -251,13 +267,17 @@ async def compile_database(
                         return Compiled(
                             database_name, job.id, done, None, stopped=e, vectors=vectors
                         )
-                    await _pause(job.id, clock, e)
+                    await _pause(job.id, clock, e, hold)
+                    if hold.is_set():
+                        return await _held(job.id, database_name, done, embedder)
             done.extend(compiled)
             left -= len(work)
         fks = await asyncio.to_thread(resolve_declared_fks, database_name)
         post = PostStages()
         try:
-            post = await _post_stages(job.id, database_name, gateway, clock, pool, pii, post)
+            post = await _post_stages(job.id, database_name, gateway, clock, hold, pool, pii, post)
+        except _Held as h:
+            return replace(await _held(job.id, database_name, done, embedder), post=h.post)
         except _Stopped as s:
             logger.warning("compile job %d stopped in its post-stages: %s", job.id, s.reason)
             await asyncio.to_thread(job_store.set_state, job.id, "stopped", error=str(s.reason))
@@ -276,39 +296,55 @@ class _Stopped(Exception):
         self.post = post
 
 
+class _Held(Exception):
+    def __init__(self, post: PostStages) -> None:
+        self.post = post
+
+
 async def _post_stages(
     job_id: int,
     database_name: str,
     gateway: Structured,
     clock: Clock,
+    hold: asyncio.Event,
     pool: ParsePool | None,
     pii: bool,
     post: PostStages,
 ) -> PostStages:
-    """The post-stages that may ask Claude, in upstream's order. A rate limit pauses the job and
-    reruns the stage, whose writes so far make the rerun skip them (and the cache answers what
-    was asked). Raises `_Stopped`, with what finished, when Claude can't answer otherwise."""
+    """The post-stages that may ask Claude, in upstream's order, their calls logged under the job
+    and the stage's name. A rate limit pauses the job and reruns the stage, whose writes so far
+    make the rerun skip them (and the cache answers what was asked). Raises `_Stopped`, with
+    what finished, when Claude can't answer otherwise, and `_Held` when the person pauses the
+    job, before a stage or during a pause; resuming runs the post-stages again."""
 
-    async def answered[T](run: Callable[[], Awaitable[T]]) -> T:
+    async def answered[T](stage: str, run: Callable[[], Awaitable[T]]) -> T:
         while True:
+            if hold.is_set():
+                raise _Held(post)
             try:
-                return await run()
+                with call_scope(job_id, None, stage):
+                    return await run()
             except ClaudeUnavailable as e:
                 if e.outcome != "limited":
                     raise _Stopped(e, post) from e
-                await _pause(job_id, clock, e)
+                await _pause(job_id, clock, e, hold)
 
     post = replace(
         post,
         sql_attributes=await answered(
-            lambda: suggest_sql_attributes(database_name, gateway, pool=pool)
+            "SQL attributes", lambda: suggest_sql_attributes(database_name, gateway, pool=pool)
         ),
     )
     post = replace(
-        post, bridges=await answered(lambda: build_bridge_sql_attributes(database_name, gateway))
+        post,
+        bridges=await answered(
+            "bridge tables", lambda: build_bridge_sql_attributes(database_name, gateway)
+        ),
     )
     if pii:
-        post = replace(post, pii=await answered(lambda: detect_and_tag_pii(database_name, gateway)))
+        post = replace(
+            post, pii=await answered("PII", lambda: detect_and_tag_pii(database_name, gateway))
+        )
     return replace(post, pii_propagation=await asyncio.to_thread(propagate_pii_to_attributes))
 
 
@@ -326,18 +362,41 @@ async def _embed(database_name: str, embedder: LocalEmbedder | None) -> Synced |
     return await asyncio.to_thread(sync)
 
 
-async def _pause(job_id: int, clock: Clock, limited: ClaudeUnavailable) -> None:
-    """Pause the job until the usage window resets (§6.5), then mark it running again."""
+async def _held(
+    job_id: int, database_name: str, done: list[CompiledTable], embedder: LocalEmbedder | None
+) -> Compiled:
+    """The person paused the job: leave it `held`, with the tables it wrote embedded."""
+    logger.info("compile job %d paused by the person", job_id)
+    await asyncio.to_thread(job_store.set_state, job_id, "held")
+    vectors = await _embed(database_name, embedder)
+    return Compiled(database_name, job_id, done, None, vectors=vectors, held=True)
+
+
+async def _pause(
+    job_id: int, clock: Clock, limited: ClaudeUnavailable, hold: asyncio.Event
+) -> None:
+    """Pause the job until the usage window resets (§6.5), then mark it running again, unless the
+    person paused it meanwhile."""
     until = limited.status.limited_until or clock.now() + timedelta(seconds=RETRY_WITHOUT_RESET_S)
     logger.warning("compile job %d paused until %s: %s", job_id, until.isoformat(), limited)
     await asyncio.to_thread(job_store.set_state, job_id, "paused", paused_until=until)
-    await _wait_until(clock, until)
-    await asyncio.to_thread(job_store.set_state, job_id, "running")
+    await _wait_until(clock, until, hold)
+    if not hold.is_set():
+        await asyncio.to_thread(job_store.set_state, job_id, "running")
 
 
-async def _wait_until(clock: Clock, until: datetime) -> None:
+async def _wait_until(clock: Clock, until: datetime, hold: asyncio.Event) -> None:
+    """Sleep until `until`, plus the margin, or until `hold` is set."""
     seconds = max(0.0, (until - clock.now()).total_seconds()) + RESUME_MARGIN_S
-    await clock.sleep(seconds)
+    sleep = asyncio.ensure_future(clock.sleep(seconds))
+    held = asyncio.ensure_future(hold.wait())
+    try:
+        finished, _ = await asyncio.wait({sleep, held}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        sleep.cancel()
+        held.cancel()
+    if sleep in finished:
+        sleep.result()  # raises what the sleep raised
 
 
 def _open_or_start(database_name: str) -> job_store.Job:

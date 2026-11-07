@@ -6,7 +6,8 @@ sandbox cwd, no settings, no built-in tools, deny-by-default permissions, no ses
 persistence, and the auth variables blanked. `structured()` keeps upstream's contract: it
 returns None on any failure, so the caller falls back deterministically.
 
-Every spawn is logged in ops.llm_call (`calls.CallLog`) with the model that answered, read from
+Every spawn is logged in ops.llm_call (`calls.CallLog`), and so is every cache hit, with the job
+and pack the caller's `calls.call_scope` names and the model that answered, read from
 the assistant messages and the `model_fallback` message, not from `model_usage`, which also
 lists Claude Code's own side calls (spike S1). The latest rate-limit event, and what the
 calls and `check()` have learned about the `claude` install, make up `status` (§6.5).
@@ -42,7 +43,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import EffortLevel
 from pydantic import BaseModel, ValidationError
 
-from ontological.llm.calls import CallLog, Kind, LlmCall, Outcome, cache_key
+from ontological.llm.calls import CallLog, Kind, LlmCall, Outcome, cache_key, current_scope
 from ontological.llm.env import call_env
 from ontological.llm.routes import Route, fallback_for, merge_routes
 
@@ -209,6 +210,7 @@ class ClaudeGateway:
             except ValidationError:
                 pass  # can't happen while the schema is in the key; ask again if it does
             else:
+                await self._record_hit(task, prompt_version, key, route)
                 self.last_outcome = "ok"
                 return answer
         output_format = {"type": "json_schema", "schema": schema.model_json_schema()}
@@ -409,6 +411,25 @@ class ClaudeGateway:
         self._error = error
         return _Verdict(outcome, error)
 
+    async def _record_hit(self, task: str, prompt_version: str, key: str, route: Route) -> None:
+        """A cache hit's row: the job's log counts it, and nothing serves it again."""
+        scope = current_scope()
+        call = LlmCall(
+            task=task,
+            kind="structured",
+            prompt_version=prompt_version,
+            cache_key=key,
+            model=route.model,
+            effort=route.effort,
+            attempt=1,
+            outcome="ok",
+            cached=True,
+            job_id=scope.job_id,
+            pack=scope.pack,
+            table_name=scope.table_name,
+        )
+        await asyncio.to_thread(self.calls.record, call)
+
     async def _record(
         self,
         task: str,
@@ -421,6 +442,7 @@ class ClaudeGateway:
         verdict: _Verdict,
     ) -> None:
         result = session.result
+        scope = current_scope()
         call = LlmCall(
             task=task,
             kind=kind,
@@ -440,6 +462,9 @@ class ClaudeGateway:
             duration_ms=result.duration_ms if result else None,
             num_turns=result.num_turns if result else None,
             session_id=result.session_id if result else None,
+            job_id=scope.job_id,
+            pack=scope.pack,
+            table_name=scope.table_name,
         )
         await asyncio.to_thread(self.calls.record, call)
 

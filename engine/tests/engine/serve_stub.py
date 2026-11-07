@@ -6,8 +6,8 @@ It runs `ontological.engine.main.main` with the same arguments, but in place of 
 Postgres the store appends what it was asked to do to <appData>/store.log: `start` when the
 engine starts it, `quit-dump` and `stop` when the engine stops it. If <appData>/slow-start exists,
 the store takes that many seconds to start; if <appData>/slow-stop exists, it takes that many
-between `quit-dump` and `stop`. `--headless` relaunches this file, so the detached engine has the
-fake store too.
+between `quit-dump` and `stop`. Jobs come from <appData>/jobs.json (`fake_jobs.py`). `--headless`
+relaunches this file, so the detached engine has the fake store too.
 """
 
 from __future__ import annotations
@@ -16,12 +16,18 @@ import sys
 import time
 from pathlib import Path
 
+from fake_jobs import FakeJobs
+
+from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import main
+from ontological.jobs.active import ActiveJobs
+from ontological.jobs.service import JobsService
 from ontological.jobs.staleness import StalenessCheck
 
 
 class FakeStore:
     def __init__(self, app_data: Path) -> None:
+        self.app_data = app_data
         self.log = app_data / "store.log"
         self.slow_start = app_data / "slow-start"
         self.slow_stop = app_data / "slow-stop"
@@ -44,6 +50,9 @@ class FakeStore:
 
     def staleness_check(self) -> StalenessCheck:
         return StalenessCheck(find=lambda: [])  # no catalog, so no sources to refresh
+
+    def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService:
+        return FakeJobs(self.app_data)
 
 
 if __name__ == "__main__":
