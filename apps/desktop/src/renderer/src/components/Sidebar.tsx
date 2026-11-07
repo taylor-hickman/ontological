@@ -1,10 +1,13 @@
 import { SCREENS, type ScreenId } from '@shared/shell'
+import { jobsBadge } from '../jobs/format'
+import type { JobSummary } from '../jobs/types'
 import { shortcut } from '../shortcut'
 import { ChevronDownIcon, DatabaseIcon, Logo, ScreenIcon, SettingsIcon } from './icons'
 
 interface SidebarProps {
   screen: ScreenId
   onNavigate(screen: ScreenId): void
+  jobs: JobSummary[]
 }
 
 function NavItem({
@@ -12,12 +15,14 @@ function NavItem({
   label,
   hint,
   icon,
+  badge,
   onClick
 }: {
   current: boolean
   label: string
   hint: string
   icon: React.ReactNode
+  badge?: { text: string; attention: boolean } | null
   onClick(): void
 }) {
   return (
@@ -31,13 +36,25 @@ function NavItem({
     >
       {icon}
       <span className="flex-1">{label}</span>
-      <span className="text-[11px] text-text-muted">{hint}</span>
+      {badge ? (
+        <span
+          data-testid="nav-badge"
+          className={`rounded-full px-1.5 py-px text-[11px] font-medium tabular-nums ${
+            badge.attention ? 'bg-attention-soft text-attention' : 'bg-accent-soft text-accent'
+          }`}
+        >
+          {badge.text}
+        </span>
+      ) : (
+        <span className="text-[11px] text-text-muted">{hint}</span>
+      )}
     </button>
   )
 }
 
 /** DESIGN.md §3.3: 232 px, window controls, wordmark, source switcher, navigation, screen context, Settings. */
-export function Sidebar({ screen, onNavigate }: SidebarProps) {
+export function Sidebar({ screen, onNavigate, jobs }: SidebarProps) {
+  const badge = jobsBadge(jobs)
   return (
     <nav aria-label="Main" className="flex w-[232px] shrink-0 flex-col border-r border-border bg-chrome px-2.5 pb-3">
       {/* The traffic lights sit in this 52 px band (titleBarStyle hiddenInset). */}
@@ -71,6 +88,7 @@ export function Sidebar({ screen, onNavigate }: SidebarProps) {
             label={s.label}
             hint={shortcut(s.key)}
             icon={<ScreenIcon screen={s.id} />}
+            badge={s.id === 'jobs' ? badge : null}
             onClick={() => onNavigate(s.id)}
           />
         ))}

@@ -4,16 +4,18 @@ Upstream's scheduler re-ingests every source every 24 hours, but a desktop app i
 So when the engine starts, it re-ingests the metadata of each source last ingested more than
 `STALE_AFTER` ago: a source whose catalog database row keeps its spec (`ingest.py` writes it) and
 whose `pulled` stamp is older than that, or missing. Ingest reads the source's catalog through its
-executor and diffs it into the store (M2.3), so the check spends no Claude quota.
+executor and diffs it into the store (M2.3), then adds the source's recent query history, parsed
+in one parse pool the check's sources share; the check spends no Claude quota.
 
 It runs on a thread of its own once the engine serves, one source at a time, and counts as a
 running job, so the engine doesn't idle out under it. A source that fails, such as a server that
 is down or a file that moved, is logged and left for the next start; the others still run. The
 engine cancels the check before it stops the store.
 
-A refresh that finds new tables doesn't compile them: Jobs shows "N new tables, compile?" and
-waits (M3.8). Auto-compile, a setting that is off by default, would start the compile job (M3.1)
-for them; it waits for `app.setting`.
+Each refresh is recorded in ops.job as an `ingest` job, with the tables it found or the error it
+failed with (`jobs.store.record_ingest`). A refresh that finds new tables doesn't compile them:
+the Jobs screen reads that row and shows "N new tables, compile?" (M3.8). Auto-compile, a setting
+that is off by default, would start the compile job (M3.1) for them; it waits for `app.setting`.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ from sqlalchemy import or_, select
 from auto_ontology.dal import schema as s
 from auto_ontology.dal.session import store
 from ontological.catalog.ingest import ingest
+from ontological.catalog.parse_pool import ParsePool
+from ontological.jobs import store as job_store
 from ontological.sources.executor import Cancelled, SourceExecutor
 from ontological.sources.spec import Source, from_record
 
@@ -65,6 +69,10 @@ def stale_sources(now: datetime, stale_after: timedelta = STALE_AFTER) -> list[S
     return sources
 
 
+def _record(started: datetime, refreshed: Refreshed) -> None:
+    job_store.record_ingest(refreshed.database_name, started, refreshed.new_tables, refreshed.error)
+
+
 class StalenessCheck:
     """Re-ingests the stale sources, once. `start` runs it on a thread; `run` runs it here."""
 
@@ -74,9 +82,12 @@ class StalenessCheck:
         find: Callable[[], list[Source]] = lambda: stale_sources(datetime.now(UTC)),
         open_executor: Callable[[Source], SourceExecutor] = SourceExecutor,
         extract_timeout_s: float = EXTRACT_TIMEOUT_S,
+        record: Callable[[datetime, Refreshed], object] | None = None,
     ) -> None:
+        """`record` keeps each result, with when its refresh started; by default in ops.job."""
         self._find = find
         self._open = open_executor
+        self._record = record or _record
         self._extract_timeout_s = extract_timeout_s
         self._cancelled = threading.Event()
         self._lock = threading.Lock()
@@ -109,10 +120,19 @@ class StalenessCheck:
         sources = self._find()
         if sources:
             log.info("staleness: %d source(s) last ingested over a day ago", len(sources))
-        for source in sources:
-            if self._cancelled.is_set():
-                break
-            self.results.append(self._refresh(source))
+        with ParsePool() as pool:  # its workers start only if a source has history
+            for source in sources:
+                if self._cancelled.is_set():
+                    break
+                started = datetime.now(UTC)
+                refreshed = self._refresh(source, pool)
+                self.results.append(refreshed)
+                try:
+                    self._record(started, refreshed)
+                except Exception:
+                    log.exception(
+                        "staleness: couldn't record the refresh of %s", source.database_name
+                    )
         return self.results
 
     def _run_logged(self) -> None:
@@ -121,7 +141,7 @@ class StalenessCheck:
         except Exception:
             log.exception("staleness check failed")
 
-    def _refresh(self, source: Source) -> Refreshed:
+    def _refresh(self, source: Source, pool: ParsePool) -> Refreshed:
         name = source.database_name
         try:
             with self._open(source) as executor:
@@ -129,7 +149,7 @@ class StalenessCheck:
                     self._executor = executor
                 if self._cancelled.is_set():  # cancelled before the extract could be
                     raise Cancelled("the check was cancelled")
-                got = ingest(executor, timeout_s=self._extract_timeout_s)
+                got = ingest(executor, timeout_s=self._extract_timeout_s, pool=pool)
         except Exception as e:
             log.warning("staleness: %s (%s) wasn't refreshed: %s", name, source.label, e)
             return Refreshed(name, [], f"{type(e).__name__}: {e}")

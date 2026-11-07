@@ -138,11 +138,13 @@
   --color-accent-hover: var(--accent-hover);
   --color-accent-soft: var(--accent-soft);
   --color-accent-border: var(--accent-border);
+  --color-accent-muted: var(--accent-muted);
   --color-verified: var(--verified);
   --color-attention: var(--attention);
   --color-attention-text: var(--attention-text);
   --color-attention-soft: var(--attention-soft);
   --color-attention-border: var(--attention-border);
+  --color-meter-warn: var(--meter-warn);
   --color-queued: var(--queued);
   --color-nav-hover: var(--nav-hover);
   --shadow-float: var(--shadow-float);

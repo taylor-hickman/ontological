@@ -2,10 +2,10 @@
 §5.5, §5.6).
 
 A `SourceExecutor` starts its child as soon as it is made, so the source is attached before the
-first operation. It runs one operation at a time: `extract`, `profile`, `run_sql` or `probe`. A
-timeout or a `cancel()` from another thread first asks the child to `interrupt()` the query. If
-the operation is still running `KILL_AFTER_S` later, the executor kills the child, starts a new
-one and raises.
+first operation. It runs one operation at a time: `extract`, `history`, `profile`, `run_sql` or
+`probe`. A timeout or a `cancel()` from another thread first asks the child to `interrupt()` the
+query. If the operation is still running `KILL_AFTER_S` later, the executor kills the child,
+starts a new one and raises.
 Results cross the pipe small: at most `MAX_PROFILE_ROWS` rows from a probe, and `MAX_ANSWER_ROWS`
 from `run_sql`. `profile` samples a table in the child and returns only each column's top values,
 uniqueness and date format.
@@ -49,6 +49,7 @@ __all__ = [
     "ExecutorDied",
     "FileSource",
     "FileTable",
+    "History",
     "MySQLSource",
     "PostgresSource",
     "Rows",
@@ -68,6 +69,7 @@ RUN_SQL_TIMEOUT_S = 60.0
 PROBE_TIMEOUT_S = 5.0
 PROFILE_TIMEOUT_S = 120.0  # upstream's cap on one profiling query, here on a table's profile
 START_TIMEOUT_S = 30.0
+HISTORY_HOURS = 24  # upstream's `get_queries` window, and its scheduler's period
 _POLL_S = 0.05  # how often a waiting operation looks for a cancel()
 
 Record = dict[str, Any]
@@ -122,6 +124,14 @@ class Catalog:
     skipped: list[Record]  # table_schema, table_name, error: relations DuckDB can't read
 
 
+@dataclass(frozen=True)
+class History:
+    """A source's recent statements, as upstream's `get_queries` returns them."""
+
+    dialects: list[str]  # sqlglot's names for the dialects the statements are written in
+    rows: list[Record]  # query_text, end_time (UTC), count
+
+
 class SourceExecutor:
     def __init__(self, source: Source, *, kill_after_s: float = KILL_AFTER_S) -> None:
         self.source = source
@@ -163,6 +173,11 @@ class SourceExecutor:
     def extract(self, *, timeout_s: float | None = None) -> Catalog:
         catalog = self._call("extract", (), timeout_s)
         return Catalog(**catalog)
+
+    def history(self, *, hours: int = HISTORY_HOURS, timeout_s: float | None = None) -> History:
+        """The statements the source ran in the last `hours` hours. A source that keeps no
+        history, which is every source but Postgres, returns none."""
+        return History(**self._call("history", (hours,), timeout_s))
 
     def profile(
         self,

@@ -14,11 +14,15 @@ DuckDB's view of a remote catalog types every relation as a base table and lists
 keys, so relations, view definitions and keys come from the server's own catalog through
 `postgres_query()` and `mysql_query()`, as upstream's connectors read them. Column types are
 DuckDB's, since DuckDB runs the queries.
+
+A Postgres source's query history is upstream's: `pg_stat_activity`, read through
+`postgres_query()`. Upstream had no MySQL connector, and a MySQL session reads no history.
 """
 
 from __future__ import annotations
 
 import secrets
+from datetime import UTC, datetime
 from typing import Any
 
 import duckdb
@@ -76,6 +80,8 @@ class _ScannerSession(Session):
         self.query(f"CALL {self.kind}_clear_cache()")
 
 
+#: Every executor's Postgres connections name themselves with it.
+_APPLICATION_PREFIX = "ontological-source-"
 _PG_SKIP_SCHEMAS = (
     "n.nspname NOT IN ('pg_catalog', 'information_schema') "
     "AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp\\_%'"
@@ -91,7 +97,7 @@ class PostgresSession(_ScannerSession):
         """Every connection names this session in `application_name`, which is how
         `cancel_remote()` finds it, and has the server check every second that the child is
         still there (Postgres 14 and later; an older server is attached without it)."""
-        self.application_name = f"ontological-source-{secrets.token_hex(6)}"
+        self.application_name = f"{_APPLICATION_PREFIX}{secrets.token_hex(6)}"
         named = f"{options} application_name={self.application_name}".strip()
         try:
             super().attach(f"{named} options='-c client_connection_check_interval=1000'")
@@ -175,6 +181,30 @@ class PostgresSession(_ScannerSession):
             )
         ]  # fmt: skip
         return self.catalog(relations, views=views, pks=pks, fks=fks)
+
+    def history(self, hours: int) -> dict[str, Any]:
+        """Upstream's `get_queries`: each backend's latest statement, from `pg_stat_activity`,
+        if it ended (`state_change`) in the last `hours` hours. Only this database's client
+        backends are read, so a parallel worker doesn't count its leader's statement again, and
+        no executor's own connections, whose statements are DuckDB's scans. A role sees the text
+        of its own backends' statements only, unless it holds `pg_read_all_stats`; the others
+        read `<insufficient privilege>` and are left out."""
+        rows = self.remote(
+            "SELECT query, extract(epoch FROM state_change)::float8 FROM pg_stat_activity "
+            "WHERE datname = current_database() AND backend_type = 'client backend' "
+            "AND pid <> pg_backend_pid() "
+            f"AND application_name NOT LIKE {quote_literal(_APPLICATION_PREFIX + '%')} "
+            "AND query IS NOT NULL AND query <> '' AND query <> '<insufficient privilege>' "
+            f"AND state_change >= now() - make_interval(hours => {int(hours)}) "
+            "ORDER BY state_change DESC"
+        )
+        return {
+            "dialects": ["postgres"],
+            "rows": [
+                {"query_text": query, "end_time": datetime.fromtimestamp(ended, UTC), "count": 1}
+                for query, ended in rows
+            ],
+        }
 
     def json_columns(self, schema: str, table: str) -> set[str]:
         """`json` and `jsonb` columns, which the scanner reads as VARCHAR."""

@@ -178,3 +178,74 @@ class TermProposal:
     description: str = ""
     synonyms: list[str] = field(default_factory=list[str])
     attributes: list[TermAttributeAssignment] = field(default_factory=list[TermAttributeAssignment])
+
+
+# --- table_synonyms ----------------------------------------------------------------------------
+
+
+class SynonymExtraction(BaseModel):
+    """LLM output: alternate names written in a table description (upstream's
+    `_SynonymExtractionModel`)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    synonyms: list[str] = Field(
+        default_factory=list[str],
+        description=(
+            "Abbreviations, acronyms, or alternate names explicitly written in the "
+            "description. Empty list if none are stated."
+        ),
+    )
+
+
+# --- packed calls ------------------------------------------------------------------------------
+# A pack's call returns one entry per table: upstream's answer for that table, named by its
+# heading in the prompt (ARCHITECTURE.md §6.4).
+
+
+def _table_field() -> str:
+    return Field(
+        ..., description="The table this entry answers for, exactly as written after 'Table:'."
+    )
+
+
+class TableKeysEntry(FkAndPkResult):
+    table: str = _table_field()
+
+
+class PackedTableKeys(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tables: list[TableKeysEntry] = Field(..., description="One entry per table in the request.")
+
+
+class TableDescriptionsEntry(ColumnDescriptionResult):
+    table: str = _table_field()
+
+
+class PackedColumnDescriptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tables: list[TableDescriptionsEntry] = Field(
+        ..., description="One entry per table in the request."
+    )
+
+
+class TableTermsEntry(RawTableTermsResult):
+    table: str = _table_field()
+
+
+class PackedTableTerms(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tables: list[TableTermsEntry] = Field(..., description="One entry per table in the request.")
+
+
+class TableSynonymsEntry(SynonymExtraction):
+    table: str = _table_field()
+
+
+class PackedSynonyms(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tables: list[TableSynonymsEntry] = Field(..., description="One entry per table in the request.")

@@ -32,7 +32,7 @@ from sdk_fakes import (
 )
 
 from ontological.llm import gateway as gateway_module
-from ontological.llm.calls import LlmCall, cache_key
+from ontological.llm.calls import LlmCall, cache_key, call_scope
 from ontological.llm.env import call_env
 from ontological.llm.gateway import ClaudeGateway, GatewayStatus
 from ontological.llm.routes import Route
@@ -192,8 +192,26 @@ def test_a_repeated_call_is_answered_from_the_cache(tmp_path: Path) -> None:
     h = Harness(tmp_path, [answered({"pk": ["id"]})])
     assert h.structured() == Keys(pk=["id"])
     assert h.structured() == Keys(pk=["id"])
+    assert h.structured() == Keys(pk=["id"])
     assert len(h.query.spawns) == 1
-    assert len(h.rows) == 1
+    spawned, *hits = h.rows
+    assert not spawned.cached and spawned.output == {"pk": ["id"]}
+    # Each hit is logged for the job's count, with no output, and serves nothing itself
+    assert [(r.cached, r.outcome, r.output, r.cache_key) for r in hits] == [
+        (True, "ok", None, spawned.cache_key)
+    ] * 2
+    assert not any(r.cacheable for r in hits)
+
+
+def test_calls_are_logged_under_the_callers_job_and_pack(tmp_path: Path) -> None:
+    h = Harness(tmp_path, [answered({"pk": ["id"]})])
+    h.structured()
+    with call_scope(7, 2, "Invoice, InvoiceLine"):
+        h.structured()
+    assert [(r.job_id, r.pack, r.table_name, r.cached) for r in h.rows] == [
+        (None, None, None, False),
+        (7, 2, "Invoice, InvoiceLine", True),
+    ]
 
 
 def test_a_different_effort_misses_the_cache(tmp_path: Path) -> None:
