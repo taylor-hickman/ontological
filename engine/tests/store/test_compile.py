@@ -290,7 +290,8 @@ def test_a_second_compile_asks_nothing_and_writes_nothing(
 
     assert [(t.name, t.skipped) for t in again.tables] == [("PlaylistTrack", "no non-FK columns")]
     assert gateway.calls == []
-    assert again.semantic_fks == SemanticFks(0, 0, 0, 0, 1, 0)
+    # ReportsTo is still a self-reference, and Composer still has no candidates
+    assert again.semantic_fks == SemanticFks(0, 1, 0, 0, 1, 0)
     after = rows(
         store, "SELECT count(*) FROM term UNION ALL SELECT count(*) FROM column__semantic_fk"
     )

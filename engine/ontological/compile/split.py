@@ -283,7 +283,7 @@ async def compile_database(
         # FKs only for a job that planned tables: a column it passed on, or whose edge it pruned,
         # would otherwise be asked again by every compile, in a batch the cache doesn't know.
         infer = bool(await asyncio.to_thread(job_store.job_steps, job.id))
-        await _embed(database_name, embedder)
+        synced = await _embed(database_name, embedder)
         with call_scope(job.id, None, FK_SCOPE):
             fks = await _answered(
                 job.id,
@@ -293,22 +293,23 @@ async def compile_database(
             )
         if isinstance(fks, ClaudeUnavailable):
             logger.warning("compile job %d stopped at its semantic FKs: %s", job.id, fks)
-            return await _stopped(job.id, database_name, done, fks, embedder)
+            return await _stopped(job.id, database_name, done, fks, embedder, synced)
         if fks is None:
-            return await _held(job.id, database_name, done, embedder)
+            return await _held(job.id, database_name, done, embedder, synced)
         post = PostStages()
         try:
             post = await _post_stages(job.id, database_name, gateway, clock, hold, pool, pii, post)
         except _Held as h:
-            return replace(await _held(job.id, database_name, done, embedder), post=h.post)
+            held = await _held(job.id, database_name, done, embedder, synced)
+            return replace(held, post=h.post)
         except _Stopped as s:
             logger.warning("compile job %d stopped in its post-stages: %s", job.id, s.reason)
             await asyncio.to_thread(job_store.set_state, job.id, "stopped", error=str(s.reason))
-            vectors = await _embed(database_name, embedder)
+            vectors = await _embed(database_name, embedder, synced)
             return Compiled(
                 database_name, job.id, done, fks, stopped=s.reason, vectors=vectors, post=s.post
             )
-        vectors = await _embed(database_name, embedder)
+        vectors = await _embed(database_name, embedder, synced)
         await asyncio.to_thread(job_store.set_state, job.id, "done")
         return Compiled(database_name, job.id, done, fks, vectors=vectors, post=post)
 
@@ -415,15 +416,20 @@ async def _stopped(
     done: list[CompiledTable],
     error: ClaudeUnavailable,
     embedder: LocalEmbedder | None,
+    synced: Synced | None = None,
 ) -> Compiled:
     """Claude can't answer: leave the job `stopped`, with the tables it wrote embedded, for the
     next run to resume."""
     await asyncio.to_thread(job_store.set_state, job_id, "stopped", error=str(error))
-    vectors = await _embed(database_name, embedder)
+    vectors = await _embed(database_name, embedder, synced)
     return Compiled(database_name, job_id, done, None, stopped=error, vectors=vectors)
 
 
-async def _embed(database_name: str, embedder: LocalEmbedder | None) -> Synced | None:
+async def _embed(
+    database_name: str, embedder: LocalEmbedder | None, synced: Synced | None = None
+) -> Synced | None:
+    """Sync the database's vectors. Given the compile's earlier sync, `synced`, returns the two
+    as one, so a compile reports one sync whichever stage it ended at."""
     if embedder is None:
         return None
 
@@ -434,16 +440,21 @@ async def _embed(database_name: str, embedder: LocalEmbedder | None) -> Synced |
         finally:
             vdb.close()
 
-    return await asyncio.to_thread(sync)
+    later = await asyncio.to_thread(sync)
+    return later if synced is None else synced.then(later)
 
 
 async def _held(
-    job_id: int, database_name: str, done: list[CompiledTable], embedder: LocalEmbedder | None
+    job_id: int,
+    database_name: str,
+    done: list[CompiledTable],
+    embedder: LocalEmbedder | None,
+    synced: Synced | None = None,
 ) -> Compiled:
     """The person paused the job: leave it `held`, with the tables it wrote embedded."""
     logger.info("compile job %d paused by the person", job_id)
     await asyncio.to_thread(job_store.set_state, job_id, "held")
-    vectors = await _embed(database_name, embedder)
+    vectors = await _embed(database_name, embedder, synced)
     return Compiled(database_name, job_id, done, None, vectors=vectors, held=True)
 
 

@@ -275,6 +275,16 @@ class Synced:
     current: int  # rows whose vector was already current
     retagged: int = 0  # current vectors whose `certified` flag was rewritten in place
 
+    def then(self, later: Synced) -> Synced:
+        """This sync and `later` as one: what was embedded or deleted by either, and current
+        the rows `later` found current that this one didn't embed."""
+        return Synced(
+            self.embedded + later.embedded,
+            self.deleted + later.deleted,
+            later.current - self.embedded,
+            self.retagged + later.retagged,
+        )
+
 
 Key = tuple[str, str, str, str]  # label, id, content_hash, model
 
