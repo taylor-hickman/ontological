@@ -219,6 +219,7 @@ def test_the_pack_runs_on_the_search_it_is_given(
     assert [(q, k, (w or {}).get("label")) for q, k, w in calls] == [
         (question, 4, "ColumnAttribute"),
         ("billed means invoiced", 3, "ColumnAttribute"),
+        (question, 3, "SqlAttribute"),  # M4.3: the question searches the SQL attributes
         (question, 1, "Term"),
     ]
     assert all((w or {}).get("database_name") == "chinook" for _, _, w in calls)
