@@ -25,7 +25,7 @@ from ontological.answer.service import (
 from ontological.embed.embedder import LocalEmbedder
 from ontological.embed.hybrid import HybridSearch
 from ontological.embed.model import BGE_SMALL
-from ontological.llm.gateway import ClaudeGateway
+from ontological.llm.gateway import ClaudeGateway, ToolCall
 from ontological.sources.executor import SourceExecutor
 from ontological.sources.spec import Source, SqliteSource
 
@@ -216,3 +216,73 @@ def test_a_check_needs_an_embedder_and_no_source() -> None:
     with pytest.raises(NoEmbedder):
         asyncio.run(answers(opened, source=None, embedder=None).check("q"))
     assert opened.vdbs == []
+
+
+# --- the stream (M4.5) -----------------------------------------------------------------------
+
+
+def a_pack(monkeypatch: pytest.MonkeyPatch) -> None:
+    def build_pack(vdb: Any, question: str, *, database: str | None, search: Any) -> GroundingPack:
+        return GroundingPack(question, "chinook", [], [], {}, [], None)
+
+    monkeypatch.setattr(service, "build_pack", build_pack)
+
+
+class StuckSession:
+    """A session that opens chinook's source, calls plan and then never ends."""
+
+    def __init__(self, runners: Any) -> None:
+        self.runners = runners
+
+    async def __aiter__(self) -> Any:
+        self.runners("chinook")
+        yield ToolCall("plan", {}, False, "{}", {"plan_id": "plan-1"})
+        await asyncio.Event().wait()
+
+
+def test_stopping_the_stream_closes_the_questions_source_executors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    a_pack(monkeypatch)
+    def ask(*args: Any, runners: Any, **kwargs: Any) -> StuckSession:
+        return StuckSession(runners)
+
+    monkeypatch.setattr(service, "ask", ask)
+    opened: list[FakeExecutor] = []
+
+    def open_executor(source: Source) -> SourceExecutor:
+        opened.append(FakeExecutor(source))
+        return cast(SourceExecutor, opened[-1])
+
+    store = StoreAnswers(
+        gateway=cast(ClaudeGateway, NoLimit()),
+        embedder=EMBEDDER,
+        find_source=lambda database: SqliteSource(Path("chinook.db")),
+        open_executor=open_executor,
+        open_vdb=Opened().vdb,
+        open_hybrid=Opened().hybrid,
+    )
+
+    async def go() -> list[object]:
+        seen: list[object] = []
+
+        async def read() -> None:
+            async for event in store.stream("q", None):
+                seen.append(event)
+
+        reader = asyncio.create_task(read())
+        while not seen:
+            await asyncio.sleep(0.01)
+        reader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reader
+        return seen
+
+    [step] = asyncio.run(go())
+    assert isinstance(step, service.ToolStep) and step.name == "plan"
+    assert [e.closed for e in opened] == [1]
+
+
+class NoLimit:
+    class status:
+        rate_limit = None

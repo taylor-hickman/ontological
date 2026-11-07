@@ -5,6 +5,7 @@ SDK's own MCP bridge. The run records every tool call in order, for the post-run
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -252,3 +253,67 @@ def test_a_call_from_inside_a_tool_does_not_wait_for_the_sessions_own_slot(
     run = asyncio.run(go())
     assert run.tool_log[0].text == "Looks right."
     assert [r.task for r in h.calls.rows] == ["answer_review", "answer_agent"]
+
+
+# --- stopping a session (M4.5) ----------------------------------------------------------------
+# Cancelling the task that iterates a run, or leaving its loop early, stops the session: the SDK
+# closes its `query()`, which ends the `claude` child (stdin EOF, then SIGTERM after 5 s).
+
+
+def test_cancelling_the_reader_stops_the_session(tmp_path: Path) -> None:
+    h = Harness(tmp_path, [session(Call("plan", {"intent": "count"}), 60.0)])
+
+    async def go() -> tuple[AgentRun[Answer], list[object]]:
+        run = h.start()
+        seen: list[object] = []
+
+        async def read() -> None:
+            async for event in run:
+                seen.append(event)
+
+        reader = asyncio.create_task(read())
+        while not seen:
+            await asyncio.sleep(0.01)
+        reader.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(reader, timeout=5)
+        return run, seen
+
+    run, seen = asyncio.run(go())
+    assert [type(e) for e in seen] == [ToolCall]
+    assert h.query.in_flight == 0  # the query was closed, not left pausing
+    assert run.output is None
+    assert (run.outcome, run.error) == ("error", "cancelled")
+    assert h.calls.rows == []  # a stopped session has no result to log
+
+
+def test_leaving_the_loop_early_stops_the_session(tmp_path: Path) -> None:
+    h = Harness(tmp_path, [session(Call("plan", {"intent": "count"}), 60.0)])
+
+    async def go() -> AgentRun[Answer]:
+        run = h.start()
+        events = aiter(run)
+        await asyncio.wait_for(anext(events), timeout=5)
+        await asyncio.wait_for(events.aclose(), timeout=5)  # type: ignore[attr-defined]
+        return run
+
+    run = asyncio.run(go())
+    assert h.query.in_flight == 0
+    assert run.outcome == "error"
+
+
+def test_cancel_stops_a_session_from_outside(tmp_path: Path) -> None:
+    h = Harness(tmp_path, [session(Call("plan", {"intent": "count"}), 60.0)])
+
+    async def go() -> AgentRun[Answer]:
+        run = h.start()
+        waiting = asyncio.create_task(run.wait())
+        while not run.tool_log:
+            await asyncio.sleep(0.01)
+        await asyncio.wait_for(run.cancel(), timeout=5)
+        await asyncio.wait_for(waiting, timeout=5)  # the reader ends; it isn't cancelled
+        return run
+
+    run = asyncio.run(go())
+    assert h.query.in_flight == 0
+    assert (run.outcome, run.error) == ("error", "cancelled")
