@@ -8,14 +8,16 @@
 
 A table with no `table_calls` takes its job's. Actions change the jobs in memory, as the real
 service would change their rows: hold makes a compile `held`, resume and compile make it
-`running`, choose sets its option, dismiss puts off a refresh's prompt, and a re-embed of the stale
-databases names the scenario's `embeddings.stale`. Each action is appended to <appData>/jobs.log,
+`running`, choose sets its option, dismiss puts off a refresh's prompt, a re-embed of one database
+adds a running `reembed` job, and a re-embed of the stale databases names the scenario's
+`embeddings.stale`. Each action is appended to <appData>/jobs.log,
 so a test can see what the app and the engine asked for.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +92,24 @@ class FakeJobs:
 
     async def reembed(self, database_name: str) -> None:
         self._note(f"reembed {database_name}")
+        job = JobSummary(
+            id=max((j.id for j in self._jobs), default=0) + 1,
+            kind="reembed",
+            database_name=database_name,
+            state="running",
+            paused_until=None,
+            error=None,
+            created_at=datetime.now(UTC),
+            finished_at=None,
+            tables=0,
+            tables_done=0,
+            calls=0,
+            cache_hits=0,
+            new_tables=[],
+            dismissed=False,
+            table_calls="split",
+        )
+        self._jobs = [job, *self._jobs]
 
     async def embeddings(self) -> Embeddings:
         return self._embeddings
