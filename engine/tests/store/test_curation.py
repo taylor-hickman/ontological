@@ -398,13 +398,25 @@ def recompile(lay: pg.Layout, chinook: Path, *names: str) -> None:
         asyncio.run(compile_pack([(t, None) for t in tables], executor, ScriptedGateway(claude)))
 
 
-def test_a_first_compile_logs_nothing_and_a_recompile_of_the_same_answers_neither(
+def test_a_first_compile_logs_nothing_and_a_recompile_logs_what_it_changes(
     curated: Curated, chinook: Path
 ) -> None:
+    lay = curated.store
     # What a compile creates isn't a change; the Term's `created` says when it was compiled
-    assert change_log(curated.store) == []
-    recompile(curated.store, chinook, "Customer", "Invoice")
-    assert change_log(curated.store) == []
+    assert change_log(lay) == []
+    # The first recompile reads each generated description back as its column's own and
+    # appends the samples the prompt showed, so it changes every sampled attribute once
+    recompile(lay, chinook, "Customer", "Invoice")
+    first = change_log(lay)
+    assert first and all(
+        line.startswith('column_attribute description "About ')
+        and " — samples: " in line
+        and line.endswith(" compile")
+        for line in first
+    ), first
+    # The next answers the same, so it changes nothing and logs nothing
+    recompile(lay, chinook, "Customer", "Invoice")
+    assert change_log(lay) == first
 
 
 def test_a_recompile_logs_each_field_it_changes_as_actor_compile(
@@ -413,6 +425,9 @@ def test_a_recompile_logs_each_field_it_changes_as_actor_compile(
     lay = curated.store
     customer = term_id(lay, "Customer")
     city = attr_id(lay, "Invoice", "BillingCity")
+    # Once, so the samples are on every description, and the log emptied
+    recompile(lay, chinook, "Customer", "Invoice")
+    sql(lay, "DELETE FROM ops.change_log")
     # Written behind the log's back, so the recompile has something to change
     sql(
         lay,
