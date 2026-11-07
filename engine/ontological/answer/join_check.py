@@ -6,7 +6,9 @@
 # answer gate (ARCHITECTURE.md §8.2). The semantic-FK graph is read through a `JoinGraph` bound to
 # the question's database, in place of the DAL functions upstream calls with `database_name`
 # (`ontological.answer.ontology` implements it with those functions). Probes go through
-# `ontological.answer.probe`, and name a table with the schema the SQL gave it. The self-apply
+# `ontological.answer.probe`, and name a table with the schema the SQL gave it. A join with no
+# graph path whose overlap couldn't be measured is left alone, where upstream flags it
+# "unverified": check 4 is a hard check here, and upstream's is soft. The self-apply
 # rewrites (`try_self_apply_wrong_column_fixes`, `try_self_apply_missing_bridge_fixes`) aren't
 # ported: the gate reports issues, and the model rewrites its own SQL.
 
@@ -480,7 +482,13 @@ def find_join_path_mismatches(
         # secondary signal before flagging, to avoid false-positiving on a
         # real relationship the graph never happened to model at all.
         overlap = _overlap(executor, dialect, (node_a, left.name), (node_b, right.name))
-        if overlap is not None and overlap >= _OVERLAP_KEEP_THRESHOLD:
+        if overlap is None:
+            # No probe ran (budget spent, no source, or both directions failed), so
+            # nothing was measured. Upstream flags the join anyway; here check 4 is hard and
+            # the probe budget is shared across the question's validations, so a probe that
+            # couldn't run must not become a rejection.
+            continue
+        if overlap >= _OVERLAP_KEEP_THRESHOLD:
             logger.info(
                 "join_path_check: no graph edge for %s.%s = %s.%s, but live "
                 "overlap %.2f >= threshold — treating as a real, unmodeled "

@@ -22,6 +22,9 @@ casing/whitespace for the same physical worksite.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+import pytest
 from fakes import DuckProber, FakeGraph, ScriptedProber, frame, hop
 
 from ontological.answer.join_check import (
@@ -31,6 +34,7 @@ from ontological.answer.join_check import (
     find_join_path_mismatches,
 )
 from ontological.answer.probe import ProbeExecutor
+from ontological.sources.executor import Rows, SourceQueryError
 
 _VERIFIED_HOP = [hop("worksite.w_addr1", "case_worksite.ws_addr1")]
 
@@ -259,3 +263,34 @@ def test_a_join_between_columns_the_graph_doesnt_know_is_out_of_scope() -> None:
 
     assert mismatches == []
     assert connector.seen == []
+
+
+class _FailingProber:
+    def probe(self, sql: str, *, max_rows: int) -> Rows:
+        raise SourceQueryError("Binder Error: cannot compare INTEGER and VARCHAR")
+
+
+def _spent() -> ProbeExecutor:
+    executor = ProbeExecutor(DuckProber(*_TRACKS), max_calls=0)
+    assert executor.budget_left == 0
+    return executor
+
+
+@pytest.mark.parametrize(
+    "executor",
+    [lambda: ProbeExecutor(None), _spent, lambda: ProbeExecutor(_FailingProber())],
+    ids=["no source", "budget spent", "probe fails"],
+)
+def test_an_unmodelled_join_whose_overlap_cant_be_measured_is_left_alone(
+    executor: Callable[[], ProbeExecutor],
+) -> None:
+    """With no graph path, only the overlap probe can call the join wrong. A probe that
+    didn't run measured nothing, so it can't confirm the join is wrong."""
+    mismatches = find_join_path_mismatches(
+        executor(),
+        "duckdb",
+        "SELECT t.TrackId FROM album a JOIN track t ON t.GenreId = a.AlbumId",
+        FakeGraph(fk_columns={"album.AlbumId"}),
+    )
+
+    assert mismatches == []

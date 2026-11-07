@@ -344,3 +344,21 @@ def test_a_probe_the_source_fails_doesnt_fail_the_gate() -> None:
     )
 
     assert gate.ok
+
+
+def test_a_join_check_whose_probes_cant_run_doesnt_fail_the_gate() -> None:
+    """An FK-shaped join with no graph path, on a source whose probes fail: check 4 is hard,
+    so a probe that can't run must never become a rejection."""
+
+    class Broken:
+        def probe(self, sql: str, *, max_rows: int) -> Rows:
+            raise SourceQueryError("the source is gone")
+
+    gate = check_sql(
+        "SELECT al.Title FROM Album al JOIN Artist ar ON ar.ArtistId = al.AlbumId",
+        PROBED,
+        key_columns=keys,
+        probing=Probing(ProbeExecutor(Broken()), graph()),
+    )
+
+    assert gate.ok, gate.issues
