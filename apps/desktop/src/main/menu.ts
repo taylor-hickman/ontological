@@ -49,13 +49,12 @@ export function buildMenuTemplate({ isMac, isDev, theme, actions }: MenuOptions)
       : [{ role: 'about', label: 'About Ontological' }, { type: 'separator' }, settings, { type: 'separator' }, { role: 'quit' }]
   }
 
-  // Add source, Import and Export need the engine, which doesn't exist yet. They are listed,
-  // disabled, so the menu already has its final shape.
+  // Import and Export wait for M6.4. They are listed, disabled, so the menu already has its final shape.
   const fileMenu: MenuItemConstructorOptions = {
     label: 'File',
     submenu: [
       { id: 'new-question', label: 'New question', accelerator: 'CmdOrCtrl+N', click: () => send({ type: 'new-question' }) },
-      { id: 'add-source', label: 'Add source…', accelerator: 'CmdOrCtrl+O', enabled: false },
+      { id: 'add-source', label: 'Add source…', accelerator: 'CmdOrCtrl+O', click: () => send({ type: 'add-source' }) },
       { type: 'separator' },
       { id: 'import', label: 'Import…', enabled: false },
       { id: 'export', label: 'Export…', enabled: false },

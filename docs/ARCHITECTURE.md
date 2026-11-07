@@ -431,8 +431,9 @@ class ClaudeGateway:
                          *, prompt_version: str = "") -> M | None: ...
     async def text(self, task: str, system: str, user: str,
                    *, prompt_version: str = "") -> str | None: ...
-    def agent(self, task: str, system: str, tools: list[SdkTool],
-              output: type[BaseModel], max_turns: int) -> AgentRun: ...  # async-iterable events + tool log
+    def agent(self, task: str, system: str, user: str, tools: list[SdkMcpTool],
+              output: type[M], max_turns: int = 16,
+              *, prompt_version: str = "") -> AgentRun[M]: ...  # async-iterable events + tool log
     async def check(self) -> GatewayStatus: ...   # claude --version, then a ping
     status: GatewayStatus   # installed? logged in? limited until? utilization?
 ```
@@ -519,7 +520,7 @@ Upstream was written for a cheap, fast HTTP endpoint and makes many small calls.
 
 **Caching.**
 - Every structured call is keyed by `sha256(task, prompt_version, model, effort, system, user, schema)`, plus the caller's `cache_key_extra`, and logged in `ops.llm_call` with usage. `model` is the route's alias or pinned ID (§6.3). Effort is in the key because it changes the output. A recompile of unchanged tables costs nothing.
-- `ops.llm_call` has one row per spawn, so a retried call has two (`attempt` 1 and 2). Each row records the route's model and effort, the resolved and answering models, whether the fallback answered, the outcome (`ok`, `invalid`, `limited` or `error`), the output, `model_usage`, cost and duration. A lookup serves the newest `ok` structured answer for the key. An answer from the fallback model is logged but not served again, so the next run asks the route's model. `text()` calls are logged but never cached.
+- `ops.llm_call` has one row per spawn, so a retried call has two (`attempt` 1 and 2). Each row records the route's model and effort, the resolved and answering models, whether the fallback answered, the outcome (`ok`, `invalid`, `limited` or `error`), the output, `model_usage`, cost and duration. A lookup serves the newest `ok` structured answer for the key. An answer from the fallback model is logged but not served again, so the next run asks the route's model. `text()` calls are logged but never cached. A cache hit writes a `cached` row with no output, and each row names the job and table it was for when there is one, so Jobs shows a job's call log and its cache hits.
 - Prompt templates carry an explicit `prompt_version`, which callers pass to `structured()`, so editing a prompt invalidates only that task's cache.
 
 **Concurrency.** A global semaphore limits in-flight Claude processes. The default is 3; it is a user setting.
@@ -640,15 +641,15 @@ question
 | Tool | Precondition | What it does |
 |---|---|---|
 | `plan(intent, calc_subtype?, entities[], evidence[], anchor_attribute_id?, database?)` | none; must be the first call | Records what upstream's `question_intent` and `question_extraction` produced, and the target database: the scope if one was given, otherwise the model's choice from the grounding pack's coverage ranking. Later tools work against that database only. The engine runs upstream's per-entity retrieval for those entities, computes BFS join paths from the anchor, and returns the candidates plus the subtype's SQL template. Returns a `plan_id`. |
-| `search_ontology(query, kinds?)` | none | Hybrid search for more candidates |
-| `get_term(id)`, `describe_table(id)` | none | Detail |
-| `join_path(from_table, to_table)` | none | BFS over semantic FKs |
-| `column_values(column, like?, limit)` | none | DISTINCT/MIN/MAX probe, read-only and capped |
+| `search_ontology(query, kinds?)` | a `plan_id` exists | Hybrid search for more candidates |
+| `get_term(id)`, `describe_table(id)` | a `plan_id` exists | Detail |
+| `join_path(from_table, to_table)` | a `plan_id` exists | BFS over semantic FKs |
+| `column_values(column, like?, limit)` | a `plan_id` exists | DISTINCT/MIN/MAX probe, read-only and capped |
 | `validate_sql(sql)` | a `plan_id` exists | The §8.2 gate. Returns ok + `validation_id`, or a list of issues. At most 7 calls per session, as upstream; after 5, the soft checks (literal, case-dirty join) become warnings, as upstream. |
 | `run_sql(validation_id)` | the id passed `validate_sql` | Executes in the source executor and returns columns + ≤ 200 rows. **On an empty result it runs upstream's empty-result handling** (drop LIKE predicates, value-repair probes) and returns the hints with the zero rows. |
 | `review_answer(validation_id, answer_draft)` | the id was executed; critic enabled | Runs upstream's intent-validation prompt as an `answer_review` `structured()` call (Sonnet, §6.3) on (question, plan, SQL, columns, first rows). Returns pass, or issues for the model to fix. At most 2 rounds. Returns a `review_id`. |
 
-**Post-run check.** After the session, the engine reads the tool log and confirms the sequence plan → validate → run → review for the final SQL. If any step is missing or the ids don't match, the answer is shown as "unverified" with the reason; it is never silently accepted. The required sequence depends on the session: `information` answers need only `plan`; with the critic off, review is not required; an answer with `answerable=false` needs a `plan` and no SQL.
+**Post-run check.** After the session, the engine reads the tool log and confirms the sequence plan → validate → run → review for the final SQL. If any step is missing or the ids don't match, the answer is shown as "unverified" with the reason; it is never silently accepted. The required sequence depends on the session: `information` answers need only `plan` and carry no SQL; with the critic off, review is not required; an answer with `answerable=false` needs a `plan` and no SQL. Once `run_sql` has returned rows in the session, an `information` or `answerable=false` answer is unverified: it would rest on rows nobody checked.
 
 **Source scope.** Chat has a source selector that defaults to "auto", which lets pre-work pick the database by coverage. MCP's `ask_question` and the eval runner can pass a scope; the eval passes each question's database. A question is answered from one source; cross-source SQL is out of scope.
 
@@ -672,7 +673,7 @@ question
 
 1. Parse with sqlglot in the source dialect. Exactly one `SELECT`/`WITH` statement is allowed; DML, DDL, `ATTACH`, `COPY`, `PRAGMA`, `INSTALL` and `LOAD` are rejected.
 2. Resolve every table and column against the catalog (`parse_query_single`).
-3. Degenerate SQL (`SELECT NULL`, `WHERE 1=0`, `LIMIT 0`), vacuous GROUP BY / PARTITION BY, and missing aggregation on the many side.
+3. Degenerate SQL (`SELECT NULL`, `WHERE 1=0`, `LIMIT 0`), vacuous GROUP BY / PARTITION BY, and missing aggregation on the many side. The vacuous GROUP BY check is off, as upstream ships it (`DETECT_VACUOUS_GROUP_BY`): it misfires on incomplete key metadata.
 4. Join-path check against semantic FKs, with a value-overlap fallback probe. Includes the case-dirty join check.
 5. Literal check: near-miss filter values and percent-vs-fraction scale errors.
 6. JSON path check. For duckdb-dialect sources it is **rewritten for DuckDB** (`json_keys` / `->>`) in place of the Postgres-only `jsonb_object_keys` version; native Postgres sources keep upstream's version.

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { CloseIcon } from './icons'
 
 interface RailProps {
@@ -5,9 +6,11 @@ interface RailProps {
   /** Below 1100 px the rail is a sheet over the main column (DESIGN.md §3.3). */
   sheet: boolean
   onClose(): void
+  /** The rail's content; without it, the rail says nothing is selected. */
+  children?: ReactNode
 }
 
-export function Rail({ label, sheet, onClose }: RailProps) {
+export function Rail({ label, sheet, onClose, children }: RailProps) {
   return (
     <aside
       aria-label={label}
@@ -32,7 +35,7 @@ export function Rail({ label, sheet, onClose }: RailProps) {
           </button>
         )}
       </div>
-      <p className="m-0 text-[13px] text-text-muted">Nothing selected.</p>
+      {children ?? <p className="m-0 text-[13px] text-text-muted">Nothing selected.</p>}
     </aside>
   )
 }

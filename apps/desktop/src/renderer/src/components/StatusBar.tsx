@@ -1,4 +1,8 @@
+import type { ClaudeStatus } from '@shared/api'
 import type { EngineState } from '@shared/engine'
+import { useEngineGet } from '../api/engine'
+import { jobStatusLine } from '../jobs/format'
+import type { JobSummary } from '../jobs/types'
 import { useEngine } from '../useEngine'
 
 const ENGINE_LABEL: Record<EngineState['status'], string> = {
@@ -25,8 +29,10 @@ function EngineDot({ state }: { state: EngineState }) {
  * background job, then the usage meter. Until the engine reports them, those parts are in their
  * "no data" state.
  */
-export function StatusBar() {
+export function StatusBar({ jobs, onOpenJobs }: { jobs: JobSummary[]; onOpenJobs(): void }) {
   const engine = useEngine()
+  const job = jobStatusLine(jobs)
+  const claude = useEngineGet<ClaudeStatus>('/claude')
   return (
     <footer
       data-testid="status-bar"
@@ -41,8 +47,20 @@ export function StatusBar() {
         <EngineDot state={engine} />
         {ENGINE_LABEL[engine.status]}
       </span>
-      <span>Claude Code not checked</span>
+      <span data-testid="claude-status" data-state={claude.data?.state}>
+        {claudeLabel(claude.data)}
+      </span>
       <span className="flex-1" />
+      {job && (
+        <button
+          type="button"
+          data-testid="status-job"
+          onClick={onOpenJobs}
+          className="-my-1 rounded px-1 py-1 text-text-2 underline-offset-2 hover:text-text hover:underline"
+        >
+          {job}
+        </button>
+      )}
       <span className="flex items-center gap-2">
         Usage
         <span
@@ -58,4 +76,21 @@ export function StatusBar() {
       </span>
     </footer>
   )
+}
+
+/** "Claude Code 2.1.319 · logged in"; ARCHITECTURE.md §6.5's states in plain words. */
+function claudeLabel(claude: ClaudeStatus | undefined): string {
+  if (claude === undefined) return 'Claude Code not checked'
+  if (claude.state === 'not_installed') return 'Claude Code not found'
+  const version = `Claude Code ${claude.version}`
+  switch (claude.state) {
+    case 'ready':
+      return `${version} · logged in`
+    case 'needs_login':
+      return `${version} · needs login`
+    case 'outdated':
+      return `${version} · needs ${claude.min_version} or later`
+    default:
+      return `${version} · login not checked`
+  }
 }

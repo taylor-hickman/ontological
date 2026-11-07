@@ -1,4 +1,5 @@
-// The window's size, position, open screen and theme, kept between launches (DESIGN.md §3.1).
+// The window's size, position, open screen and theme, kept between launches (DESIGN.md §3.1),
+// and whether the user has left onboarding (§5.1), so it doesn't open again by itself.
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -19,6 +20,7 @@ export interface ShellState {
   maximized: boolean
   screen: ScreenId
   theme: ThemeSource
+  setupClosed: boolean
 }
 
 export const MIN_SIZE = { width: 960, height: 640 } as const
@@ -27,7 +29,8 @@ export const DEFAULT_STATE: ShellState = {
   bounds: { width: 1280, height: 820 },
   maximized: false,
   screen: 'ask',
-  theme: 'system'
+  theme: 'system',
+  setupClosed: false
 }
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
@@ -48,7 +51,8 @@ export function parseState(raw: unknown): ShellState {
     bounds,
     maximized: obj.maximized === true,
     screen: isScreenId(obj.screen) ? obj.screen : DEFAULT_STATE.screen,
-    theme: isThemeSource(obj.theme) ? obj.theme : DEFAULT_STATE.theme
+    theme: isThemeSource(obj.theme) ? obj.theme : DEFAULT_STATE.theme,
+    setupClosed: obj.setupClosed === true
   }
 }
 
