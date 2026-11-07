@@ -12,7 +12,9 @@ uv run python -m ontological_eval cluster check   # each WWI table's row count a
 uv run python -m ontological_eval cluster status  # running or not, and the psql line to connect
 uv run python -m ontological_eval cluster down
 uv run python -m ontological_eval ingest          # WWI and the four BIRD databases into the eval store
+uv run python -m ontological_eval compile         # compile them there: spends Claude quota (~$1.50 at API prices)
 uv run python -m ontological_eval sets check      # every set's gold SQL runs and returns rows
+uv run python -m ontological_eval retrieval       # the retrieval benchmark: recall@k, no Claude
 ```
 
 ## The data
@@ -74,6 +76,28 @@ Each BIRD draw follows Mini-Dev's own difficulty mix over all 500 questions (8 s
 
 The sets are frozen: `sets freeze` won't overwrite them without `--force`, and after M0 nothing in `sets/` changes unless a question turns out to be broken, and then as a commit of its own that says why.
 
+## The eval compile
+
+`compile` runs the engine's compile on the eval databases in the eval store, through the real gateway on your Claude subscription, and syncs their Terms and attributes into the semantic layer with the default embedding model. [`ontological_eval/compile_store.py`](ontological_eval/compile_store.py) holds it. Every call is logged in the store's `ops.llm_call` with its API-equivalent cost, and its answer is cached there. A database whose tables all have Terms makes no call, and a compile that Claude stopped picks up where it left off on the next run. With M3.1's compile, the five databases took 256 calls, $1.49 at API prices and 14 minutes (BUILD_PLAN.md M3.9). It refuses while an engine serves the store, as `ingest` does.
+
+## The retrieval benchmark
+
+`retrieval` measures what retrieval finds of each question's gold tables and columns, for each candidate embedding model (ARCHITECTURE.md §7.2) and each configuration: dense only, BM25 only, trigram only, and hybrid (§7.3). It makes no Claude call, so it costs no quota once the store holds what it searches. [`ontological_eval/retrieval.py`](ontological_eval/retrieval.py) has the details.
+
+```sh
+uv run python -m ontological_eval retrieval                          # the grounding pack, all four models, dev
+uv run python -m ontological_eval retrieval --layer data             # the data layer: needs only the ingest
+uv run python -m ontological_eval retrieval --models arctic-m bge-small --set smoke
+```
+
+- **Gold.** The engine's SQL parser, the one query history goes through, resolves each gold query to catalog table and column ids.
+- **`--layer semantic`** (the default) builds the grounding pack as the agent's pre-work does: the raw question and its evidence, scoped to the question's database, with k as the pack's `question_k`. Column recall counts only gold columns that have an attribute; a declared-FK column gets a semantic FK instead. This layer needs a compile of the eval store.
+- **`--layer data`** searches the data layer that ingest builds, the question's k nearest columns plus its nearest table, as a stand-in that needs no compile.
+- **Collections.** Each model gets its own collection per layer (`vdb.bench_<layer>_<model>`), rebuilt from the store on every run, so nothing the engine reads is touched. The models are fetched into `<home>/models/<model>` and checked against their pinned hashes; all four come to about 750 MB.
+- **Coverage threshold.** It is recalibrated per model from dense distances. A question's nearest row in its own database counts as a positive, and its nearest row in each other eval database as a negative. The threshold is the distance that best separates the two (Youden's J), shown beside upstream's 0.75.
+
+The report prints as Markdown and is written to `<home>/results/retrieval-<layer>-<set>.json`, with every distance the threshold came from. The data layer on dev takes about a minute a model on an M-series Mac.
+
 ## Tests
 
 ```sh
@@ -81,4 +105,4 @@ uv run ruff check . && uv run ruff format --check . && uv run pyright
 ONTOLOGICAL_PG_BIN=<tree>/bin uv run pytest
 ```
 
-`tests/test_sets.py` chooses sets from synthetic questions shaped like Mini-Dev and checks gold SQL on a small SQLite file. `tests/test_fetch.py` runs `fetch` against a local HTTP server that answers range requests. `tests/test_cluster.py` drives the bundled binaries on a small WWI-shaped dataset, and `tests/test_ingest.py` ingests that dataset and a small BIRD-shaped SQLite file into an eval store. Both skip without `ONTOLOGICAL_PG_BIN` unless `ONTOLOGICAL_PG_REQUIRED=1`, which CI sets: `ci.yml` runs both on Linux, and `postgres.yml` runs the cluster's on the bundled tree.
+`tests/test_retrieval.py` checks gold extraction and the threshold's calibration on their own, and runs the data-layer benchmark end to end on two small BIRD-shaped files with the default model (it also needs `ONTOLOGICAL_MODEL_DIR`, which CI sets). `tests/test_sets.py` chooses sets from synthetic questions shaped like Mini-Dev and checks gold SQL on a small SQLite file. `tests/test_fetch.py` runs `fetch` against a local HTTP server that answers range requests. `tests/test_cluster.py` drives the bundled binaries on a small WWI-shaped dataset, and `tests/test_ingest.py` ingests that dataset and a small BIRD-shaped SQLite file into an eval store. Both skip without `ONTOLOGICAL_PG_BIN` unless `ONTOLOGICAL_PG_REQUIRED=1`, which CI sets: `ci.yml` runs both on Linux, and `postgres.yml` runs the cluster's on the bundled tree.

@@ -39,3 +39,12 @@ def cluster_dir(home: Path) -> Path:
 
 def app_data_dir(home: Path) -> Path:
     return home / "app"
+
+
+def models_dir(home: Path) -> Path:
+    """The candidate embedding models, one directory each (the retrieval benchmark's)."""
+    return home / "models"
+
+
+def results_dir(home: Path) -> Path:
+    return home / "results"

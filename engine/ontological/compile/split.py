@@ -8,8 +8,10 @@
 # transaction, with its checkpoints. The FK stage reads the table's columns after profiling has
 # stored their samples, where upstream reads them before, so its prompt has samples on a first
 # compile. The Terms and attributes are embedded once the compile ends or stops, not as each
-# table commits (ontological/embed/semantic.py). The SQL-attribute and bridge stages are later
-# work.
+# table commits (ontological/embed/semantic.py), and before the semantic FKs, whose candidates
+# are searched from those vectors; again after the post-stages, for their SQL attributes. The
+# post-stages that make Claude calls (semantic FKs, SQL attributes, bridges, PII) pause and retry
+# on a rate limit as the packs do.
 
 """The compile (BUILD_PLAN.md M1.4, M3.1, M3.2, M3.3; ARCHITECTURE.md §1.3, §6.4, §6.5).
 
@@ -32,15 +34,26 @@ unchanged. With `table_calls="merged"`, steps 2 to 5 are one `table_semantics` c
 instead (`compile.merged`), cleaned up as each stage cleans up its own; a table merged doesn't
 suit, or whose answer is invalid, takes the split stages.
 
-Then semantic FKs from the declared foreign keys, and, given an embedder, the Terms' and
-attributes' vectors in the semantic layer (`ontological.embed.semantic`), for retrieval.
+Then, given an embedder, the Terms' and attributes' vectors in the semantic layer
+(`ontological.embed.semantic`), for retrieval, and the post-stages, for the whole database:
+
+7. semantic FKs (`compile.semantic_fk`): the declared foreign keys, and, given the embedder and
+   a job that planned tables, the rest inferred from those vectors 25 columns to a call and
+   checked against the source's values through the executor's `probe` op;
+8. SQL attributes the judge names from query history (`compile.sql_attributes`);
+9. a join-pattern SQL attribute for each bridge table (`compile.bridges`);
+10. with `pii` on, PII tags on the columns no run has classified (`ontological.pii`), then, on
+    or off, the tags carried to the attributes built from tagged columns.
+
+Then the vectors again, for what the post-stages wrote.
 Every Claude call goes through the gateway, one at a time. An answer that fails validation takes
 upstream's deterministic fallback. When Claude doesn't answer at all, nothing is written for the
-pack: on a rate limit or an overload the job pauses until the usage window resets and retries
-the pack; for anything else (a logged-out or missing `claude`) it stops, still embedding the
-tables it wrote, and the next run resumes it. A crashed job is resumed the same way, and a
-resumed pack's calls are the ones its first try made, so the gateway's cache answers those that
-were answered. A certified description is never overwritten (the DAL's writes guard it).
+pack, or no inferred FK: on a rate limit or an overload the job pauses until the usage window
+resets and retries the pack, or the FK stage; for anything else (a logged-out or missing
+`claude`) it stops, still embedding the tables it wrote, and the next run resumes it. A crashed
+job is resumed the same way, and a resumed pack's calls are the ones its first try made, as are
+the FK stage's, so the gateway's cache answers those that were answered. A certified description
+is never overwritten (the DAL's writes guard it).
 
 A person can pause the job too (`hold`): it stops before its next pack, or at once while it waits
 out a usage limit, and stays `held` until they resume it. Each pack's calls are logged under the
@@ -54,9 +67,10 @@ job and the pack (`llm.calls.call_scope`), which is how the Jobs screen shows a 
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 
@@ -72,21 +86,30 @@ from auto_ontology.dal.datasources import (
 )
 from auto_ontology.dal.session import store, write_transaction
 from auto_ontology.dal.terms import upsert_table_term
+from ontological.catalog.parse_pool import ParsePool
+from ontological.compile.bridges import Bridges, build_bridge_sql_attributes
 from ontological.compile.descriptions import DescriptionsRequest, column_attribute_specs_pack
 from ontological.compile.gateway import ClaudeUnavailable, Structured
 from ontological.compile.keys import KeysRequest, fk_source_columns, suggest_keys_pack
 from ontological.compile.merged import table_semantics
 from ontological.compile.models import ColumnAttributeSpec, TableKeys, TermProposal
 from ontological.compile.packing import PlannedTable, plan
-from ontological.compile.semantic_fk import SemanticFks, resolve_declared_fks
+from ontological.compile.semantic_fk import SemanticFks, resolve_semantic_fks
+from ontological.compile.sql_attributes import SqlAttributes, suggest_sql_attributes
 from ontological.compile.synonyms import extract_synonyms_pack
 from ontological.compile.terms import extract_terms_pack
 from ontological.embed.embedder import LocalEmbedder
-from ontological.embed.search import semantic_vdb
+from ontological.embed.search import dense_search, semantic_vdb
 from ontological.embed.semantic import Synced, sync_database
 from ontological.jobs import store as job_store
 from ontological.jobs.active import ActiveJobs
 from ontological.llm.calls import call_scope
+from ontological.pii.service import (
+    PiiPropagation,
+    PiiTagging,
+    detect_and_tag_pii,
+    propagate_pii_to_attributes,
+)
 from ontological.profile.run import profile_table
 from ontological.profile.sampling import TableProfile
 from ontological.sources.executor import SourceExecutor
@@ -100,6 +123,8 @@ RESUME_MARGIN_S = 5
 RETRY_WITHOUT_RESET_S = 60
 # A table's stages, in the order their calls run: the Jobs screen's segments (DESIGN.md §4.8).
 STAGES = ("table_keys", "column_descriptions", "table_terms", "table_synonyms")
+# What the semantic-FK stage's calls are logged for: the database, not a pack.
+FK_SCOPE = "semantic FKs"
 
 # The `compile.table_calls` setting (ARCHITECTURE.md §6.4).
 type TableCalls = Literal["split", "merged"]
@@ -120,14 +145,26 @@ class Compiled:
     database_name: str
     job_id: int  # its ops.job row
     tables: list[CompiledTable]  # the tables this run wrote, or skipped, before any stop
-    semantic_fks: SemanticFks | None  # None when the compile stopped
+    semantic_fks: SemanticFks | None  # None when the compile stopped before them
     stopped: ClaudeUnavailable | None = None  # why it stopped; the next run resumes the job
     vectors: Synced | None = None  # the semantic layer's sync; None without an embedder
     held: bool = False  # the person paused it; resuming runs the rest
+    post: PostStages | None = None  # None when the compile stopped or was held before them
 
     @property
     def complete(self) -> bool:
         return self.stopped is None and not self.held
+
+
+@dataclass(frozen=True)
+class PostStages:
+    """What the post-stages after semantic FKs did, each None when the compile stopped before
+    it, or, for `pii`, when it is off."""
+
+    sql_attributes: SqlAttributes | None = None
+    bridges: Bridges | None = None
+    pii: PiiTagging | None = None
+    pii_propagation: PiiPropagation | None = None
 
 
 class Clock(Protocol):
@@ -168,13 +205,17 @@ async def compile_database(
     clock: Clock | None = None,
     embedder: LocalEmbedder | None = None,
     hold: asyncio.Event | None = None,
+    pool: ParsePool | None = None,
+    pii: bool = False,
     table_calls: TableCalls = "split",
 ) -> Compiled:
-    """Compile every table of `database_name` that has no Term yet, then its semantic FKs, then,
-    given an `embedder`, sync the database's vectors in the semantic layer. `executor` holds the
-    database's source. `table_calls` is the `compile.table_calls` setting (§6.4): `"split"`
-    runs the four stages, `"merged"` one `table_semantics` call a table. It applies to the
-    tables this run compiles, so a resumed job may take the other.
+    """Compile every table of `database_name` that has no Term yet, then run the post-stages
+    (semantic FKs, SQL attributes, bridges, and PII when `pii` is on), then, given an
+    `embedder`, sync the database's vectors in the semantic layer. `executor` holds the
+    database's source. History fragments are extracted in `pool`, or in a pool of its own.
+    `table_calls` is the `compile.table_calls` setting (§6.4): `"split"` runs the four stages,
+    `"merged"` one `table_semantics` call a table. It applies to the tables this run compiles,
+    so a resumed job may take the other.
 
     Resumes the database's unfinished compile job, on the plan it began with, or starts one.
     A job paused when an earlier engine stopped waits out the rest of its pause first. `jobs`
@@ -223,45 +264,186 @@ async def compile_database(
                 continue
             names = ", ".join(str(table["name"]) for table, _ in work)
             logger.info("[pack %d/%d] %s", number, len(packs), names)
-            while True:
-                try:
-                    with call_scope(job.id, members[0][0].pack, names):
-                        compiled = await compile_pack(
-                            work,
-                            executor,
-                            gateway,
-                            probe_distinct_values=probe_distinct_values,
-                            table_calls=table_calls,
-                        )
-                    break
-                except ClaudeUnavailable as e:
-                    if e.outcome != "limited":
-                        logger.warning(
-                            "compile job %d stopped at %s, %d table(s) left: %s",
-                            job.id,
-                            names,
-                            left,
-                            e,
-                        )
-                        await asyncio.to_thread(
-                            job_store.set_state, job.id, "stopped", error=str(e)
-                        )
-                        vectors = await _embed(database_name, embedder)
-                        return Compiled(
-                            database_name, job.id, done, None, stopped=e, vectors=vectors
-                        )
-                    await _pause(job.id, clock, e, hold)
-                    if hold.is_set():
-                        return await _held(job.id, database_name, done, embedder)
+            with call_scope(job.id, members[0][0].pack, names):
+                compiled = await _answered(
+                    job.id,
+                    clock,
+                    hold,
+                    functools.partial(
+                        compile_pack,
+                        work,
+                        executor,
+                        gateway,
+                        probe_distinct_values=probe_distinct_values,
+                        table_calls=table_calls,
+                    ),
+                )
+            if isinstance(compiled, ClaudeUnavailable):
+                logger.warning(
+                    "compile job %d stopped at %s, %d table(s) left: %s",
+                    job.id,
+                    names,
+                    left,
+                    compiled,
+                )
+                return await _stopped(job.id, database_name, done, compiled, embedder)
+            if compiled is None:
+                return await _held(job.id, database_name, done, embedder)
             done.extend(compiled)
             left -= len(work)
-        fks = await asyncio.to_thread(resolve_declared_fks, database_name)
-        vectors = await _embed(database_name, embedder)
+        if hold.is_set():
+            return await _held(job.id, database_name, done, embedder)
+        # The FK stage searches the attributes' vectors, so the layer is synced first. It infers
+        # FKs only for a job that planned tables: a column it passed on, or whose edge it pruned,
+        # would otherwise be asked again by every compile, in a batch the cache doesn't know.
+        infer = bool(await asyncio.to_thread(job_store.job_steps, job.id))
+        synced = await _embed(database_name, embedder)
+        with call_scope(job.id, None, FK_SCOPE):
+            fks = await _answered(
+                job.id,
+                clock,
+                hold,
+                lambda: _semantic_fks(database_name, executor, gateway, embedder, infer),
+            )
+        if isinstance(fks, ClaudeUnavailable):
+            logger.warning("compile job %d stopped at its semantic FKs: %s", job.id, fks)
+            return await _stopped(job.id, database_name, done, fks, embedder, synced)
+        if fks is None:
+            return await _held(job.id, database_name, done, embedder, synced)
+        post = PostStages()
+        try:
+            post = await _post_stages(job.id, database_name, gateway, clock, hold, pool, pii, post)
+        except _Held as h:
+            held = await _held(job.id, database_name, done, embedder, synced)
+            return replace(held, post=h.post)
+        except _Stopped as s:
+            logger.warning("compile job %d stopped in its post-stages: %s", job.id, s.reason)
+            await asyncio.to_thread(job_store.set_state, job.id, "stopped", error=str(s.reason))
+            vectors = await _embed(database_name, embedder, synced)
+            return Compiled(
+                database_name, job.id, done, fks, stopped=s.reason, vectors=vectors, post=s.post
+            )
+        vectors = await _embed(database_name, embedder, synced)
         await asyncio.to_thread(job_store.set_state, job.id, "done")
-        return Compiled(database_name, job.id, done, fks, vectors=vectors)
+        return Compiled(database_name, job.id, done, fks, vectors=vectors, post=post)
 
 
-async def _embed(database_name: str, embedder: LocalEmbedder | None) -> Synced | None:
+class _Stopped(Exception):
+    def __init__(self, reason: ClaudeUnavailable, post: PostStages) -> None:
+        self.reason = reason
+        self.post = post
+
+
+class _Held(Exception):
+    def __init__(self, post: PostStages) -> None:
+        self.post = post
+
+
+async def _post_stages(
+    job_id: int,
+    database_name: str,
+    gateway: Structured,
+    clock: Clock,
+    hold: asyncio.Event,
+    pool: ParsePool | None,
+    pii: bool,
+    post: PostStages,
+) -> PostStages:
+    """The post-stages that may ask Claude, in upstream's order, their calls logged under the job
+    and the stage's name. A rate limit pauses the job and reruns the stage, whose writes so far
+    make the rerun skip them (and the cache answers what was asked). Raises `_Stopped`, with
+    what finished, when Claude can't answer otherwise, and `_Held` when the person pauses the
+    job, before a stage or during a pause; resuming runs the post-stages again."""
+
+    async def answered[T](stage: str, run: Callable[[], Awaitable[T]]) -> T:
+        while True:
+            if hold.is_set():
+                raise _Held(post)
+            try:
+                with call_scope(job_id, None, stage):
+                    return await run()
+            except ClaudeUnavailable as e:
+                if e.outcome != "limited":
+                    raise _Stopped(e, post) from e
+                await _pause(job_id, clock, e, hold)
+
+    post = replace(
+        post,
+        sql_attributes=await answered(
+            "SQL attributes", lambda: suggest_sql_attributes(database_name, gateway, pool=pool)
+        ),
+    )
+    post = replace(
+        post,
+        bridges=await answered(
+            "bridge tables", lambda: build_bridge_sql_attributes(database_name, gateway)
+        ),
+    )
+    if pii:
+        post = replace(
+            post, pii=await answered("PII", lambda: detect_and_tag_pii(database_name, gateway))
+        )
+    return replace(post, pii_propagation=await asyncio.to_thread(propagate_pii_to_attributes))
+
+
+async def _answered[T](
+    job_id: int, clock: Clock, hold: asyncio.Event, run: Callable[[], Awaitable[T]]
+) -> T | ClaudeUnavailable | None:
+    """`run()`'s result, paused and retried while Claude is over a usage limit (§6.5). Claude's
+    error when it can't answer for a reason a wait won't fix; None when the person paused the
+    job meanwhile."""
+    while True:
+        try:
+            return await run()
+        except ClaudeUnavailable as e:
+            if e.outcome != "limited":
+                return e
+            await _pause(job_id, clock, e, hold)
+            if hold.is_set():
+                return None
+
+
+async def _semantic_fks(
+    database_name: str,
+    executor: SourceExecutor,
+    gateway: Structured,
+    embedder: LocalEmbedder | None,
+    infer: bool,
+) -> SemanticFks:
+    if embedder is None or not infer:
+        return await resolve_semantic_fks(database_name, executor, gateway, None)
+    vdb = semantic_vdb(embedder)
+    try:
+        return await resolve_semantic_fks(
+            database_name,
+            executor,
+            gateway,
+            lambda query, k, where: dense_search(vdb, query, k=k, where=where),
+        )
+    finally:
+        vdb.close()
+
+
+async def _stopped(
+    job_id: int,
+    database_name: str,
+    done: list[CompiledTable],
+    error: ClaudeUnavailable,
+    embedder: LocalEmbedder | None,
+    synced: Synced | None = None,
+) -> Compiled:
+    """Claude can't answer: leave the job `stopped`, with the tables it wrote embedded, for the
+    next run to resume."""
+    await asyncio.to_thread(job_store.set_state, job_id, "stopped", error=str(error))
+    vectors = await _embed(database_name, embedder, synced)
+    return Compiled(database_name, job_id, done, None, stopped=error, vectors=vectors)
+
+
+async def _embed(
+    database_name: str, embedder: LocalEmbedder | None, synced: Synced | None = None
+) -> Synced | None:
+    """Sync the database's vectors. Given the compile's earlier sync, `synced`, returns the two
+    as one, so a compile reports one sync whichever stage it ended at."""
     if embedder is None:
         return None
 
@@ -272,16 +454,21 @@ async def _embed(database_name: str, embedder: LocalEmbedder | None) -> Synced |
         finally:
             vdb.close()
 
-    return await asyncio.to_thread(sync)
+    later = await asyncio.to_thread(sync)
+    return later if synced is None else synced.then(later)
 
 
 async def _held(
-    job_id: int, database_name: str, done: list[CompiledTable], embedder: LocalEmbedder | None
+    job_id: int,
+    database_name: str,
+    done: list[CompiledTable],
+    embedder: LocalEmbedder | None,
+    synced: Synced | None = None,
 ) -> Compiled:
     """The person paused the job: leave it `held`, with the tables it wrote embedded."""
     logger.info("compile job %d paused by the person", job_id)
     await asyncio.to_thread(job_store.set_state, job_id, "held")
-    vectors = await _embed(database_name, embedder)
+    vectors = await _embed(database_name, embedder, synced)
     return Compiled(database_name, job_id, done, None, vectors=vectors, held=True)
 
 

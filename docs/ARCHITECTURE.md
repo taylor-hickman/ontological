@@ -140,7 +140,7 @@ The agent is a LangGraph `StateGraph` used only as control flow. Each node is pl
 - Worst case: 40+.
 - Plus 3–8 query embeddings. Rerank is not used here.
 
-**`check_answerable`.** One extraction call, then vector search, then a deterministic score: the fraction of entities that have a column-attribute hit with cosine distance ≤ 0.75.
+**`check_answerable`.** One extraction call, then vector search, then a deterministic score: the fraction of entities that have a column-attribute hit within the embedding model's coverage distance (0.636 for the default, §7.4). Upstream's 0.75 was tuned to Nemotron.
 
 **Learning loop.** Nothing is automatic. Editing a custom analysis, a SQL attribute or a description re-embeds it, so it shows up in future retrieval.
 
@@ -386,7 +386,7 @@ Port `connectors/base.py::SQLDatabase` as-is, and finish the DuckDB reference co
 ### 5.7 History
 
 Upstream keeps no ontology history. Ontological adds:
-- `ops.change_log(ts, entity, entity_id, field, old, new, actor)`, where actor is `user | compile | import`. It is written by the same functions that apply edits, and it drives undo and "what did compile change".
+- `ops.change_log(id, edit, ts, entity, entity_id, field, old, new, actor, undoes)`, where actor is `user | compile | import`. It is written by the same functions that apply edits (`curate/edits.py`), in the edit's transaction: one row per field changed, sharing the edit's id, with `old` and `new` as JSON. It drives undo and "what did compile change". An undo is an edit whose rows name the edit they revert in `undoes`. An edit is undone once, and not while a later edit holds one of its fields.
 - A native-YAML snapshot written to `backups/` at the end of every compile run. This reuses the export code (§9.3).
 - `pg_dump` files before migrations, after compiles and at quit (§5.1). Ontological keeps the newest 10 by name (UTC timestamps, §5.3) and removes older ones, except the dump just written: if the clock was set back, ten older dumps can sort after it.
 
@@ -483,7 +483,7 @@ Every Claude call names a task, and the route table maps each task to a model an
 | `table_terms` | split (default): term extraction, assigning every column, with the new descriptions as input | `sonnet` | `high` | 1 per table |
 | `table_synonyms` | split (default): synonyms already written in the table description | `haiku` | `low` | 0–1 per table |
 | `table_semantics` | merged (option): keys, descriptions, terms and synonyms in one call | `sonnet` | `high` | 1 per table |
-| `semantic_fk_pick` | pick the referenced attribute from the top-3 candidates | `sonnet` | `medium` | 1 per ~25 columns |
+| `semantic_fk_pick` | pick the referenced attribute from each column's candidates (upstream's two top-3 searches) | `sonnet` | `medium` | 1 per ~25 columns |
 | `sql_attribute_judge` | keep or drop query-history fragments, and name them | `sonnet` | `medium` | 1 per batch of terms |
 | `bridge_sql` | write a bridge table's join SQL and pick its owning term | `opus` | `high` | 1 per bridge |
 | `pii_classify` | classify uncertain columns from metadata | `haiku` | `low` | 1 per ~40 columns |
@@ -512,7 +512,7 @@ Upstream was written for a cheap, fast HTTP endpoint and makes many small calls.
 | Upstream | Ontological |
 |---|---|
 | Per table: FK suggestion (1) + column descriptions (⌈n/15⌉) + term extraction (1) + synonyms (0–1) | **Default `split`: upstream's four calls, in upstream's order, on tiered models** (§6.3). Keys and terms run on Sonnet, descriptions and synonyms on Haiku. Term extraction sees the finished descriptions, as upstream's does. Tables with ≤ 6 columns are **packed several to a call** within each stage (up to about 8k tokens of input). Columns beyond prompt capacity are chunked instead of truncated at 40. **Option `merged`:** one `TableSemantics` call per table returning `{pk, fk_suggestions, is_junction, column_descriptions[], terms[], synonyms[]}`, built from the same four prompts as sections. It is for very large schemas where split would take many usage windows. The setting is `compile.table_calls`, and the pre-compile estimate shows both options (§6.5). |
-| Semantic FK: 1 call per unresolved column | **1 call per batch of about 25 unresolved columns**, each with its top-3 retrieval candidates; then upstream's deterministic overlap probe and pruning |
+| Semantic FK: 1 call per unresolved column | **1 call per batch of 25 unresolved columns**, each with its candidates from upstream's two top-3 searches; then upstream's deterministic sample-match and overlap probes, through the executor's `probe` op, and pruning |
 | SQL attribute judge: 1 call per term | 1 call per batch of terms (fragments are short) |
 | Bridge owner via RERANK | Claude picks the owner inside the bridge-SQL call |
 | PII LLM fallback: 1 call per uncertain column | 1 call per batch of about 40 uncertain columns, metadata only (unchanged) |
@@ -560,7 +560,7 @@ The runtime is ONNX Runtime (the macOS arm64 wheel is 20.9 MB) on the CPU provid
 - The int8 file quantizes activations per batch, so a passage's vector shifts slightly with its batch-mates (cosine against the same text embedded alone: ≥ 0.996 on an M5 Max, about 0.98 on GitHub's Linux x86 and macOS runners). The engine embeds each query alone, so query vectors are deterministic. `content_hash`, not vector equality, decides whether a text needs re-embedding.
 
 - Upstream embeds asymmetrically (`input_type=query|passage`). Use the model's query/passage prefixes where it defines them.
-- Every vector's metadata stores `model` and `content_hash`. Changing the embedding model triggers a re-embed job; vectors from different models are never compared.
+- Every vector's metadata stores `model` and `content_hash`. Changing the embedding model triggers a re-embed job (`embed/reembed.py`, an `ops.job` of kind `reembed` per database); vectors from different models are never compared. An edit re-embeds only the texts whose `content_hash` it changed (§5.7).
 - **Fix upstream's ordering bug**: build data-layer texts *after* profiling so that `sample_values` are included. Ingest profiles each table through its executor, writes the result to the store, and then builds the texts from the store (`catalog/data_layer.py`, M2.5).
 
 ### 7.2 Choosing the model
@@ -581,7 +581,7 @@ Candidates (ONNX files and licenses checked on Hugging Face, 2026-11-04):
 | `nomic-embed-text-v1.5` int8 | 768 | 137.3 MB | Apache-2.0 |
 | `bge-base-en-v1.5` fp32 | 768 | 435.8 MB | MIT |
 
-The default is `snowflake-arctic-embed-m-v1.5` int8 until the retrieval benchmark (§7.4) runs. After that, it is the model with the best recall. A smaller model wins only on a tie; app size is not the deciding factor.
+The default is the model with the best recall in the retrieval benchmark (§7.4). A smaller model wins only on a tie; app size is not the deciding factor. The benchmark kept `snowflake-arctic-embed-m-v1.5` int8 (2026-11-06, docs/BUILD_PLAN.md M3.9). Under hybrid search it had the best column recall at every k, and its table recall was within 0.015 of the best at k = 10. `bge-base` is four times its size and no better. `bge-small` trails it by 0.02–0.04 on columns, which is not a tie. All four are pinned in `embed/model.py`, so the benchmark can be rerun on each one.
 
 Dropping embeddings entirely was considered and rejected. It would save 66–440 MB and lose the paraphrase cases above. Semantic-FK candidate search would survive on name matching plus the value-overlap probe, but few-shot retrieval and `check_answerable` would get worse in ways that are hard to measure.
 
@@ -600,13 +600,15 @@ score = rrf( dense_rank(embedding <=> query_vec),                 # pgvector
 - **Identifier-aware tokens.** Before indexing and querying, identifiers are split on snake_case and camelCase, and glossary acronyms (Settings → Glossary) are expanded. `cust_acct_no` matches "customer account number".
 - **Why not BM25 inside Postgres.** `ts_rank_cd` is not BM25 and has the start-of-token problem. ParadeDB's `pg_search` is BM25 but AGPL-3.0. Timescale's `pg_textsearch` is BM25 under the PostgreSQL license, but it is one more native extension to build, sign and upgrade per platform. Revisit it only if the in-engine index becomes a bottleneck.
 - Fusion runs in Python over the three ranked lists. It keeps upstream's filters (collection, label, database_name) and its `{text, metadata, distance}` result contract, so ported upstream code works unchanged. Each ranking contributes its top 50 to RRF (k = 60). Every hit's `_distance` is its cosine distance to the query, whichever ranking found it. The trigram ranking keeps names over pg_trgm's similarity threshold (0.3), through a GIN index on the name. The vendored `PostgresVDB` reports every write and delete to a listener (`on_change`), which is how a change reaches the BM25 index whoever made it.
-- Certified items (metadata `certified: true`) get a small RRF bonus, 0.002, about what moving from 10th to 1st in one ranking adds, and are labeled "certified" in the grounding pack (§8.3). The retrieval benchmark (§7.4) tunes it.
+- Certified items (metadata `certified: true`) get a small RRF bonus, 0.002, about what moving from 10th to 1st in one ranking adds, and are labeled "certified" in the grounding pack (§8.3). The eval has no certified items, so the retrieval benchmark (§7.4) can't tune it.
 
-**Recalibrate thresholds.** Upstream's coverage threshold (cosine distance ≤ 0.75) and its k values are tuned to Nemotron and won't transfer. Re-derive them per model on the eval set (§12).
+**Recalibrate thresholds.** Upstream's coverage threshold (cosine distance ≤ 0.75) and its k values are tuned to Nemotron and won't transfer, so they are re-derived per model on the dev set by the retrieval benchmark (§7.4). Each model's coverage distance is on its spec in `embed/model.py`. The default's is 0.636: at upstream's 0.75 it would cover 79% of questions asked against the wrong database. The raw question takes 30 attributes in the pack (`QUESTION_K`) instead of upstream's 10, which is where recall levels off. `plan`'s per-entity k values (2 per entity, 3 for evidence, 1 Term) and the certified bonus stay at upstream's numbers. The benchmark has no extracted entities and the eval has no certified items, so M4.7 and real use set those.
 
 ### 7.4 Retrieval benchmark
 
-The benchmark costs no quota after one compile. For each eval question, sqlglot extracts the gold tables and columns from the gold SQL. The benchmark then measures recall@k of the grounding pack for each configuration: dense only, BM25 only, trigram only and hybrid, for each candidate model.
+The benchmark costs no quota after one compile (`ontological_eval compile`; the five eval databases took 256 calls, $1.49 at API prices and 14 minutes). For each eval question, the engine's SQL parser, through sqlglot, resolves the gold SQL to the tables and columns it reads. The benchmark then measures recall@k of the grounding pack for each configuration: dense only, BM25 only, trigram only and hybrid, for each candidate model. Column recall counts the gold columns that have an attribute. It can also run on the data layer, which needs no compile.
+
+The coverage distance is calibrated from the same run. A question's nearest attribute in its own database is a positive, and its nearest in each other eval database a negative, since the question can't be answered there. The distance that best separates them (Youden's J) is the threshold. The calibration uses the raw question; `check_answerable` scores extracted entities, so M4.4 checks the value on those. `eval/README.md` says how to run the benchmark, and BUILD_PLAN.md M3.9 has the numbers.
 
 ### 7.5 Rerank
 
@@ -766,11 +768,12 @@ ontological/
       profile/                  sampling, date_format, json paths (run inside the executor)     (ported)
       compile/                  stages with their prompts (versioned), merged/split call shapes, batching/packing, checkpoints
       pii/                      rules (ported) + batched Claude fallback
-      embed/                    ONNX embedder (LangChain Embeddings interface), BM25 index + tokenizer, hybrid search, retrieval benchmark
+      embed/                    ONNX embedder (LangChain Embeddings interface), BM25 index + tokenizer, hybrid search, the candidate models (the retrieval benchmark is in eval/)
       answer/                   grounding pack, agent tools + preconditions, validation gate, probes (ported)
       llm/                      ClaudeGateway, route table, cache, limits
       interchange/              native YAML + Ossie
       mcp/                      stdio shim
+      curate/                   edits with ops.change_log, history and undo
       jobs/                     runner, staleness check, pause/resume
     tests/
       upstream_fixtures/        test-only vendored upstream connectors, services and golden seed (§5.4)

@@ -88,9 +88,30 @@ def answer_table(task: str, table: str, user: str) -> dict[str, Any] | None:
     }
 
 
+#: The scripted Claude's join SQL for Chinook's one bridge table.
+PLAYLIST_TRACKS = (
+    "SELECT * FROM main.PlaylistTrack AS pt "
+    "JOIN main.Playlist AS p ON pt.PlaylistId = p.PlaylistId "
+    "JOIN main.Track AS t ON pt.TrackId = t.TrackId"
+)
+
+
 def stages(task: str, user: str) -> dict[str, Any] | NoAnswer | None:
     """What the scripted Claude says to each stage: an entry per table to a packed call, which
-    leaves out a table whose own answer would be invalid."""
+    leaves out a table whose own answer would be invalid. It passes on every semantic FK."""
+    if task == "semantic_fk_pick":
+        named = re.findall(r"^Foreign-key column: (.+)$", user, flags=re.M)
+        if len(named) == 1:
+            return {"selected_id": None}
+        return {"columns": [{"column": c, "selected_id": None} for c in named]}
+    if task == "bridge_sql":
+        assert "Bridge table: main.PlaylistTrack" in user, user
+        return {
+            "name": "Playlist Tracks",
+            "description": "Which tracks each playlist holds.",
+            "expression": PLAYLIST_TRACKS,
+            "owner_term": "Playlist",
+        }
     found = sections(user)
     if len(found) > 1 or (found and task in ("column_descriptions", "table_synonyms")):
         entries = [
@@ -154,6 +175,8 @@ def test_split_runs_each_stage_once_a_pack_one_call_at_a_time(
             for t in PACK_ORDER[7:]
             for task in ("table_keys", "column_descriptions", "table_terms")
         ],
+        # Chinook has no query history to judge; PlaylistTrack is its one bridge
+        ("bridge_sql", []),
     ]
     assert gateway.peak == 1
     assert [t.name for t in got.tables if t.skipped] == ["PlaylistTrack"]
@@ -176,6 +199,8 @@ def test_merged_asks_one_call_a_table_one_call_at_a_time(
         ("column_descriptions", []),
         ("table_terms", ["Genre"]),
         *[("table_semantics", [t]) for t in PACK_ORDER[7:]],
+        # The post-stages are the same for both options
+        ("bridge_sql", []),
     ]
     assert gateway.peak == 1
     assert [t.name for t in got.tables if t.skipped] == ["PlaylistTrack"]
@@ -250,10 +275,14 @@ def test_terms_and_attributes_are_written_for_every_non_fk_column(
         "SELECT count(*) FROM column__has_attribute h JOIN catalog_column c ON c.id = h.column_id "
         "WHERE c.name = 'Composer'",
     ) == ["0"]
-    assert rows(store, "SELECT name FROM catalog_table WHERE is_junction_table") == ["InvoiceLine"]
+    # InvoiceLine by the keys call; PlaylistTrack, all foreign keys, by the bridge stage
+    assert rows(store, "SELECT name FROM catalog_table WHERE is_junction_table ORDER BY name") == [
+        "InvoiceLine",
+        "PlaylistTrack",
+    ]
 
 
-def test_semantic_fks_come_from_declared_fks_only(
+def test_without_an_embedder_semantic_fks_come_from_declared_fks_only(
     compiled: tuple[Compiled, ScriptedGateway, pg.Layout],
 ) -> None:
     got, _, store = compiled
@@ -280,10 +309,10 @@ def test_semantic_fks_come_from_declared_fks_only(
         "Track.GenreId -> Genre.GenreId true",
         "Track.MediaTypeId -> MediaType.MediaTypeId true",
     ]
-    # Employee.ReportsTo references its own table; Track.Composer has no declared FK, and
-    # inferring one is M3.4's
+    # Employee.ReportsTo references its own table; Track.Composer has no declared FK, and with
+    # no embedder to search for its candidates, it gets none
     assert got.semantic_fks == SemanticFks(
-        created=10, self_references=1, no_attribute=0, undeclared=1
+        declared=10, self_references=1, inferred=0, matched=0, unresolved=1, pruned=0
     )
 
 
@@ -302,7 +331,8 @@ def test_a_second_compile_asks_nothing_and_writes_nothing(
 
     assert [(t.name, t.skipped) for t in again.tables] == [("PlaylistTrack", "no non-FK columns")]
     assert gateway.calls == []
-    assert again.semantic_fks is not None and again.semantic_fks.created == 0
+    # ReportsTo is still a self-reference, and Composer still has no candidates
+    assert again.semantic_fks == SemanticFks(0, 1, 0, 0, 1, 0)
     after = rows(
         store, "SELECT count(*) FROM term UNION ALL SELECT count(*) FROM column__semantic_fk"
     )

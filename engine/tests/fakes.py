@@ -1,4 +1,5 @@
-"""Stand-ins tests share: an embedder, a keychain, a Claude gateway for compile, and a clock."""
+"""Stand-ins tests share: an embedder, a keychain, a Claude gateway for compile, a clock, and
+sources for the answer gate's probes."""
 
 from __future__ import annotations
 
@@ -10,13 +11,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 
+import duckdb
 from keyring.backend import KeyringBackend
 from langchain_core.embeddings import Embeddings
 from pydantic import BaseModel
 
+from ontological.answer.gate import KeyColumns
 from ontological.compile import merged
 from ontological.llm.calls import Outcome
 from ontological.llm.gateway import GatewayStatus, State
+from ontological.sources.executor import Rows, SourceQueryError
+from ontological.sources.session import Refused, Session
 
 
 class HashEmbeddings(Embeddings):
@@ -199,3 +204,91 @@ class FakeClock:
         self.on_sleep(seconds)
         self.at += timedelta(seconds=seconds)
         await asyncio.sleep(0)
+
+
+def frame(**columns: list[Any]) -> Rows:
+    """A probe's result, column by column: `frame(value=["a", "b"])`."""
+    names = list(columns)
+    values = list(columns.values())
+    count = len(values[0]) if values else 0
+    return Rows(
+        names, ["VARCHAR"] * len(names), [tuple(v[i] for v in values) for i in range(count)], False
+    )
+
+
+class ScriptedProber:
+    """A source whose probes answer with `results`, in order, and record their SQL."""
+
+    def __init__(self, results: list[Rows]) -> None:
+        self.results = list(results)
+        self.seen: list[str] = []
+
+    def probe(self, sql: str, *, max_rows: int) -> Rows:
+        self.seen.append(sql)
+        return self.results.pop(0)
+
+
+class DuckProber:
+    """A source session's `rows` on an in-memory DuckDB that `setup` fills, in this process:
+    the probes run the SQL the executor's child would run."""
+
+    def __init__(self, *setup: str) -> None:
+        self.session = Session()
+        for statement in setup:
+            self.session.con.execute(statement)
+        self.seen: list[str] = []
+
+    def probe(self, sql: str, *, max_rows: int) -> Rows:
+        self.seen.append(sql)
+        try:
+            return Rows(**self.session.rows(sql, max_rows))
+        except (duckdb.Error, Refused) as e:
+            raise SourceQueryError(str(e)) from e
+
+
+Hop = dict[str, str]
+
+
+def hop(source: str, target: str) -> Hop:
+    """A semantic-FK hop from `source` (table.column) to `target`."""
+    (st, sc), (tt, tc) = source.split("."), target.split(".")
+    return {
+        "source_schema": "public",
+        "source_table": st,
+        "source_column": sc,
+        "target_schema": "public",
+        "target_table": tt,
+        "target_column": tc,
+    }
+
+
+@dataclass
+class FakeGraph:
+    """The semantic-FK graph: column ids are `table.column`, and `paths` holds the hops
+    `find_join_path` returns from one column id to another."""
+
+    paths: dict[tuple[str, str], list[Hop]] = field(
+        default_factory=dict[tuple[str, str], list[Hop]]
+    )
+    fk_columns: set[str] = field(default_factory=set[str])
+    hubs: dict[frozenset[str], dict[str, str]] = field(
+        default_factory=dict[frozenset[str], dict[str, str]]
+    )
+    keys: dict[str, KeyColumns] = field(default_factory=dict[str, KeyColumns])
+    asked: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
+
+    def column_id(self, table: str, column: str) -> str | None:
+        return f"{table}.{column}"
+
+    def join_path(self, col_a_id: str, col_b_id: str) -> list[dict[str, Any]]:
+        self.asked.append((col_a_id, col_b_id))
+        return list(self.paths.get((col_a_id, col_b_id), []))
+
+    def in_semantic_fk(self, col_id: str) -> bool:
+        return col_id in self.fk_columns
+
+    def shared_hub(self, col_a_id: str, col_b_id: str) -> dict[str, Any]:
+        return dict(self.hubs.get(frozenset((col_a_id, col_b_id)), {}))
+
+    def key_columns(self, table: str) -> KeyColumns:
+        return self.keys.get(table.lower(), KeyColumns())

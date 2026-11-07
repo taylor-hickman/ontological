@@ -146,7 +146,8 @@ def ingest_query_history(
 
 
 def read_catalog_index(database_name: str) -> CatalogIndex:
-    """`database_name`'s schemas, tables and columns, names lower-cased, for the parse pool."""
+    """`database_name`'s schemas, tables and columns, names lower-cased, for the parse pool and
+    the answer gate, with each column's data type."""
     d, sc, t, c = s.catalog_database, s.catalog_schema, s.catalog_table, s.catalog_column
     found = store().query_read(select(d.c.id).where(d.c.name == database_name))
     if not found:
@@ -158,6 +159,7 @@ def read_catalog_index(database_name: str) -> CatalogIndex:
             t.c.name.label("table"),
             c.c.id.label("column_id"),
             c.c.name.label("column"),
+            c.c.data_type,
         )
         .select_from(sc.join(t, t.c.schema_id == sc.c.id).outerjoin(c, c.c.table_id == t.c.id))
         .where(sc.c.database_id == found[0]["id"])
@@ -172,6 +174,8 @@ def read_catalog_index(database_name: str) -> CatalogIndex:
         if r["column_id"] is not None:
             table.columns.setdefault(str(r["column"]).lower(), r["column_id"])
             table.spellings.setdefault(str(r["column"]).lower(), str(r["column"]))
+            if r["data_type"]:
+                table.types.setdefault(str(r["column"]).lower(), str(r["data_type"]))
     return CatalogIndex(schemas)
 
 
@@ -290,6 +294,21 @@ def _insert_statements(new: list[tuple[str, ParsedQuery, Tally]]) -> None:
             )
     _write_links(s.column__join, [(sql_id, link) for sql_id, q, _ in new for link in q.joins])
     _write_links(s.column__union, [(sql_id, link) for sql_id, q, _ in new for link in q.unions])
+
+
+def write_statement(q: ParsedQuery) -> str:
+    """The id of the statement holding `q`'s text, written with its links when the store has none:
+    upstream's `add_query` for a statement that isn't history, such as a SQL attribute's, so it
+    has no sightings. A history statement with the same text is the one returned, as upstream's
+    upsert by `sql_full_query` matched it. Joins the caller's write transaction."""
+    found = store().query_read(
+        select(s.sql_query.c.id).where(s.sql_query.c.sql_full_query == q.sql_text).limit(1)
+    )
+    if found:
+        return str(found[0]["id"])
+    sql_id = str(uuid.uuid4())
+    _insert_statements([(sql_id, q, Tally())])
+    return sql_id
 
 
 def _write_links(table: Table, links: list[tuple[str, Link]]) -> None:

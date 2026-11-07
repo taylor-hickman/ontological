@@ -19,6 +19,8 @@ class TableEntry:
     columns: dict[str, str] = field(default_factory=dict[str, str])  # lower-cased name -> id
     # lower-cased name -> the name as the catalog spells it, for messages (the answer gate's)
     spellings: dict[str, str] = field(default_factory=dict[str, str])
+    # lower-cased name -> its data type, where the catalog has one (the answer gate's JSON check)
+    types: dict[str, str] = field(default_factory=dict[str, str])
 
 
 @dataclass(frozen=True)
