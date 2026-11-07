@@ -1,9 +1,10 @@
 """ontological, the command line (BUILD_PLAN.md M1.8).
 
-    ontological ask "<question>" --source NAME [--no-critic] [--app-data DIR]
+    ontological ask "<question>" [--source NAME] [--no-critic] [--app-data DIR]
                                  [the engine's options, such as --pg-bin DIR]
 
 `ask` answers one question from the database NAME with the gated agent, which uses Claude quota.
+Without `--source`, the database whose ontology covers the question best answers it.
 It attaches to the engine engine.json names, or starts one headless as the MCP shim does, and
 holds a lease while it waits for `POST /ask`. Then it prints the steps the agent took, the SQL
 `validate_sql` passed, the rows `run_sql` returned, the answer, and whether the post-run check
@@ -41,7 +42,7 @@ class AskFailed(Exception):
 
 
 async def ask_engine(
-    app_data: Path, start: Sequence[str], question: str, database: str, *, critic: bool
+    app_data: Path, start: Sequence[str], question: str, database: str | None, *, critic: bool
 ) -> Asked:
     """`POST /ask` on the engine, holding a lease until it answers. The session can run for
     minutes, so the request has no read timeout. Errors are caught inside `hold_engine`, whose
@@ -56,14 +57,14 @@ async def ask_engine(
 
 
 async def _post(
-    link: EngineLink, question: str, database: str, *, critic: bool
+    link: EngineLink, question: str, database: str | None, *, critic: bool
 ) -> httpx.Response | str:
     """The engine's response, or why there is none."""
     try:
         info = await link.engine()
     except EngineUnavailable as e:
         return f"no engine: {e}"
-    print(f"Asking {database}…", file=sys.stderr, flush=True)
+    print(f"Asking {database or 'the best-matching database'}…", file=sys.stderr, flush=True)
     timeout = httpx.Timeout(CONNECT_TIMEOUT_S, read=None)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as http:
         try:
@@ -93,7 +94,11 @@ def render(asked: Asked) -> str:
     out: list[str] = ["Steps"]
     if not asked.steps:
         out.append("  none")
+    session = 1
     for n, step in enumerate(asked.steps, 1):
+        if step.session != session:
+            session = step.session
+            out.append(f"  Restarted: {asked.restarted or 'a fresh session'}")
         args = _clip(json.dumps(step.args, ensure_ascii=False, default=str), ARGS_WIDTH)
         out.append(f"  {n}. {step.name} {args}")
         if step.is_error:
@@ -114,6 +119,7 @@ def render(asked: Asked) -> str:
             out.append(f"  not answerable; missing: {', '.join(answer.missing) or 'unsaid'}")
 
     out.append("")
+    out.append(f"Database: {asked.database}")
     if asked.verified:
         out.append("Verified")
     else:
@@ -183,7 +189,12 @@ def main(
     commands = ap.add_subparsers(dest="command", required=True)
     ask = commands.add_parser("ask", help="answer one question; uses Claude quota")
     ask.add_argument("question")
-    ask.add_argument("--source", required=True, metavar="NAME", help="the database to answer from")
+    ask.add_argument(
+        "--source",
+        default=None,
+        metavar="NAME",
+        help="the database to answer from; without it, the one that covers the question best",
+    )
     ask.add_argument("--no-critic", action="store_true", help="skip the critic's review")
     ask.add_argument("--app-data", type=Path, default=None, help="<appData>/Ontological")
     known, engine_args = ap.parse_known_args(sys.argv[1:] if argv is None else argv)

@@ -2,7 +2,8 @@
 must show plan → validate → run → review for the SQL the answer gives, with matching ids, or the
 answer is shown as unverified with the reason. `information` answers need only a plan, with the
 critic off no review is needed, and an `answerable=false` answer needs a plan and no SQL. Neither
-of the last two may follow a successful run_sql."""
+of the last two may follow a successful run_sql. A `prediction` answer must say it isn't
+supported (M4.3)."""
 
 from __future__ import annotations
 
@@ -252,3 +253,22 @@ def test_an_unanswerable_answer_without_a_plan_is_unverified() -> None:
 def test_an_unanswerable_answer_with_sql_is_unverified(intent: str) -> None:
     ans = answer(answerable=False, validation_id=None, review_id=None)
     unverified(check([plan(intent=intent)], ans), "answerable=false", "SQL")
+
+
+# --- prediction (M4.3) -----------------------------------------------------------------------
+
+
+def test_a_prediction_ends_unanswerable_with_prediction_unsupported() -> None:
+    told = answer(**NO_SQL, answerable=False, missing=["prediction_unsupported"])
+    assert check([plan(intent="prediction")], told).verified
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {**NO_SQL, "answerable": False, "missing": ["a forecast"]},
+        {**NO_SQL, "answerable": True},
+    ],
+)
+def test_a_prediction_answered_any_other_way_is_unverified(overrides: dict[str, Any]) -> None:
+    unverified(check([plan(intent="prediction")], answer(**overrides)), "prediction_unsupported")

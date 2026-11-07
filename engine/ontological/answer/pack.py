@@ -7,16 +7,16 @@
 # join paths from the anchor attribute (dal/attributes.py::find_join_path). Upstream's LLM steps
 # are dropped: the anchor is the caller's (the agent's `plan`, ARCHITECTURE.md §8.1) or else the
 # nearest attribute, where upstream asks its LLM, and no relevance filter drops tables. Junction
-# and bridge-table expansion isn't ported yet; SQL attributes and custom analyses join with the
-# stages that write them (M3.5, M5.3).
+# and bridge-table expansion isn't ported yet; custom analyses join with the stage that writes
+# them (M5.3).
 
 """The grounding pack (ARCHITECTURE.md §8.1): what the answer agent is shown about a question
 before it starts, and what `plan` returns for the entities the agent extracted.
 
-Built in Python with no Claude call: dense retrieval over the semantic layer's Terms and
-attributes (`ontological.answer.retrieval`), the store's context for each attribute, the tables
-they belong to, and the shortest semantic-FK join path, by BFS, from the anchor attribute's table
-to each other attribute's.
+Built in Python with no Claude call: retrieval over the semantic layer's Terms, attributes and
+SQL attributes (`ontological.answer.retrieval`), the store's context for each attribute and each
+SQL attribute's SQL, the tables they belong to, and the shortest semantic-FK join path, by BFS,
+from the anchor attribute's table to each other attribute's.
 """
 
 # The vendored DAL is untyped.
@@ -32,7 +32,9 @@ from typing import Any
 
 from auto_ontology.dal.attributes import fetch_attr_column_contexts, find_join_path
 from auto_ontology.dal.datasources import fetch_tables_by_ids
+from auto_ontology.dal.sql_attributes import fetch_sql_attributes_with_sql
 from auto_ontology.dal.terms import fetch_term_synonyms, fetch_term_table_pairs
+from auto_ontology.semantic.constants import LABEL_COLUMN_ATTRIBUTE
 from auto_ontology.vdb.postgres import PostgresVDB
 from ontological.answer.retrieval import (
     ENTITY_K,
@@ -76,6 +78,9 @@ class GroundingPack:
     # from the anchor's table to its own (`find_join_path`; [] in the same table or unreachable)
     join_paths: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     coverage: list[Coverage] = field(default_factory=list[Coverage])  # when no scope was given
+    # The question's SQL attributes, nearest first: `id`, `name`, `description`, `expression`,
+    # `sql`, `term_name`, `score`
+    sql_attributes: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
 
 
 def build_pack(
@@ -94,14 +99,16 @@ def build_pack(
 
     Without `entities`, the raw question searches the attributes (`question_k` of them) and the
     Terms, as the agent's pre-work. With them, each entity searches the attributes and `subject`
-    the Terms, with upstream's k values, as `plan` does. Join paths start at
-    `anchor_attribute_id` when it is among the attributes, otherwise at the nearest one."""
+    the Terms, with upstream's k values, as `plan` does. Either way the question searches the SQL
+    attributes. Join paths start at `anchor_attribute_id`, which joins the attributes when
+    retrieval didn't find it, or else at the nearest attribute."""
     if entities is None:
         found = retrieve(
             vdb,
             [question],
             evidence=evidence,
             subject=question if subject is None else subject,
+            question=question,
             database=database,
             entity_k=question_k,
             search=search,
@@ -112,19 +119,24 @@ def build_pack(
             entities,
             evidence=evidence,
             subject=subject or "",
+            question=question,
             database=database,
             entity_k=ENTITY_K,
             subject_k=SUBJECT_K,
             search=search,
         )
 
-    attr_ids = [str(hit["id"]) for hit in found.attributes]
+    hits = found.attributes
+    if anchor_attribute_id and all(str(h["id"]) != anchor_attribute_id for h in hits):
+        # The anchor the agent picked from the pre-work's pack, which its entities didn't find
+        hits = [{"id": anchor_attribute_id, "label": LABEL_COLUMN_ATTRIBUTE}, *hits]
+    attr_ids = [str(hit["id"]) for hit in hits]
     contexts = fetch_attr_column_contexts(attr_ids, database_name=found.database)
     # An attribute deleted since it was embedded has no context, and one in another database
     # has no database name: neither can be queried with the rest.
     attributes = [
         {**hit, **contexts[str(hit["id"])]}
-        for hit in found.attributes
+        for hit in hits
         if str(hit["id"]) in contexts and contexts[str(hit["id"])]["database_name"]
     ]
 
@@ -142,7 +154,14 @@ def build_pack(
         anchor=_place(anchor) if anchor else None,
         join_paths=_join_paths(anchor, attributes) if anchor else [],
         coverage=found.coverage,
+        sql_attributes=_sql_attributes(found.sql_attributes),
     )
+
+
+def _sql_attributes(hits: list[Hit]) -> list[dict[str, Any]]:
+    """The hits with their SQL, nearest first; one whose SQL is gone is dropped."""
+    found = {a["id"]: a for a in fetch_sql_attributes_with_sql([str(h["id"]) for h in hits])}
+    return [{**found[str(h["id"])], "score": h["score"]} for h in hits if str(h["id"]) in found]
 
 
 def _place(attribute: dict[str, Any]) -> dict[str, Any]:

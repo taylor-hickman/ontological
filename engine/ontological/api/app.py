@@ -20,8 +20,10 @@ in.
 
 Ask: `POST /ask` answers one question from one database with the gated agent (§8.1), which uses
 Claude quota, and returns once the session ends: the answer, whether the post-run check verified
-it, the validated SQL, its rows and the tool log (`ontological.answer.service.Asked`). It answers
-404 for a database with no source, and 503 in an engine with no store or no embedder.
+it, the validated SQL, its rows and the tool log (`ontological.answer.service.Asked`). With no
+`database`, the database whose ontology covers the question best answers it. It answers 404 for
+a database with no source, or a question no database's ontology matches, and 503 in an engine
+with no store or no embedder.
 
 The Terms and Ontology screens read and edit the ontology through the routes in `curate.py`.
 
@@ -45,7 +47,7 @@ from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from ontological.answer.service import Answers, Asked, NoEmbedder
+from ontological.answer.service import Answers, Asked, NoEmbedder, NothingFound
 from ontological.api.curate import add_curate_routes
 from ontological.api.setup import add_setup_routes
 from ontological.catalog.sources import Sources
@@ -90,7 +92,7 @@ class CompileRequest(BaseModel):
 
 class AskRequest(BaseModel):
     question: str
-    database: str
+    database: str | None = None  # none: the database that covers the question best
     critic: bool = True  # the `answer.critic` setting (§8.1)
 
 
@@ -214,8 +216,12 @@ def create_app(
             raise HTTPException(503, "this engine has no store to answer from")
         try:
             return await answers.ask(body.question, body.database, critic=body.critic)
-        except NoSource:
-            raise HTTPException(404, f"no source for {body.database}") from None
+        except NoSource as e:
+            raise HTTPException(404, f"no source for {e}") from None
+        except NothingFound:
+            raise HTTPException(
+                404, "nothing in any database's ontology matches the question; name a database"
+            ) from None
         except NoEmbedder:
             raise HTTPException(503, "this engine has no embedding model to search with") from None
 

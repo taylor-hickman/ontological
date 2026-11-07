@@ -1,4 +1,5 @@
-"""The answer agent's tools and their preconditions (ARCHITECTURE.md §8.1, BUILD_PLAN.md M1.7),
+"""The answer agent's tools and their preconditions (ARCHITECTURE.md §8.1, BUILD_PLAN.md M1.7,
+M4.3),
 called the way the SDK's MCP server calls them, with the ontology, the source and the critic
 stood in for. Each tool checks what the session has done and refuses, naming the missing step,
 when a step it needs hasn't happened."""
@@ -14,7 +15,9 @@ import pytest
 from fakes import DuckProber, FakeGraph, frame
 
 from ontological.answer.gate import KeyColumns
-from ontological.answer.models import Review
+from ontological.answer.models import SUBTYPE_TEMPLATES, Review
+from ontological.answer.pack import GroundingPack
+from ontological.answer.probe import MAX_PROBES
 from ontological.answer.tools import (
     MAX_REVIEWS,
     MAX_VALIDATIONS,
@@ -80,6 +83,87 @@ class FakeOntology:
             return None
         return {"id": "t-artist", "name": "Artist", "columns": [{"name": "Name"}]}
 
+    def get_term(self, database: str, term: str) -> dict[str, Any] | None:
+        self.calls.append(("term", database, term))
+        if term not in ("t-1", "Artist"):
+            return None
+        return {"id": "t-1", "name": "Artist", "synonyms": ["band"], "tables": ["Artist"]}
+
+    def join_path(
+        self, database: str, from_table: str, to_table: str
+    ) -> list[dict[str, str]] | None:
+        self.calls.append(("join", database, from_table, to_table))
+        if {from_table, to_table} - {"Artist", "Album", "Genre"}:
+            return None
+        if "Genre" in (from_table, to_table):
+            return []
+        return [ALBUM_TO_ARTIST]
+
+    def plan_pack(
+        self,
+        database: str,
+        question: str,
+        *,
+        entities: Sequence[str],
+        evidence: str,
+        subject: str,
+        anchor_attribute_id: str | None,
+    ) -> GroundingPack:
+        self.calls.append(
+            (
+                "plan_pack",
+                database,
+                question,
+                *entities,
+                evidence,
+                subject,
+                str(anchor_attribute_id),
+            )
+        )
+        return PLAN_PACK
+
+
+ALBUM_TO_ARTIST = {
+    "source_table": "Album",
+    "source_column": "ArtistId",
+    "target_table": "Artist",
+    "target_column": "ArtistId",
+}
+ARTIST_TABLE = {
+    "id": "t-artist",
+    "name": "Artist",
+    "schema_name": "main",
+    "columns": [{"name": "ArtistId"}, {"name": "Name", "description": "The artist's name."}],
+}
+ALBUM_TABLE = {
+    "id": "t-album",
+    "name": "Album",
+    "schema_name": "main",
+    "columns": [{"name": "AlbumId"}, {"name": "Title"}, {"name": "ArtistId"}],
+}
+ATTRIBUTE = {
+    "id": "a-2",
+    "attr_name": "Album Title",
+    "col_name": "Title",
+    "col_id": "c-title",
+    "table_id": "t-album",
+    "table_name": "Album",
+    "schema_name": "main",
+    "database_name": "chinook",
+}
+PLAN_PACK = GroundingPack(
+    question=QUESTION,
+    database="chinook",
+    attributes=[ATTRIBUTE],
+    terms=[],
+    term_synonyms={},
+    tables=[ARTIST_TABLE, ALBUM_TABLE],
+    anchor={**ATTRIBUTE, "datatype": ""},
+    sql_attributes=[
+        {"id": "s-1", "name": "Album Count", "description": "Albums per artist.", "sql": "SELECT 1"}
+    ],
+)
+
 
 @dataclass
 class FakeRunner:
@@ -115,17 +199,31 @@ class FakeCritic:
 
 
 class Harness:
-    def __init__(self, *, critic: bool = True, database: str = "chinook") -> None:
+    def __init__(
+        self,
+        *,
+        critic: bool = True,
+        database: str = "chinook",
+        others: Sequence[str] = (),
+        shown_tables: Sequence[str] = (),
+    ) -> None:
         self.ontology = FakeOntology()
-        self.runner = FakeRunner()
+        self.runner: Any = FakeRunner()
+        self.opened: list[str] = []
         self.critic = FakeCritic()
         self.tools = AnswerTools(
             QUESTION,
             database=database,
+            others=others,
             ontology=self.ontology,
-            runner=self.runner,
+            runners=self.runners,
             review=self.critic if critic else None,
+            shown_tables=shown_tables,
         )
+
+    def runners(self, database: str) -> Any:
+        self.opened.append(database)
+        return self.runner
 
     def call(self, name: str, **args: Any) -> ToolResult:
         handler = next(t.handler for t in self.tools.sdk_tools() if t.name == name)
@@ -168,12 +266,15 @@ def refused(result: ToolResult, *needles: str) -> None:
 # --- the tool set ----------------------------------------------------------------------------
 
 
-def test_the_session_offers_the_six_tools() -> None:
+def test_the_session_offers_the_nine_tools() -> None:
     names = [t.name for t in Harness().tools.sdk_tools()]
     assert names == [
         "plan",
         "search_ontology",
+        "get_term",
         "describe_table",
+        "join_path",
+        "column_values",
         "validate_sql",
         "run_sql",
         "review_answer",
@@ -182,7 +283,7 @@ def test_the_session_offers_the_six_tools() -> None:
 
 def test_with_the_critic_off_review_answer_is_not_offered() -> None:
     names = [t.name for t in Harness(critic=False).tools.sdk_tools()]
-    assert "review_answer" not in names and len(names) == 5
+    assert "review_answer" not in names and len(names) == 8
 
 
 # --- plan comes first -------------------------------------------------------------------------
@@ -192,7 +293,10 @@ def test_with_the_critic_off_review_answer_is_not_offered() -> None:
     ("tool", "args"),
     [
         ("search_ontology", {"query": "artist"}),
+        ("get_term", {"id": "t-1"}),
         ("describe_table", {"id": "t-artist"}),
+        ("join_path", {"from_table": "Album", "to_table": "Artist"}),
+        ("column_values", {"column": "Artist.Name"}),
         ("validate_sql", {"sql": GOOD_SQL}),
         ("run_sql", {"validation_id": "val-1"}),
         ("review_answer", {"validation_id": "val-1", "answer_draft": "two each"}),
@@ -201,7 +305,7 @@ def test_with_the_critic_off_review_answer_is_not_offered() -> None:
 def test_every_tool_but_plan_refuses_before_a_plan(tool: str, args: dict[str, Any]) -> None:
     h = Harness()
     refused(h.call(tool, **args), "plan")
-    assert h.ontology.calls == [] and h.runner.ran == [] and h.critic.seen == []
+    assert h.ontology.calls == [] and h.opened == [] and h.critic.seen == []
 
 
 def test_plan_records_the_intent_and_the_database_and_issues_a_plan_id() -> None:
@@ -226,7 +330,196 @@ def test_a_second_plan_gets_its_own_id() -> None:
     assert h.planned() == "plan-2"
 
 
+# --- plan's retrieval, the template and the intents (M4.3) -----------------------------------
+
+
+def test_plan_retrieves_for_its_entities_in_the_plans_database() -> None:
+    h = Harness()
+    result = h.call(
+        "plan",
+        **PLAN,
+        evidence=["albums are records", "an artist made them"],
+        subject="artist",
+        anchor_attribute_id="a-2",
+    )
+    assert h.ontology.calls == [
+        (
+            "plan_pack",
+            "chinook",
+            QUESTION,
+            "artist",
+            "album",
+            "albums are records\nan artist made them",
+            "artist",
+            "a-2",
+        )
+    ]
+    plan = data(result)
+    assert plan["attribute_ids"] == ["a-2"] and plan["anchor"] == "a-2"
+    assert plan["tables"] == ["Artist", "Album"] and plan["sql_attribute_ids"] == ["s-1"]
+    message = text(result)
+    assert "Candidates for the plan's entities" in message
+    assert "Album.Title (attribute id a-2)" in message
+    assert "Album Count: Albums per artist." in message and "SQL: SELECT 1" in message
+
+
+def test_plan_names_tables_shown_already_without_listing_them_again() -> None:
+    h = Harness(shown_tables=["t-artist"])
+    first = text(h.call("plan", **PLAN))
+    assert "main.Album (table id t-album)" in first
+    assert "main.Artist (table id t-artist)" not in first
+    assert "Also these, shown already: main.Artist" in first
+    second = text(h.call("plan", **PLAN))
+    assert "Also these, shown already: main.Artist, main.Album" in second
+
+
+def test_a_calculation_plan_shows_its_subtypes_template() -> None:
+    message = text(Harness().call("plan", **PLAN))
+    assert "## The counting template" in message
+    assert SUBTYPE_TEMPLATES["counting"] in message
+
+
+def test_an_information_plan_has_no_template_and_withholds_run_sql_and_review() -> None:
+    h = Harness()
+    result = h.call("plan", intent="information", calc_subtype="counting", entities=["artist"])
+    message = text(result)
+    assert "template" not in message and "withheld" in message
+    v = data(h.call("validate_sql", sql=GOOD_SQL))  # still allowed: it runs nothing
+    refused(h.call("run_sql", validation_id=v["validation_id"]), "information", "withheld")
+    refused(
+        h.call("review_answer", validation_id=v["validation_id"], answer_draft="x"),
+        "information",
+    )
+    assert h.runner.ran == []
+    # Planned again as a calculation, the SQL can run
+    h.call("plan", **PLAN)
+    v = data(h.call("validate_sql", sql=GOOD_SQL))
+    assert data(h.call("run_sql", validation_id=v["validation_id"]))["outcome"] == "rows"
+
+
+def test_a_prediction_plan_is_told_it_is_unsupported_and_retrieves_nothing() -> None:
+    h = Harness()
+    result = h.call("plan", intent="prediction", entities=["sales next year"])
+    plan = data(result)
+    assert plan["plan_id"] == "plan-1" and plan["supported"] is False
+    message = text(result)
+    assert "Predictions aren't supported" in message
+    assert "answerable=false" in message and "prediction_unsupported" in message
+    assert h.ontology.calls == []
+    for tool, args in [
+        ("validate_sql", {"sql": GOOD_SQL}),
+        ("run_sql", {"validation_id": "val-1"}),
+        ("review_answer", {"validation_id": "val-1", "answer_draft": "x"}),
+    ]:
+        refused(h.call(tool, **args), "prediction", "withheld")
+    assert h.opened == []
+
+
+# --- a question with no scope ------------------------------------------------------------------
+
+
+def test_without_a_scope_plan_may_name_another_ranked_database() -> None:
+    h = Harness(others=["northwind", "chinook"])
+    refused(h.call("plan", **PLAN, database="pagila"), "chinook, northwind")
+    plan = data(h.call("plan", **PLAN, database="northwind"))
+    assert plan["database"] == "northwind"
+    assert h.ontology.calls[-1][:2] == ("plan_pack", "northwind")
+    h.call("search_ontology", query="artist")
+    assert h.ontology.calls[-1][:2] == ("search", "northwind")
+    h.call("validate_sql", sql=GOOD_SQL)
+    assert ("catalog", "northwind") in h.ontology.calls and h.opened == ["northwind"]
+    # A plan that names no database keeps the latest one's
+    assert data(h.call("plan", **PLAN))["database"] == "northwind"
+
+
+def test_a_validation_runs_on_the_database_it_was_validated_in() -> None:
+    h = Harness(others=["northwind"])
+    validation_id = h.validated()
+    h.call("plan", **PLAN, database="northwind")
+    data(h.call("run_sql", validation_id=validation_id))
+    assert h.opened == ["chinook", "chinook"]  # the probes' runner, then run_sql's
+
+
 # --- detail tools ----------------------------------------------------------------------------
+
+
+def test_get_term_returns_the_term_or_says_it_is_not_there() -> None:
+    h = Harness()
+    h.planned()
+    assert data(h.call("get_term", id="Artist"))["term"]["synonyms"] == ["band"]
+    missing = h.call("get_term", id="Nope")
+    assert missing.get("is_error") and "Nope" in text(missing)
+
+
+def test_join_path_returns_the_hops_or_says_there_are_none() -> None:
+    h = Harness()
+    h.planned()
+    found = h.call("join_path", from_table="Album", to_table="Artist")
+    assert data(found)["path"] == [ALBUM_TO_ARTIST]
+    assert text(found) == "Album to Artist: Album.ArtistId = Artist.ArtistId"
+    none = h.call("join_path", from_table="Album", to_table="Genre")
+    assert data(none)["path"] == [] and "no join path" in text(none)
+    unknown = h.call("join_path", from_table="Album", to_table="Nope")
+    assert unknown.get("is_error") and "'Nope'" in text(unknown)
+
+
+def values_runner() -> DuckRunner:
+    return DuckRunner(
+        "CREATE TABLE Artist (ArtistId INTEGER, Name VARCHAR)",
+        "INSERT INTO Artist VALUES (1, 'AC/DC'), (2, 'Accept'), (3, 'AC/DC'), (4, NULL),"
+        " (5, 'Aerosmith')",
+    )
+
+
+def test_column_values_reads_the_range_and_the_most_frequent_values() -> None:
+    h = Harness()
+    h.runner = values_runner()
+    h.planned()
+    got = data(h.call("column_values", column="artist.name"))
+    assert got["column"] == "Artist.Name"
+    assert got["values"][0] == {"value": "AC/DC", "rows": 2}
+    assert [v["value"] for v in got["values"]] == ["AC/DC", "Accept", "Aerosmith"]
+    assert (got["min"], got["max"], got["distinct_count"], got["nulls"]) == (
+        "AC/DC",
+        "Aerosmith",
+        3,
+        1,
+    )
+    assert got["more"] is False
+
+
+def test_column_values_filters_by_like_ignoring_case_and_caps_the_values() -> None:
+    h = Harness()
+    h.runner = values_runner()
+    h.planned()
+    got = data(h.call("column_values", column="main.Artist.Name", like="ac%", limit=1))
+    assert got["values"] == [{"value": "AC/DC", "rows": 2}] and got["more"] is True
+    assert data(h.call("column_values", column="Artist.Name", like="%'%"))["values"] == []
+
+
+def test_column_values_names_what_is_wrong_with_the_column() -> None:
+    h = Harness()
+    h.planned()
+    for column, needle in [
+        ("Name", "Table.Column"),
+        ("Artist.Nme", "Its columns: ArtistId, Name"),
+        ("Artists.Name", "no table 'Artists'"),
+    ]:
+        result = h.call("column_values", column=column)
+        assert result.get("is_error") and needle in text(result), text(result)
+    assert h.runner.probed == []
+
+
+def test_column_values_shares_the_questions_probe_cap() -> None:
+    h = Harness()
+    h.runner = values_runner()
+    h.planned()
+    h.call("column_values", column="Artist.Name")
+    probes = h.tools._probings["chinook"].probes  # pyright: ignore[reportPrivateUsage]
+    assert probes.calls == 2
+    probes.calls = MAX_PROBES
+    result = h.call("column_values", column="Artist.Name")
+    assert result.get("is_error") and "probe budget exhausted" in text(result)
 
 
 def test_search_ontology_searches_the_plans_database() -> None:
@@ -399,7 +692,7 @@ def test_an_empty_result_is_its_own_outcome_and_asks_for_the_filters_to_be_reche
 
 def test_an_empty_result_finds_a_near_miss_the_gate_left_alone() -> None:
     h = Harness()
-    h.runner = h.tools.runner = chinook_runner()  # type: ignore[assignment]
+    h.runner = chinook_runner()
     validation_id = h.validated(NEAR_MISS_HIGH_CARD)  # 25 names: the gate doesn't judge them
     result = h.call("run_sql", validation_id=validation_id)
     ran = data(result)
@@ -410,7 +703,7 @@ def test_an_empty_result_finds_a_near_miss_the_gate_left_alone() -> None:
 
 def test_an_empty_result_with_nothing_to_repair_says_it_can_be_the_answer() -> None:
     h = Harness()
-    h.runner = h.tools.runner = chinook_runner()  # type: ignore[assignment]
+    h.runner = chinook_runner()
     sql = "SELECT Name FROM Artist WHERE Name = 'Nobody Like This'"
     result = h.call("run_sql", validation_id=h.validated(sql))
     ran = data(result)
@@ -420,9 +713,9 @@ def test_an_empty_result_with_nothing_to_repair_says_it_can_be_the_answer() -> N
 
 def test_the_empty_result_probes_share_the_questions_probe_cap() -> None:
     h = Harness()
-    h.runner = h.tools.runner = chinook_runner()  # type: ignore[assignment]
+    h.runner = chinook_runner()
     validation_id = h.validated(NEAR_MISS_HIGH_CARD)
-    probes = h.tools._probing.probes  # pyright: ignore[reportPrivateUsage, reportOptionalMemberAccess]
+    probes = h.tools._probings["chinook"].probes  # pyright: ignore[reportPrivateUsage]
     probes.calls = probes.max_calls  # the gate spent the question's budget
     ran = data(h.call("run_sql", validation_id=validation_id))
     assert ran["outcome"] == "empty" and ran["repairs"] == ""

@@ -4,7 +4,9 @@
 # Modified by Ontological: `Review` is upstream's `IntentValidationModel` from
 # auto_ontology/retrieval/text_to_sql/agents/sql_parse_validation.py at 2a24f5d, with its field
 # descriptions, and `passed` and `issues` hold upstream's rule for reading it. The calculation
-# subtypes are the names and descriptions in upstream's agents/calculation_subtypes.json.
+# subtypes are the names, descriptions and SQL templates in upstream's
+# agents/calculation_subtypes.json, with three templates replaced and two rewritten (see
+# `SUBTYPE_TEMPLATES`).
 # `AnswerModel` is Ontological's (ARCHITECTURE.md §8.1).
 
 """What the answer agent ends with, and what its critic says (ARCHITECTURE.md §8.1)."""
@@ -31,6 +33,54 @@ CALC_SUBTYPES: dict[str, str] = {
     "synonym": "Map an alternate term in the question to a stored concept or value.",
     "value_illustration": (
         "Use an example or descriptive phrase to identify the corresponding stored value."
+    ),
+}
+
+# The SQL each subtype's `plan` shows, as an example of its shape. Upstream's are BIRD dev queries.
+# None is a gold query of BIRD Mini-Dev, but three read the eval's databases (`match_based`'s
+# gasstations is debit_card_specializing's, and `synonym`'s and `value_illustration`'s tables are
+# financial's), so they would show the agent an eval schema's tables, keys and a stored value
+# ('POPLATEK TYDNE'); those three are replaced by queries of the same shape over BIRD databases
+# the eval doesn't use (toxicology, superhero). `domain_knowledge`'s and `numeric_computation`'s
+# are SQLite (STRFTIME year arithmetic, IIF) and fail on DuckDB, so they are rewritten for it.
+SUBTYPE_TEMPLATES: dict[str, str] = {
+    "match_based": (
+        "SELECT COUNT(bond_id)\nFROM bond\nWHERE molecule_id = 'TR004' AND bond_type = '=';"
+    ),
+    "ranking": "SELECT Title\nFROM posts\nORDER BY ViewCount DESC\nLIMIT 5;",
+    "comparison": (
+        "SELECT COUNT(id)\nFROM cards\nWHERE edhrecRank > 12000 AND borderColor = 'borderless';"
+    ),
+    "counting": (
+        "SELECT COUNT(T2.member_id)\nFROM zip_code AS T1\n"
+        "INNER JOIN member AS T2 ON T1.zip_code = T2.zip\nWHERE T1.state = 'Maryland';"
+    ),
+    "aggregation": (
+        "SELECT AVG(T1.height_cm)\nFROM superhero AS T1\n"
+        "INNER JOIN publisher AS T2 ON T1.publisher_id = T2.id\n"
+        "WHERE T2.publisher_name = 'Marvel Comics';"
+    ),
+    "domain_knowledge": (
+        "SELECT T1.ID,\n"
+        "       date_part('year', CURRENT_DATE) - date_part('year', T1.Birthday) AS age\n"
+        "FROM Patient AS T1\nINNER JOIN Laboratory AS T2 ON T1.ID = T2.ID\n"
+        "WHERE T1.ID IN (\n    SELECT ID\n    FROM Laboratory\n    WHERE HCT > 52\n"
+        "    GROUP BY ID\n    HAVING COUNT(ID) >= 2\n);"
+    ),
+    "numeric_computation": (
+        "SELECT CAST(SUM(CASE WHEN T2.Age > 65 THEN 1 ELSE 0 END) AS REAL) * 100 / COUNT(T1.Id) "
+        "AS percentage\nFROM posts AS T1\nINNER JOIN users AS T2 ON T1.OwnerUserId = T2.Id\n"
+        "WHERE T1.Score > 20;"
+    ),
+    "synonym": (
+        "SELECT COUNT(T1.id)\nFROM superhero AS T1\n"
+        "INNER JOIN alignment AS T2 ON T1.alignment_id = T2.id\n"
+        "WHERE T2.alignment = 'Bad' AND T1.height_cm > 200;"
+    ),
+    "value_illustration": (
+        "SELECT COUNT(T1.id)\nFROM superhero AS T1\n"
+        "INNER JOIN colour AS T2 ON T1.hair_colour_id = T2.id\n"
+        "WHERE T2.colour = 'Blond' AND T1.weight_kg < 100;"
     ),
 }
 

@@ -14,16 +14,15 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
 from datetime import date
-from typing import Any
 
 from ontological.answer.models import CALC_SUBTYPES
 from ontological.answer.pack import GroundingPack
+from ontological.answer.render import render_coverage, render_pack
 from ontological.answer.tools import ReviewInput
 
 # The prompt_version the agent's and the critic's calls are logged under. Bump it with an edit.
-AGENT_PROMPT_VERSION = "m1.7-1"
+AGENT_PROMPT_VERSION = "m4.3-1"
 REVIEW_PROMPT_VERSION = "2a24f5d"  # upstream's intent validation, as ported
 
 # Spike S1: without this line Haiku gave up after a refusal instead of doing the missing step.
@@ -130,36 +129,55 @@ SQL_RULES = (
 def agent_system_prompt(pack: GroundingPack, *, critic: bool, today: date | None = None) -> str:
     today = today or date.today()
     review_step = (
-        "5. Call review_answer with the validation_id and a draft of your answer. If the "
+        "6. Call review_answer with the validation_id and a draft of your answer. If the "
         "critic finds issues, fix the SQL and go through validate_sql, run_sql and "
         "review_answer again.\n"
         if critic
         else ""
     )
     ids = "plan_id, validation_id and review_id" if critic else "plan_id and validation_id"
-    last = 6 if critic else 5
+    last = 7 if critic else 6
     subtypes = "\n".join(f"- {name}: {about}" for name, about in CALC_SUBTYPES.items())
+    if pack.coverage:
+        where = (
+            "You answer one question from one of the databases below by calling tools, then "
+            "return the answer in the JSON schema you were given. The question named no "
+            "database, so retrieval ranked them by how much of it each covers:\n"
+            f"{render_coverage(pack)}\n"
+            f"The grounding pack below is {pack.database}'s. If the question belongs to "
+            "another of these, name it in plan's database; the tools then work against it.\n"
+        )
+    else:
+        where = (
+            f"You answer one question about the {pack.database} database by calling tools, "
+            "then return the answer in the JSON schema you were given.\n"
+        )
     return (
-        f"You answer one question about the {pack.database} database by calling tools, "
-        "then return the answer in the JSON schema you were given.\n"
+        f"{where}"
         f"Today's date is {today.isoformat()}.\n\n"
         "## Steps\n"
-        "1. Call plan first: the question's intent (calculation for a question the data "
-        "answers with SQL, information for a question about what the data holds), its "
-        "calculation subtype, the entities and evidence in it, and the anchor attribute "
-        "from the grounding pack when one fits.\n"
-        "2. Read the grounding pack below. Call search_ontology and describe_table when it "
-        "doesn't hold what the question needs.\n"
+        "1. Call plan first: the question's intent, its calculation subtype, the entities, "
+        "evidence and subject in it, and the anchor attribute from the grounding pack when one "
+        "fits. The intent is calculation for a question the data answers with SQL, "
+        "information for a question about what the data holds (its tables, columns, Terms and "
+        "values), and prediction for a forecast of what hasn't happened.\n"
+        "2. Read the candidates plan returns beside the grounding pack below. When they don't "
+        "hold what the question needs, call search_ontology, get_term and describe_table; "
+        "join_path for how two tables join; column_values for how a value is stored.\n"
         "3. Write one DuckDB SELECT and call validate_sql. If it finds issues, fix the SQL "
         "and call it again.\n"
         "4. Call run_sql with the validation_id. If the source refuses the SQL, fix it and "
         "validate it again.\n"
+        "5. If run_sql returns no rows, recheck the filters and literals before you accept "
+        "that.\n"
         f"{review_step}"
         f"{last}. Return the answer, with the SQL exactly as "
         f"validate_sql passed it and the {ids} the tools returned. An answer whose steps "
         "don't match is shown to the user as unverified.\n\n"
-        "When the data can't answer the question, return answerable=false, say in missing "
-        "what is missing, and give no SQL. An information question needs no SQL either.\n"
+        "An information question is answered from the ontology alone, with no SQL: run_sql "
+        "and review_answer are withheld for it. Ontological doesn't do predictions: for one, "
+        "plan says how to end the session. When the data can't answer the question, return "
+        "answerable=false, say in missing what is missing, and give no SQL.\n"
         f"{REFUSAL_RULE}\n\n"
         "## Calculation subtypes\n"
         f"{subtypes}\n\n"
@@ -169,83 +187,6 @@ def agent_system_prompt(pack: GroundingPack, *, critic: bool, today: date | None
         f"{render_pack(pack)}\n\n"
         f"{SQL_RULES}"
     )
-
-
-def render_pack(pack: GroundingPack) -> str:
-    parts = [
-        "### Tables\n" + ("\n\n".join(_table(t) for t in pack.tables) or "(none found)"),
-        "### Matched attributes\n"
-        + ("\n".join(_attribute(a, pack.term_synonyms) for a in pack.attributes) or "(none found)"),
-        "### Terms\n"
-        + ("\n".join(f"- {t.get('text') or t.get('name')}" for t in pack.terms) or "(none)"),
-    ]
-    if paths := render_join_paths(pack):
-        parts.append(f"### Join paths\n{paths}")
-    return "\n\n".join(parts)
-
-
-def render_join_paths(pack: GroundingPack) -> str:
-    """Upstream's `attribute_join_paths` from the anchor, one line per attribute."""
-    if pack.anchor is None or not pack.join_paths:
-        return ""
-    anchor = pack.anchor
-    lines = [f"From the anchor {anchor['table_name']}.{anchor['col_name']}:"]
-    for entry in pack.join_paths:
-        place = f"{entry['table_name']}.{entry['col_name']}"
-        hops: list[dict[str, str]] = entry.get("path") or []
-        if not hops:
-            via = "same table" if entry["table_name"] == anchor["table_name"] else "no path"
-        else:
-            via = " → ".join(_hop(h) for h in hops)
-        lines.append(f"- {place}: {via}")
-    return "\n".join(lines)
-
-
-def _hop(hop: dict[str, str]) -> str:
-    source = f"{hop['source_table']}.{hop['source_column']}"
-    return f"{source} = {hop['target_table']}.{hop['target_column']}"
-
-
-def _table(table: dict[str, Any]) -> str:
-    name = f"{table.get('schema_name') or 'main'}.{table['name']}"
-    head = f"{name} (table id {table['id']})"
-    if table.get("description"):
-        head += f": {table['description']}"
-    if table.get("pk"):
-        head += f"\n  primary key: {', '.join(table['pk'])}"
-    lines = [head]
-    columns: list[dict[str, Any]] = table.get("columns") or []
-    for column in columns:
-        line = f"  - {column['name']}"
-        if column.get("data_type"):
-            line += f" {column['data_type']}"
-        if column.get("description"):
-            line += f": {column['description']}"
-        if samples := column.get("sample_values"):
-            line += f" (e.g. {_samples(samples)})"
-        if column.get("semantic_fk"):
-            line += f" → {column['semantic_fk']}"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def _attribute(attribute: dict[str, Any], synonyms: dict[str, list[str]]) -> str:
-    line = (
-        f"- {attribute['table_name']}.{attribute['col_name']} (attribute id {attribute['id']}): "
-        f"{attribute.get('attr_name') or ''}"
-    )
-    if attribute.get("attr_description"):
-        line += f", {attribute['attr_description']}"
-    if term := attribute.get("term_name"):
-        line += f" [Term {term}"
-        if synonyms.get(term):
-            line += f"; also {', '.join(synonyms[term])}"
-        line += "]"
-    return line
-
-
-def _samples(values: Iterable[Any]) -> str:
-    return ", ".join(str(v) for v in list(values)[:5])
 
 
 # --- the critic --------------------------------------------------------------------------------
