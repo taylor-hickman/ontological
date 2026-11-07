@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Modified by Ontological: ported from upstream's auto_ontology/semantic/term_extractor.py at
 # 2a24f5d. The prompt is upstream's, sent through ClaudeGateway.structured() on the `table_terms`
-# route. Every candidate column reaches the prompt, where upstream's stops at 40 (ARCHITECTURE.md
-# §1.3); chunking a table too wide for one prompt is M3.2's. Synonym extraction, upstream's
-# second call here, is the `table_synonyms` stage, which M3.2 adds.
+# route. Where upstream's prompt stops at 40 candidate columns (ARCHITECTURE.md §1.3), a wider
+# table is asked in chunks of 40, each seeing the Terms the chunks before it proposed. Small
+# tables of a pack share one call (`compile.packed`). Synonym extraction, upstream's second call
+# here, is the `table_synonyms` stage (`compile.synonyms`).
 
 """The `table_terms` stage: business Terms for one table, with every candidate column assigned a
 display name (ARCHITECTURE.md §1.3 stage 5, §6.3). It sees the descriptions the
@@ -14,19 +15,27 @@ display name (ARCHITECTURE.md §1.3 stage 5, §6.3). It sees the descriptions th
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Any
 
+from ontological.compile import packed
 from ontological.compile.descriptions import to_term_name
 from ontological.compile.gateway import Structured, ask
 from ontological.compile.models import (
     ColumnAttributeSpec,
+    PackedTableTerms,
     RawTableTermsResult,
+    RawTermProposal,
+    TableTermsEntry,
     TermAttributeAssignment,
     TermProposal,
 )
 
 TASK = "table_terms"
 PROMPT_VERSION = "2a24f5d"
+# Upstream's prompt shows a table's first 40 candidate columns and drops the rest (ARCHITECTURE.md
+# §1.3). A wider table is asked in chunks of that many instead.
+CHUNK_COLUMNS = 40
 
 _INVALID = {"unnamed", "unknown", "none", ""}
 _LABEL_RE = re.compile(r"^[A-Z][A-Za-z0-9]*(?: [A-Za-z][A-Za-z0-9]*)*$")
@@ -125,28 +134,106 @@ def sanitize(
     return terms
 
 
-def build_prompt(table: dict[str, Any], specs: list[ColumnAttributeSpec]) -> str:
+def build_prompt(
+    table: dict[str, Any],
+    specs: list[ColumnAttributeSpec],
+    proposed: Sequence[RawTermProposal] = (),
+) -> str:
+    """Upstream's prompt. A later chunk of a wide table also lists the Terms its earlier chunks
+    proposed, so its columns join them rather than start new ones."""
     # Upstream adds a domain summary block when `.semantic_summaries/<db>.json` exists, a file
     # nothing in the engine writes, so it is always empty here.
     spec_lines = "\n".join(_format_spec_line(spec) for spec in specs)
-    return (
+    prompt = (
         f"Table: {table['name']}\n"
         f"Description: {table.get('description') or ''}\n"
         f"Candidate columns (assign each to exactly one Term with a display_name):\n"
         f"{spec_lines}\n"
     )
+    if proposed:
+        term_lines = "\n".join(
+            f"  - {t.name}" + (f" — {t.description}" if t.description else "") for t in proposed
+        )
+        prompt += (
+            f"Terms already proposed for this table's other columns (reuse a name exactly when "
+            f"a column belongs to that Term):\n{term_lines}\n"
+        )
+    return prompt
 
 
 async def extract_terms(
     gateway: Structured, table: dict[str, Any], specs: list[ColumnAttributeSpec]
 ) -> list[TermProposal]:
     """One or more Terms for the table, every spec assigned to one; the fallback Term when the
-    answer is invalid. Raises `ClaudeUnavailable` when Claude doesn't answer."""
+    answer is invalid. A table with more than `CHUNK_COLUMNS` candidate columns is asked in
+    chunks of that many, one after another, each seeing the Terms proposed before it; a chunk
+    with an invalid answer leaves its columns to the first Term. Raises `ClaudeUnavailable`
+    when Claude doesn't answer."""
     if not specs:
         return fallback_terms(table, specs)
-    result = await ask(
-        gateway, TASK, SYSTEM, build_prompt(table, specs), RawTableTermsResult, PROMPT_VERSION
-    )
-    if result is None:
+    if len(specs) <= CHUNK_COLUMNS:
+        result = await ask(
+            gateway, TASK, SYSTEM, build_prompt(table, specs), RawTableTermsResult, PROMPT_VERSION
+        )
+        if result is None:
+            return fallback_terms(table, specs)
+        return sanitize(result, table=table, specs=specs)
+    raw: list[RawTermProposal] = []
+    for start in range(0, len(specs), CHUNK_COLUMNS):
+        chunk = specs[start : start + CHUNK_COLUMNS]
+        result = await ask(
+            gateway,
+            TASK,
+            SYSTEM,
+            build_prompt(table, chunk, raw),
+            RawTableTermsResult,
+            PROMPT_VERSION,
+        )
+        if result is not None:
+            raw = _merge(raw + result.terms, default=to_term_name(table["name"]))
+    if not raw:
         return fallback_terms(table, specs)
-    return sanitize(result, table=table, specs=specs)
+    return sanitize(RawTableTermsResult(terms=raw), table=table, specs=specs)
+
+
+def _merge(terms: list[RawTermProposal], *, default: str) -> list[RawTermProposal]:
+    """Chunks' Terms with one name as one Term: the first description that says something, and
+    every chunk's assignments."""
+    merged: dict[str, RawTermProposal] = {}
+    for term in terms:
+        name = _normalize_label(term.name, fallback=default)
+        if (kept := merged.get(name)) is None:
+            merged[name] = RawTermProposal(
+                name=name, description=term.description, attributes=list(term.attributes)
+            )
+            continue
+        kept.attributes.extend(term.attributes)
+        if not kept.description.strip():
+            kept.description = term.description
+    return list(merged.values())
+
+
+async def extract_terms_pack(
+    gateway: Structured, requests: Sequence[tuple[dict[str, Any], list[ColumnAttributeSpec]]]
+) -> list[list[TermProposal]]:
+    """`extract_terms` for each `(table, specs)` of a pack, in one call for the tables with
+    candidate columns (`compile.packed`). A table the answer leaves out, or one too wide for a
+    single prompt, is asked alone."""
+    asked = [i for i, (_, specs) in enumerate(requests) if 0 < len(specs) <= CHUNK_COLUMNS]
+    found: dict[str, TableTermsEntry] = {}
+    if len(asked) > 1:
+        sections = [
+            (str(table["name"]), build_prompt(table, specs))
+            for table, specs in (requests[i] for i in asked)
+        ]
+        found = await packed.ask_pack(
+            gateway, TASK, SYSTEM, sections, PackedTableTerms, lambda r: r.tables
+        )
+    out: list[list[TermProposal]] = []
+    for table, specs in requests:
+        entry = found.get(str(table["name"]))
+        if entry is None:
+            out.append(await extract_terms(gateway, table, specs))
+        else:
+            out.append(sanitize(entry, table=table, specs=specs))
+    return out

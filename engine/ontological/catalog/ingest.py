@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Modified by Ontological: ported from upstream's auto_ontology/catalog/ingest.py, write.py,
 # parsers/schemas_parser.py and services/schema.py. It reads a source executor's extract in place
-# of a connector, writes sequentially and in one transaction, and profiles the catalog before it
-# embeds the data layer. No query history (M2.4).
+# of a connector, writes sequentially and in one transaction, ingests the source's query history
+# after its catalog, and profiles the catalog before it embeds the data layer.
 
-"""Ingest: a source's catalog, extracted by its executor and written through the DAL, then
-profiled through the executor, then embedded as the data layer.
+"""Ingest: a source's catalog, extracted by its executor and written through the DAL, then its
+query history, then the catalog profiled through the executor, then embedded as the data layer.
 
 Upstream's `write.populate_db`, then `populate_fks` and `populate_pks`, over upstream's vendored
 catalog store. A database the store doesn't hold yet is loaded whole. One it holds is diffed, schema
@@ -21,6 +21,12 @@ Upstream writes each schema, the keys and the `pulled` stamp in separate transac
 the schema diffs on a thread pool. A failure part way leaves a half-written catalog until the next
 ingest repairs it. Here the whole write is one transaction: the catalog lands complete, or stays as
 the last ingest left it.
+
+Query history comes after the catalog, since its statements are resolved against it: the
+executor reads the source's recent statements (upstream's `get_queries`; Postgres's
+`pg_stat_activity`, and none from any other source) and `query_history.py` parses them in the
+parse pool and writes them. A source the history read fails on keeps the catalog just written, as
+upstream's connector returned an empty history on a driver error.
 
 Profiling (`ontological/profile/`) runs after the write and before the data layer is built, so each
 column's text carries its sample values (§7.1). Upstream embedded the data layer at ingest and
@@ -62,9 +68,11 @@ from auto_ontology.dal.session import store, write_transaction
 from ontological.catalog.data_layer import embed_data_layer
 from ontological.catalog.diff import update_diff_from_existing_schema
 from ontological.catalog.extract import extract
+from ontological.catalog.parse_pool import ParsePool
+from ontological.catalog.query_history import HistoryIngested, HistoryRow, ingest_query_history
 from ontological.embed.embedder import LocalEmbedder
 from ontological.profile.run import Profiled, profile_catalog
-from ontological.sources.executor import Catalog, Record, SourceExecutor
+from ontological.sources.executor import Catalog, Record, SourceExecutor, SourceQueryError
 from ontological.sources.spec import Source, to_record
 
 logger = logging.getLogger(__name__)
@@ -79,6 +87,7 @@ class Ingested:
     skipped: list[Record]  # relations the executor couldn't read, which weren't written
     # `schema.table` for each table the store didn't hold before: every table, on a first load
     new_tables: list[str] = field(default_factory=list[str])
+    history: HistoryIngested | None = None  # None when the source had no history to ingest
     profiled: Profiled | None = None  # None when nothing was written
     data_layer_rows: int = 0  # rows embedded into `data_objects_layer`
 
@@ -89,17 +98,44 @@ def ingest(
     embedder: LocalEmbedder | None = None,
     timeout_s: float | None = None,
     probe_distinct_values: bool = True,
+    pool: ParsePool | None = None,
 ) -> Ingested:
-    """Extract the executor's source, write its catalog to the store, profile it, and, given an
-    embedder, embed its data layer from the profiled catalog."""
+    """Extract the executor's source, write its catalog to the store, ingest its query history,
+    profile it, and, given an embedder, embed its data layer from the profiled catalog. The
+    history is parsed in `pool`, or in a pool of its own when there is history and no `pool`."""
     ingested = write_catalog(executor.extract(timeout_s=timeout_s), source=executor.source)
     if ingested.database_id is None:
         return ingested
+    history = ingest_history(executor, ingested.database_name, pool=pool, timeout_s=timeout_s)
     profiled = profile_catalog(
         executor, ingested.database_name, probe_distinct_values=probe_distinct_values
     )
     rows = embed_data_layer(ingested.database_name, embedder) if embedder is not None else 0
-    return replace(ingested, profiled=profiled, data_layer_rows=rows)
+    return replace(ingested, history=history, profiled=profiled, data_layer_rows=rows)
+
+
+def ingest_history(
+    executor: SourceExecutor,
+    database_name: str,
+    *,
+    pool: ParsePool | None = None,
+    timeout_s: float | None = None,
+) -> HistoryIngested | None:
+    """The source's recent statements, read through its executor and written against
+    `database_name`'s catalog, which the store must hold. None when the source has none, or
+    refused the read."""
+    try:
+        history = executor.history(timeout_s=timeout_s)
+    except SourceQueryError as e:
+        logger.warning("%s: query history wasn't read: %s", database_name, e)
+        return None
+    if not history.rows:
+        return None
+    rows = [HistoryRow(**r) for r in history.rows]
+    if pool is not None:
+        return ingest_query_history(database_name, rows, dialects=history.dialects, pool=pool)
+    with ParsePool() as own:
+        return ingest_query_history(database_name, rows, dialects=history.dialects, pool=own)
 
 
 def write_catalog(catalog: Catalog, *, source: Source | None = None) -> Ingested:

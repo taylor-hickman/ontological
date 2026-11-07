@@ -12,8 +12,8 @@ keep packs stable from one run to the next:
   doesn't move any small table.
 
 Inside a schema, small tables fill packs greedily in canonical order up to `PACK_TOKEN_BUDGET`.
-Sizes are estimated from column counts, since the plan is made before profiling; M3.2, which
-sends the packed calls, calibrates the estimate against real prompts.
+Sizes are estimated from column counts, since the plan is made before profiling, with numbers
+measured on real prompts.
 """
 
 from __future__ import annotations
@@ -23,8 +23,12 @@ from dataclasses import dataclass
 
 SMALL_TABLE_COLUMNS = 6  # §6.4: tables with at most this many columns are packed
 PACK_TOKEN_BUDGET = 8_000  # §6.4: about 8k tokens of input to a pack
-TABLE_TOKENS = 150  # a table's heading and description in a prompt, estimated
-COLUMN_TOKENS = 100  # a column's line with its type and samples, estimated
+# Calibrated on Chinook's prompts (M3.2): the keys prompt, the largest a table gets, measured about
+# 100 tokens a small table plus about 60 a column (characters / 3.5), each column listed with its
+# type, samples and uniqueness, and the candidates listed twice. A column's two lines are at most
+# about 100 tokens, since samples are five values of up to 30 characters.
+TABLE_TOKENS = 100
+COLUMN_TOKENS = 60
 
 
 @dataclass(frozen=True)

@@ -2,8 +2,8 @@
 
 A session is an in-memory DuckDB connection with one source attached and nothing else
 reachable. Each kind of source subclasses `Session`: it attaches the source, calls
-`lock_down()`, and reads its catalog in `extract()`. Running SQL, profiling a table, and
-cancelling either, are the same for every kind.
+`lock_down()`, reads its catalog in `extract()` and, if the source keeps one, its query history in
+`history()`. Running SQL, profiling a table, and cancelling either, are the same for every kind.
 """
 
 from __future__ import annotations
@@ -167,11 +167,19 @@ class Session:
         `tables`, `columns`, `views`, `pks`, `fks` and `skipped`."""
         raise NotImplementedError
 
+    def history(self, hours: int) -> dict[str, Any]:
+        """The statements the source ran in the last `hours` hours, as upstream's
+        `get_queries` returns them: `rows` of `query_text`, `end_time` (UTC) and `count`, and the
+        sqlglot `dialects` they are written in. A source that keeps no history has none."""
+        return {"dialects": [], "rows": []}
+
     def run(self, op: str, args: tuple[Any, ...]) -> Any:
         if op == "rows":
             return self.rows(*args)
         if op == "extract":
             return self.extract()
+        if op == "history":
+            return self.history(*args)
         if op == "profile":
             return self.profile(*args)
         raise ValueError(f"unknown operation {op!r}")

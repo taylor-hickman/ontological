@@ -22,6 +22,7 @@ from ontological.sources.executor import (
     MAX_PROFILE_ROWS,
     Cancelled,
     ExecutorDied,
+    History,
     SourceError,
     SourceExecutor,
     SourceQueryError,
@@ -196,6 +197,14 @@ def test_extract_reads_declared_foreign_keys(executor: SourceExecutor) -> None:
          "referenced_schema": "main", "referenced_table": "album",
          "referenced_column": "album_id"},
     ]  # fmt: skip
+
+
+# history
+
+
+def test_a_source_without_query_history_yields_none(executor: SourceExecutor) -> None:
+    """Only Postgres keeps a history the executor reads; a SQLite file has none."""
+    assert executor.history() == History(dialects=[], rows=[])
 
 
 # run_sql and probe

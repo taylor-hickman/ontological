@@ -15,6 +15,7 @@ from pathlib import Path
 from conftest import sql
 
 from ontological.catalog.ingest import ingest
+from ontological.jobs import store as jobs
 from ontological.jobs.staleness import Refreshed, StalenessCheck, stale_sources
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.sources.spec import to_record
@@ -105,6 +106,14 @@ def test_the_check_refreshes_stale_sources_only_and_reports_new_tables(
                "ON s.id = t.schema_id JOIN catalog_database d ON d.id = s.database_id "
                "WHERE d.name = 'stale'") == "12"  # fmt: skip
     assert sql(store, "SELECT count(*) FROM ops.llm_call") == "0", "a refresh costs no quota"
+    # Recorded for the Jobs screen's "1 new table in stale" prompt
+    [job] = jobs.recent(5)
+    assert (job.kind, job.database_name, job.state, job.error) == ("ingest", "stale", "done", None)
+    assert job.result == {"new_tables": ["main.Review"]}
+    assert job.created_at >= started and job.finished_at is not None
+    assert job.dismissed_at is None
+    jobs.dismiss(job.id)
+    assert jobs.job(job.id).dismissed_at is not None
 
 
 def test_a_source_that_fails_is_left_as_it_was_and_the_rest_still_refresh(
@@ -123,6 +132,14 @@ def test_a_source_that_fails_is_left_as_it_was_and_the_rest_still_refresh(
     assert [(r.database_name, r.error is None) for r in got] == [("gone", False), ("stale", True)]
     assert pulled(store, "gone") == gone_before
     assert pulled(store, "stale") > gone_before
+    # Both are recorded; two failed refreshes of one source don't collide
+    StalenessCheck().run()
+    got_jobs = [(j.database_name, j.state, j.error is not None) for j in reversed(jobs.recent(5))]
+    assert got_jobs == [
+        ("gone", "stopped", True),
+        ("stale", "done", False),
+        ("gone", "stopped", True),
+    ]
 
 
 def test_a_cancelled_check_refreshes_nothing_more(

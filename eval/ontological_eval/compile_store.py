@@ -43,9 +43,11 @@ class Result:
 
 
 def usage(lay: pg.Layout) -> tuple[int, float]:
-    """Calls that reached Claude (a cache hit isn't logged), and their API-equivalent cost in
-    USD, over the store's whole log."""
-    out = pg.psql(lay, "SELECT count(*), coalesce(sum(cost_usd), 0) FROM ops.llm_call")
+    """Calls that reached Claude, cache hits left out, and their API-equivalent cost in USD,
+    over the store's whole log."""
+    out = pg.psql(
+        lay, "SELECT count(*), coalesce(sum(cost_usd), 0) FROM ops.llm_call WHERE NOT cached"
+    )
     calls, cost = out.split("|")
     return int(calls), float(cost)
 
