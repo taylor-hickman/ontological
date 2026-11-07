@@ -20,6 +20,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Literal
+
+# The `compile.table_calls` setting (ARCHITECTURE.md §6.4): how a pack's tables are asked, the
+# four split stages or one merged `table_semantics` call a table.
+type TableCalls = Literal["split", "merged"]
 
 SMALL_TABLE_COLUMNS = 6  # §6.4: tables with at most this many columns are packed
 PACK_TOKEN_BUDGET = 8_000  # §6.4: about 8k tokens of input to a pack

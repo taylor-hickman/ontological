@@ -15,7 +15,8 @@ interface ScopeStepProps {
 }
 
 /** DESIGN.md §5.1 step 3: pick schemas or tables, then see the split vs merged estimate before
- * anything spends quota. The estimate (§6.5) arrives with M3.7; its slot is here. */
+ * anything spends quota. The engine's estimate (§6.5, `GET /jobs/estimate`) is per database and
+ * not yet per scope, and onboarding can't start a compile yet, so its slot waits for both. */
 export function ScopeStep({ current, sources, excluded, onChange }: ScopeStepProps) {
   const total = sources.reduce((n, s) => n + s.tables, 0)
   const chosen = total - excluded.size
