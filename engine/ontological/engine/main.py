@@ -10,7 +10,8 @@ its bulk batch cap (§7.1; with no model directory it runs without one), serves 
 127.0.0.1 at a random port with a new bearer token, writes engine.json and releases the lock. It
 prints one JSON line when it serves or attaches, `{"pid", "port", "version", "started"}`, or
 `{"error"}` and exits 1. Once it serves, it re-ingests the metadata of every source last ingested
-over a day ago, in the background (§9.1, `jobs/staleness.py`).
+over a day ago, in the background (§9.1, `jobs/staleness.py`), and resumes the compiles an earlier
+engine left running or paused (`jobs/service.py`), through its one Claude gateway.
 
 It exits 0 after `--idle-timeout` seconds (600) with no live lease, no request in flight and no
 running job, or on SIGTERM or SIGINT. Either way it removes engine.json, writes the quit dump
@@ -50,8 +51,11 @@ from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
 from ontological.jobs.active import ActiveJobs
+from ontological.jobs.service import Jobs, JobsService
 from ontological.jobs.staleness import StalenessCheck
+from ontological.llm.calls import PgCallLog
 from ontological.llm.env import sanitize_environ
+from ontological.llm.gateway import ClaudeGateway
 from ontological.store import dal, pg
 
 log = logging.getLogger("ontological.engine")
@@ -86,6 +90,7 @@ class Store(Protocol):
     def start(self) -> None: ...
     def stop(self) -> None: ...
     def staleness_check(self) -> StalenessCheck: ...
+    def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService: ...
 
 
 class PgStore:
@@ -93,6 +98,7 @@ class PgStore:
 
     def __init__(self, layout: pg.Layout) -> None:
         self.layout = layout
+        self._calls: PgCallLog | None = None
 
     def start(self) -> None:
         """Start or adopt the server, then bring both Alembic chains to their heads (a first
@@ -106,12 +112,21 @@ class PgStore:
         dal.connect(self.layout)
 
     def stop(self) -> None:
+        if self._calls is not None:
+            self._calls.close()
         dal.close()
         dump = pg.stop(self.layout)
         log.info("store stopped; quit dump %s", dump.name if dump else "not needed")
 
     def staleness_check(self) -> StalenessCheck:
         return StalenessCheck()
+
+    def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService:
+        """Compile jobs, with the gateway every Claude call goes through (§6)."""
+        self._calls = PgCallLog(pg.url(self.layout))
+        sandbox = self.layout.app_data / "claude-sandbox"
+        gateway = ClaudeGateway(calls=self._calls, sandbox=sandbox)
+        return Jobs(gateway=gateway, active=active, embedder=embedder)
 
 
 def pg_store(config: Config) -> Store:
@@ -258,7 +273,7 @@ def serve(config: Config, make_store: Callable[[Config], Store]) -> int:
         if stop.requested:
             stop.log_once()
         else:
-            asyncio.run(_serve(config, sock, lock, stop, embedder, new_store.staleness_check()))
+            asyncio.run(_serve(config, sock, lock, stop, embedder, new_store))
     except Exception as e:
         log.exception("engine failed")
         emit(error=f"{type(e).__name__}: {e}")
@@ -282,9 +297,11 @@ async def _serve(
     lock: discovery.EngineLock,
     stop: _Stop,
     embedder: LocalEmbedder | None,
-    staleness: StalenessCheck,
+    store: Store,
 ) -> None:
+    staleness = store.staleness_check()
     jobs = ActiveJobs()
+    service = store.jobs(jobs, embedder)
     lifetime = Lifetime(
         idle_timeout_s=config.idle_timeout_s,
         renew_every_s=config.renew_every_s,
@@ -303,6 +320,7 @@ async def _serve(
         version=info.version,
         embedder=embedder,
         jobs=jobs,
+        jobs_service=service,
     )
     server = _Server(
         uvicorn.Config(
@@ -326,6 +344,7 @@ async def _serve(
     log.info("serving on 127.0.0.1:%d", info.port)
     staleness.start()
     try:
+        await service.resume_unfinished()
         tick = min(1.0, config.idle_timeout_s / 4, config.renew_every_s)
         while not task.done():
             if lifetime.should_exit():
@@ -344,7 +363,8 @@ async def _serve(
             await asyncio.wait({task}, timeout=tick)
         await task
     finally:
-        # Before the store stops: a refresh writes to it.
+        # Before the store stops: a compile and a refresh write to it.
+        await service.stop()
         staleness.cancel()
         await asyncio.to_thread(staleness.join)
 
