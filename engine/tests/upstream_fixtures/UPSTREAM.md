@@ -36,8 +36,8 @@ The gate reads the JUnit report and fails on any test that doesn't pass, skips i
 | `auto_ontology/utils/sql_identifiers.py` | Unchanged (`connectors/base.py` imports it) |
 | `auto_ontology/dal/tests/*.py`, `golden/*.json` | Unchanged, except the two below |
 | `auto_ontology/dal/tests/test_migration_revision.py` | Modified: finds the chain at `auto_ontology/alembic`; drops `test_the_chart_pins_the_head_revision`, which reads upstream's Helm `values.yaml` |
-| `auto_ontology/dal/tests/dal_surface.json` | Regenerated (`python test_dal_surface.py`): `embed_custom_analyses` and `embed_pql_analyses` take a LangChain `Embeddings` (M1.1), and `model_interchange` is gone until M6.4 ports it |
-| `auto_ontology/dal/tests/test_model_interchange.py` | Unchanged, and not run: `conftest.py` ignores it until M6.4 ports `dal/model_interchange.py` |
+| `auto_ontology/dal/tests/dal_surface.json` | Regenerated (`python test_dal_surface.py`): `embed_custom_analyses` and `embed_pql_analyses` take a LangChain `Embeddings` (M1.1), and `model_interchange`'s entry is upstream's, which M6.4's port keeps |
+| `auto_ontology/dal/tests/test_model_interchange.py` | Unchanged. Its 21 tests run against M6.4's port of `dal/model_interchange.py`, and the gate runs 803 in all |
 | `auto_ontology/catalog/store/tests/*.py` | Unchanged |
 
 The seed stubs the services' embed calls (`_stub_embedding`), so the stubbed `get_embed_params` is never used, and nothing here embeds.

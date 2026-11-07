@@ -8,6 +8,12 @@ Ontological includes the following third-party material.
 - Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES.
 - License: Apache License, Version 2.0. The full text is in `engine/auto_ontology/LICENSE`.
 
+## Apache Ossie converter for Auto Ontology
+
+- Package: `apache-ossie-nvidia-auto-ontology`, installed from [apache/ossie-converters](https://github.com/apache/ossie-converters) (`nvidia/`) at commit `cb4b46b`, pinned in `engine/pyproject.toml`. Not vendored or modified; the engine's model import and export call it for Apache Ossie YAML.
+- Apache Ossie (incubating). Copyright 2026 The Apache Software Foundation. This product includes software developed at The Apache Software Foundation (http://www.apache.org/).
+- License: Apache License, Version 2.0. The full text is in `engine/auto_ontology/LICENSE`.
+
 ## Pagila and Chinook
 
 - Files: `engine/tests/upstream_fixtures/dev_tools/fixtures/sql/pagila.sql` and `chinook.sql`, as vendored by Auto Ontology. Test data only; never shipped.

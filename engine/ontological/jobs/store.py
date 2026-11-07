@@ -89,7 +89,7 @@ def open_job(kind: Literal["compile", "reembed"], database_name: str) -> Job | N
     return _job(found[0]) if found else None
 
 
-def unfinished(kind: Literal["compile"]) -> list[Job]:
+def unfinished(kind: Literal["compile", "reembed"]) -> list[Job]:
     """Every unfinished job of this kind, oldest first."""
     rows = store().query_read(
         f"{_JOB} WHERE kind = :kind AND state <> 'done' ORDER BY id", {"kind": kind}

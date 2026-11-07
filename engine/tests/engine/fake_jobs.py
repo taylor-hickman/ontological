@@ -83,6 +83,9 @@ class FakeJobs:
             changes["table_calls"] = table_calls
         self._set(compiles[0].id, **changes)
 
+    async def reembed(self, database_name: str) -> None:
+        self._note(f"reembed {database_name}")
+
     async def choose(self, job_id: int, table_calls: TableCalls) -> None:
         self._note(f"choose {job_id} {table_calls}")
         job = self._find(job_id)

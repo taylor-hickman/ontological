@@ -26,7 +26,8 @@ it, the validated SQL, its rows and the tool log (`ontological.answer.service.As
 the question the semantic layer covers, within the database given or the one that covers it best
 (`ontological.answer.answerable.Answerability`). It answers 503 as `/ask` does.
 
-The Terms and Ontology screens read and edit the ontology through the routes in `curate.py`.
+The Terms and Ontology screens read and edit the ontology through the routes in `curate.py`, and
+models are imported and exported through the routes in `interchange.py`.
 
 Leases: `POST /leases` takes one, `PUT /leases/{id}` renews it, `DELETE /leases/{id}` releases
 it. A renewal of an expired lease is 404, and the client takes a new one. A closing engine
@@ -50,6 +51,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder
 from ontological.api.curate import add_curate_routes
+from ontological.api.interchange import add_interchange_routes
 from ontological.api.setup import add_setup_routes
 from ontological.catalog.sources import Sources
 from ontological.compile.estimate import Estimate
@@ -57,6 +59,7 @@ from ontological.compile.packing import TableCalls
 from ontological.curate.service import OntologyService
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine.lifetime import Closing, Lease, Lifetime
+from ontological.interchange.store import InterchangeService
 from ontological.jobs.active import ActiveJobs, JobBusy
 from ontological.jobs.service import JobsService, NoSource, NoSuchJob, NotNow
 from ontological.jobs.view import CallRow, JobDetail, JobSummary
@@ -166,6 +169,7 @@ def create_app(
     jobs_service: JobsService | None = None,
     ontology: OntologyService | None = None,
     answers: Answers | None = None,
+    interchange: InterchangeService | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Ontological engine",
@@ -215,6 +219,7 @@ def create_app(
 
     add_setup_routes(app, claude=claude, sources=sources)
     add_curate_routes(app, ontology=ontology)
+    add_interchange_routes(app, interchange=interchange)
 
     @app.post("/ask")
     async def ask(body: AskRequest) -> Asked:  # pyright: ignore[reportUnusedFunction]
