@@ -69,6 +69,7 @@ from ontological.llm.env import sanitize_environ
 from ontological.llm.gateway import ClaudeGateway
 from ontological.llm.install import Claude, ClaudeCheck
 from ontological.llm.routes import Route, load_routes
+from ontological.settings import SettingsService, StoreSettings
 from ontological.store import dal, pg
 
 log = logging.getLogger("ontological.engine")
@@ -111,6 +112,7 @@ class Store(Protocol):
     def ontology(self, embedder: LocalEmbedder | None) -> OntologyService: ...
     def answers(self, embedder: LocalEmbedder | None) -> Answers: ...
     def interchange(self, jobs: JobsService) -> InterchangeService | None: ...
+    def settings(self) -> SettingsService | None: ...
 
 
 class PgStore:
@@ -184,6 +186,10 @@ class PgStore:
     def interchange(self, jobs: JobsService) -> InterchangeService:
         """Model import and export; an import re-embeds what it wrote as `jobs`' re-embeds."""
         return StoreInterchange(jobs)
+
+    def settings(self) -> SettingsService:
+        """The person's settings, in app.setting."""
+        return StoreSettings()
 
 
 def pg_store(config: Config) -> Store:
@@ -395,6 +401,7 @@ async def _serve(
         ontology=store.ontology(embedder),
         answers=store.answers(embedder),
         interchange=store.interchange(service),
+        settings=store.settings(),
     )
     server = _Server(
         uvicorn.Config(

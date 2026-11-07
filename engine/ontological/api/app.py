@@ -30,8 +30,9 @@ it, the validated SQL, its rows and the tool log (`ontological.answer.service.As
 the question the semantic layer covers, within the database given or the one that covers it best
 (`ontological.answer.answerable.Answerability`). It answers 503 as `/ask` does.
 
-The Terms and Ontology screens read and edit the ontology through the routes in `curate.py`, and
-models are imported and exported through the routes in `interchange.py`.
+The Terms and Ontology screens read and edit the ontology through the routes in `curate.py`,
+models are imported and exported through the routes in `interchange.py`, and Settings reads and
+writes the person's settings, such as Compile's auto-compile, through the routes in `settings.py`.
 
 Leases: `POST /leases` takes one, `PUT /leases/{id}` renews it, `DELETE /leases/{id}` releases
 it. A renewal of an expired lease is 404, and the client takes a new one. A closing engine
@@ -56,6 +57,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder
 from ontological.api.curate import add_curate_routes
 from ontological.api.interchange import add_interchange_routes
+from ontological.api.settings import add_settings_routes
 from ontological.api.setup import add_setup_routes
 from ontological.catalog.sources import Sources
 from ontological.compile.estimate import Estimate
@@ -69,6 +71,7 @@ from ontological.jobs.service import Embeddings, JobsService, NoSource, NoSuchJo
 from ontological.jobs.service import NoEmbedder as NoReembedder
 from ontological.jobs.view import CallRow, JobDetail, JobSummary
 from ontological.llm.install import Claude
+from ontological.settings import SettingsService
 
 log = logging.getLogger(__name__)
 
@@ -179,6 +182,7 @@ def create_app(
     ontology: OntologyService | None = None,
     answers: Answers | None = None,
     interchange: InterchangeService | None = None,
+    settings: SettingsService | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Ontological engine",
@@ -229,6 +233,7 @@ def create_app(
     add_setup_routes(app, claude=claude, sources=sources)
     add_curate_routes(app, ontology=ontology)
     add_interchange_routes(app, interchange=interchange)
+    add_settings_routes(app, settings=settings)
 
     @app.post("/ask")
     async def ask(body: AskRequest) -> Asked:  # pyright: ignore[reportUnusedFunction]

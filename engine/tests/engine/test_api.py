@@ -11,6 +11,7 @@ import httpx2
 import pytest
 from fake_answers import SQL, FakeAnswers
 from fake_jobs import FakeJobs
+from fake_settings import FakeSettings
 from fastapi.testclient import TestClient
 
 from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder
@@ -68,6 +69,8 @@ def client(lifetime: Lifetime) -> Iterator[TestClient]:
         ("GET", "/tables/x"),
         ("POST", "/ask"),
         ("POST", "/answerable"),
+        ("GET", "/settings"),
+        ("PUT", "/settings/compile.auto_compile"),
         ("GET", "/docs"),
         ("GET", "/openapi.json"),
         ("GET", "/no-such-route"),
@@ -297,6 +300,36 @@ def test_re_embedding_needs_an_embedder(lifetime: Lifetime, tmp_path: Path) -> N
         c.headers["Authorization"] = f"Bearer {TOKEN}"
         assert c.get("/embeddings").json() == {"model": None, "stale": []}
         assert c.post("/jobs/reembed").status_code == 503
+
+
+def test_settings_routes_need_a_store(client: TestClient) -> None:
+    assert client.get("/settings").status_code == 503
+    assert client.put("/settings/compile.auto_compile", json={"value": True}).status_code == 503
+
+
+def test_settings_reads_the_defaults_and_writes_auto_compile(
+    lifetime: Lifetime, tmp_path: Path
+) -> None:
+    app = create_app(
+        token=TOKEN, lifetime=lifetime, pid=1, version="9.9.9", settings=FakeSettings(tmp_path)
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.headers["Authorization"] = f"Bearer {TOKEN}"
+        assert c.get("/settings").json() == {"compile.auto_compile": False}, "off by default"
+
+        r = c.put("/settings/compile.auto_compile", json={"value": True})
+        assert (r.status_code, r.json()) == (200, {"compile.auto_compile": True})
+        assert c.get("/settings").json() == {"compile.auto_compile": True}
+        assert json.loads((tmp_path / "settings.json").read_text()) == {
+            "compile.auto_compile": True
+        }
+
+        assert c.put("/settings/compile.nope", json={"value": True}).status_code == 404
+        for wrong in (1, "true", None):
+            r = c.put("/settings/compile.auto_compile", json={"value": wrong})
+            assert r.status_code == 422, wrong
+        assert c.put("/settings/compile.auto_compile", json={}).status_code == 422
+        assert c.get("/settings").json() == {"compile.auto_compile": True}, "left as it was"
 
 
 def test_jobs_lists_reads_and_acts_on_jobs(jobs_client: TestClient) -> None:
