@@ -175,10 +175,10 @@ def test_the_agent_s_misses_are_scored_with_their_reason(scorer: runner.Scorer) 
     assert scorer.agent(q, None, no_answer=False).failure == "no_sql"
 
 
-def test_a_date_duckdb_reads_as_date_is_a_dialect_artifact(scorer: runner.Scorer) -> None:
+def test_a_date_duckdb_reads_as_date_matches_as_a_dialect_artifact(scorer: runner.Scorer) -> None:
     q = bird_q("SELECT joined FROM client WHERE client_id = 1")
     got = scorer.agent(q, "SELECT joined FROM client WHERE client_id = 1", no_answer=False)
-    assert not got.match and got.dialect_artifact
+    assert got.match and got.dialect_artifact
     assert got.gold_sample == [["2012-03-01"]] and got.pred_sample == [["2012-03-01"]]
 
 
