@@ -9,6 +9,10 @@ Alembic chains run: the DDL before the data (schemas, sequences, tables, indexes
 a server-side COPY, then the foreign keys and views, all in one transaction, and then each table's
 row count is checked against its CSV. A load that fails or comes up short never becomes pgdata/,
 so the next `up` loads again from the beginning.
+
+Pagila, for the compile-quality review (BUILD_PLAN.md M3.10), is a second database, loaded when
+first asked for (`ensure_pagila`) from the trimmed copy upstream's fixtures vendor, plus their
+`analytics` schema. It is test data in the repo, so there is nothing to download.
 """
 
 from __future__ import annotations
@@ -21,6 +25,11 @@ from ontological.store import pg
 from .home import cluster_dir, wwi_dir
 
 DATABASE = "wideworldimporters"
+PAGILA = "pagila"
+PAGILA_SQL = (
+    Path(__file__).resolve().parents[2] / "engine/tests/upstream_fixtures/dev_tools/fixtures/sql"
+)
+PAGILA_FILES = ("pagila.sql", "pagila_analytics.sql")
 DDL_BEFORE_DATA = ("01_schemas.sql", "02_sequences.sql", "03_tables.sql", "04_indexes.sql")
 DDL_AFTER_DATA = ("05_fkeys.sql", "06_views.sql")
 # Some WWI fields (photos, JSON) are longer than the csv module's default 128 KB limit.
@@ -102,6 +111,27 @@ def up(home: Path, pg_bin: Path) -> pg.Server:
     wwi = wwi_dir(home)
     tables(wwi)  # fail before initdb if the data isn't there
     return pg.ensure_running(lay, prepare_store=lambda staging: load_wwi(staging, wwi))
+
+
+def ensure_pagila(home: Path, pg_bin: Path) -> None:
+    """Create and load the `pagila` database on the running cluster unless it is there. The
+    files load in one transaction, so a failed load leaves an empty database, which is dropped."""
+    lay = layout(home, pg_bin)
+    exists = pg.psql(lay, f"SELECT 1 FROM pg_database WHERE datname = '{PAGILA}'", db="postgres")
+    if exists:
+        return
+    pg.psql(lay, f"CREATE DATABASE {PAGILA}", db="postgres")
+    files = [a for f in PAGILA_FILES for a in ("-f", str(PAGILA_SQL / f))]
+    try:
+        pg.run(
+            [
+                lay.tool("psql"), "-X", "-q", "-v", "ON_ERROR_STOP=1", "--single-transaction",
+                "-h", str(lay.pgsocket), "-p", str(pg.PORT), "-U", pg.USER, "-d", PAGILA, *files,
+            ]
+        )  # fmt: skip
+    except pg.PgError:
+        pg.psql(lay, f"DROP DATABASE {PAGILA}", db="postgres")
+        raise
 
 
 def down(home: Path, pg_bin: Path) -> None:

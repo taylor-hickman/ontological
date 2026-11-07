@@ -50,7 +50,7 @@ Spikes run in M0, mostly in parallel. Each one leaves behind code that stays (a 
 | **S8** | How long does a `bm25s` rebuild take at 10⁵ documents? | Synthetic catalog texts with identifier-aware tokens (§7.3), timing build and query | Under about 3 s: rebuild on every change, swapping atomically. Slower: rebuild incrementally per database and debounce edits | M3.6 |
 | **S9** | Can a Pro plan use Opus in Claude Code? | Check Anthropic's current plan docs. If the docs don't say, record it as unknown; `fallback_model="sonnet"` covers it either way (§6.3) | Documentation only. It matters for other people running the app, not for the author's Ultra plan | §6.3 |
 
-S3 has to wait for M1, so it is the one spike that runs late. The split vs merged quota ratio (§6.3's 1.5–2x estimate) needs real compiles, so it is measured in M3 (M3.10), not here.
+S3 has to wait for M1, so it is the one spike that runs late. The split vs merged quota ratio (§6.3's 1.5–2x estimate) needs real compiles, so it is measured in M3 (M3.10), not here. M3.10 found the estimate backwards: merged uses 1.3–1.6 times split's quota.
 
 ## Eval set
 
@@ -237,6 +237,28 @@ BM25 alone gives 0.748 tables and 0.513 columns at k = 10. Trigram alone gives a
 - **Coverage distance** (`ModelSpec.coverage_distance`, for M4.4's `check_answerable`). Each model's distances sit on a different scale: arctic-m's own-database nearest attribute has a median of 0.56, while bge-small's has 0.29. At upstream's 0.75, every other model covers every wrong-database question (FPR 1.0), and arctic-m covers 79% of them. Each value is the Youden's-J cut between a question's nearest attribute in its own database and in the other four. It comes from raw questions, so M4.4 checks it on extracted entities.
 - **Not tuned here.** `plan`'s per-entity k values (2, 3 for evidence, 1 Term) need extracted entities, and the certified bonus needs certified items; the eval has neither. RRF's k = 60 and the 50 candidates per ranking stay as S8 set them.
 
+
+**M3.10 decided (2026-11-07): split stays the default, and so do the compile routes.** `ontological_eval review run` loaded Pagila into the eval cluster beside WWI and compiled both four ways, each in a store of its own (`<eval home>/review/<config>`), so every config started with no Terms and no cache. `split` and `merged` are `compile.table_calls` on the default routes. `split-cheaper` and `merged-cheaper` move every compile route one step down: Sonnet to Haiku and Opus to Sonnet at the same effort, and a Haiku route one effort level down. `table_synonyms` (haiku/low) has no cheaper step. All 26 Pagila tables and all 51 WWI tables compiled, every call answered `ok`, and none fell back. Neither database has table descriptions or query history, and the bridge stage asked nothing, so `table_synonyms`, `sql_attribute_judge` and `bridge_sql` made no calls and aren't judged here. PII stayed off. Cost is at API prices, from the call log. The seven-day utilization went from 0.78 to 0.79 over all eight compiles ($3.73), and no single compile moved it, so cost stands in for quota.
+
+| Config | Pagila: calls, cost, wall time | WWI: calls, cost, wall time |
+|---|---|---|
+| `split` | 36, $0.28, 127 s | 119, $1.03, 471 s |
+| `merged` | 27, $0.37, 136 s | 53, $1.69, 392 s |
+| `split-cheaper` | 36, $0.03, 157 s | 119, $0.12, 531 s |
+| `merged-cheaper` | 27, $0.04, 206 s | 55, $0.17, 652 s |
+
+The hand review read the keys, Terms and FKs of every table in both databases, side by side, and the column descriptions of 14: on WWI `sales.invoices`, `sales.specialdeals`, `warehouse.stockitems`, `warehouse.coldroomtemperatures`, `warehouse.stockitemtransactions`, `purchasing.suppliertransactions` and `application.people`, and on Pagila `film`, `customer`, `payment`, `rental`, `staff`, `customer_list` and `analytics.category_rollup`. Declared FKs, primary keys and junction flags came out identical in all four configs. Every table got one Term for the same entity in every config; names differ only in wording, though `merged-cheaper` falls back to a collision-qualified name like "Payment Method (wideworldimporters.application.paymentmethods_archive)" more often (16 WWI tables, against 7 to 11). No description in the sample is wrong. They differ in detail and in one defect: split's Haiku descriptions narrate the prompt ("Display name of the payment method (sample value: Credit Card)", "sample values are blank"), which describes one row as if it were the column. Inferred FKs were scored against what the schema means, on every column whose edge some config inferred, missed or got wrong (7 on Pagila, 46 on WWI), leaving out self-references and all-NULL columns, which the stage skips by rule. Retrieval is M3.9's benchmark on each store: dev's 36 WWI questions, arctic-m, hybrid, calibrated against Pagila.
+
+| Config | Inferred FKs right / wrong / missed, Pagila | Same, WWI | Descriptions with an example, WWI | Prompt leaks | Hybrid tables @1 / @20 | Hybrid columns @1 / @20 |
+|---|---|---|---|---|---|---|
+| `split` | 4 / 2 / 1 | 17 / 9 / 20 | 39%, 13.0 words | 19 | 0.572 / 0.882 | 0.206 / 0.620 |
+| `merged` | 4 / 1 / 2 | 21 / 1 / 24 | 30%, 10.1 words | 0 | 0.609 / 0.870 | 0.189 / 0.647 |
+| `split-cheaper` | 5 / 0 / 2 | 15 / 1 / 30 | 39%, 12.7 words | 7 | 0.495 / 0.887 | 0.169 / 0.610 |
+| `merged-cheaper` | 4 / 0 / 3 | 15 / 2 / 29 | 33%, 10.8 words | 2 | 0.433 / 0.850 | 0.125 / 0.598 |
+
+- **Merged is no worse on quality, and costs more.** It has fewer wrong FK edges and no leaks, and its retrieval is within 0.04 of split's at every k, some higher and some lower, where one question is worth about 0.03. Its descriptions are shorter and drop details the samples show, such as "stored in uppercase" on Pagila's names, which the answer agent needs for a `WHERE` on them. But it costs 1.3 times split's quota on Pagila and 1.6 times on WWI, and it isn't faster. §6.3 guessed the opposite, before M3.2 packed the split stages: split now asks keys and terms once a pack (34 calls each for WWI's 51 tables) and writes descriptions on Haiku, while merged asks Sonnet once a table and writes the descriptions on Sonnet, 54k Sonnet output tokens on WWI against split's 33k. Merged saves calls, 53 against 119, and nothing else, so split stays the default. ARCHITECTURE.md §6.3, §6.4, §6.5 and §13 now give these numbers, and M3.7's estimate should use them.
+- **Split's 9 wrong WWI edges are one mistake.** Its keys answer for `sales.customercategories_archive` left `lasteditedby` as an attribute, and the sample-match probe then tied nine other archive tables' `lasteditedby` to it. Every config also leaves archive tables' `lasteditedby` unlinked rather than pointing it at `application.people`, and three of four resolve `customers_archive.customerid` to the `website.customers` view. That is the inference stage's, not the routes': a backlog item covers it.
+- **The cheaper routes stay where they are.** They cost about a tenth, take 13–66% longer, since Haiku at `high` thinks more, and lose at the top of retrieval: tables @1 falls 0.08 with split's stages and 0.18 with merged's. They make fewer wrong edges but miss more. At k = 20, nearest the pack's 30, `split-cheaper` matches `split` (0.887 tables, 0.610 columns), so it is the one to try if compile quota ever becomes the constraint. Each config ran once, so run-to-run noise is unmeasured.
 
 ### M4: Answer depth and tuning
 
