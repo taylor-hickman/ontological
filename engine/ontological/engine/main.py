@@ -54,6 +54,7 @@ from ontological.curate.service import OntologyService, StoreOntology
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
+from ontological.interchange.store import InterchangeService, StoreInterchange
 from ontological.jobs import store as job_store
 from ontological.jobs.active import ActiveJobs
 from ontological.jobs.service import Jobs, JobsService, auto_compile_from
@@ -102,6 +103,7 @@ class Store(Protocol):
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService: ...
     def ontology(self, embedder: LocalEmbedder | None) -> OntologyService: ...
     def answers(self, embedder: LocalEmbedder | None) -> Answers: ...
+    def interchange(self, jobs: JobsService) -> InterchangeService | None: ...
 
 
 class PgStore:
@@ -163,6 +165,10 @@ class PgStore:
     def answers(self, embedder: LocalEmbedder | None) -> Answers:
         """Questions, answered through the same gateway."""
         return StoreAnswers(gateway=self._gateway(), embedder=embedder)
+
+    def interchange(self, jobs: JobsService) -> InterchangeService:
+        """Model import and export; an import re-embeds what it wrote as `jobs`' re-embeds."""
+        return StoreInterchange(jobs)
 
 
 def pg_store(config: Config) -> Store:
@@ -363,6 +369,7 @@ async def _serve(
         jobs_service=service,
         ontology=store.ontology(embedder),
         answers=store.answers(embedder),
+        interchange=store.interchange(service),
     )
     server = _Server(
         uvicorn.Config(

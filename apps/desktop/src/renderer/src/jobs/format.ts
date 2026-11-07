@@ -105,8 +105,14 @@ export function jobStatusLine(jobs: readonly JobSummary[]): string | null {
   }
 }
 
+const KIND_NAME: Record<JobSummary['kind'], string> = {
+  compile: 'Compile',
+  ingest: 'Ingest metadata',
+  reembed: 'Re-embed'
+}
+
 export function jobTitle(job: JobSummary): string {
-  return job.kind === 'compile' ? `Compile · ${job.database_name}` : `Ingest metadata · ${job.database_name}`
+  return `${KIND_NAME[job.kind]} · ${job.database_name}`
 }
 
 /** A job's state as a word, so it never depends on color (§2.1). */
@@ -127,6 +133,7 @@ export function stateWord(job: JobSummary): string {
 
 /** One line for an earlier run: "Compile · pagila · 22 tables". */
 export function earlierLine(job: JobSummary): string {
+  if (job.kind === 'reembed') return job.state === 'stopped' ? `${jobTitle(job)} · failed` : jobTitle(job)
   if (job.kind === 'ingest') {
     const found = job.new_tables.length
     if (job.state === 'stopped') return `${jobTitle(job)} · failed`
@@ -148,8 +155,21 @@ function finished(job: JobSummary): string {
   return n === 0 ? 'Nothing is lost.' : `The ${n} finished ${n === 1 ? 'table is' : 'tables are'} saved.`
 }
 
-/** §4.7's banner for a compile that is paused or stopped; null while it runs or once it's done. */
+/**
+ * §4.7's banner for a compile that is paused or stopped, or a re-embed that stopped; null while it
+ * runs or once it's done.
+ */
 export function jobBanner(job: JobSummary, now: number): Banner | null {
+  if (job.kind === 'reembed') {
+    return job.state === 'stopped'
+      ? {
+          title: 'Stopped: re-embedding didn’t finish',
+          detail: `${job.error ?? 'The re-embed stopped.'} Search may miss what changed in ${job.database_name} until it runs. Retrying uses no Claude usage.`,
+          action: 'resume',
+          actionLabel: 'Retry'
+        }
+      : null
+  }
   if (job.kind !== 'compile') return null
   switch (job.state) {
     case 'paused': {
