@@ -386,7 +386,7 @@ Port `connectors/base.py::SQLDatabase` as-is, and finish the DuckDB reference co
 ### 5.7 History
 
 Upstream keeps no ontology history. Ontological adds:
-- `ops.change_log(ts, entity, entity_id, field, old, new, actor)`, where actor is `user | compile | import`. It is written by the same functions that apply edits, and it drives undo and "what did compile change".
+- `ops.change_log(id, edit, ts, entity, entity_id, field, old, new, actor, undoes)`, where actor is `user | compile | import`. It is written by the same functions that apply edits (`curate/edits.py`), in the edit's transaction: one row per field changed, sharing the edit's id, with `old` and `new` as JSON. It drives undo and "what did compile change". An undo is an edit whose rows name the edit they revert in `undoes`. An edit is undone once, and not while a later edit holds one of its fields.
 - A native-YAML snapshot written to `backups/` at the end of every compile run. This reuses the export code (§9.3).
 - `pg_dump` files before migrations, after compiles and at quit (§5.1). Ontological keeps the newest 10 by name (UTC timestamps, §5.3) and removes older ones, except the dump just written: if the clock was set back, ten older dumps can sort after it.
 
@@ -560,7 +560,7 @@ The runtime is ONNX Runtime (the macOS arm64 wheel is 20.9 MB) on the CPU provid
 - The int8 file quantizes activations per batch, so a passage's vector shifts slightly with its batch-mates (cosine against the same text embedded alone: ≥ 0.996 on an M5 Max, about 0.98 on GitHub's Linux x86 and macOS runners). The engine embeds each query alone, so query vectors are deterministic. `content_hash`, not vector equality, decides whether a text needs re-embedding.
 
 - Upstream embeds asymmetrically (`input_type=query|passage`). Use the model's query/passage prefixes where it defines them.
-- Every vector's metadata stores `model` and `content_hash`. Changing the embedding model triggers a re-embed job; vectors from different models are never compared.
+- Every vector's metadata stores `model` and `content_hash`. Changing the embedding model triggers a re-embed job (`embed/reembed.py`, an `ops.job` of kind `reembed` per database); vectors from different models are never compared. An edit re-embeds only the texts whose `content_hash` it changed (§5.7).
 - **Fix upstream's ordering bug**: build data-layer texts *after* profiling so that `sample_values` are included. Ingest profiles each table through its executor, writes the result to the store, and then builds the texts from the store (`catalog/data_layer.py`, M2.5).
 
 ### 7.2 Choosing the model
@@ -771,6 +771,7 @@ ontological/
       llm/                      ClaudeGateway, route table, cache, limits
       interchange/              native YAML + Ossie
       mcp/                      stdio shim
+      curate/                   edits with ops.change_log, history and undo
       jobs/                     runner, staleness check, pause/resume
     tests/
       upstream_fixtures/        test-only vendored upstream connectors, services and golden seed (§5.4)
