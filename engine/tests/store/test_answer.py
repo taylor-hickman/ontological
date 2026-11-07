@@ -31,9 +31,10 @@ from test_grounding import compile_source
 
 from auto_ontology.vdb.postgres import PostgresVDB
 from ontological.answer.agent import ask
-from ontological.answer.gate import check_sql
+from ontological.answer.gate import Probing, check_sql
 from ontological.answer.ontology import StoreOntology
 from ontological.answer.pack import build_pack
+from ontological.answer.probe import ProbeExecutor
 from ontological.compile.split import Compiled
 from ontological.embed.embedder import LocalEmbedder
 from ontological.embed.search import semantic_vdb
@@ -96,6 +97,36 @@ def test_the_gate_reads_chinooks_catalog_and_keys(ontology: StoreOntology) -> No
         "GROUP BY al.AlbumId, al.Title",
     )
     assert "t.Milliseconds" in unsafe
+
+
+def test_checks_4_to_6_read_chinooks_graph_and_probe_its_source(
+    ontology: StoreOntology, chinook: Path
+) -> None:
+    catalog = ontology.catalog("chinook")
+    album = catalog.table(None, "album")
+    assert album is not None and album.types["title"]  # the gate's known types
+    graph = ontology.join_graph("chinook")
+    track_album = graph.column_id("Track", "AlbumId")
+    album_id = graph.column_id("album", "albumid")  # any case, as the SQL writes it
+    assert track_album and album_id and graph.in_semantic_fk(album_id)
+    [hop] = graph.join_path(track_album, album_id)
+    assert (hop["source_table"], hop["target_table"]) == ("Track", "Album")
+
+    with SourceExecutor(SqliteSource(chinook)) as executor:
+
+        def issues(sql: str) -> list[str]:
+            return check_sql(
+                sql,
+                catalog,
+                key_columns=lambda table: ontology.key_columns("chinook", table),
+                probing=Probing(ProbeExecutor(executor), graph),
+            ).issues
+
+        assert issues(SQL) == []
+        [join] = issues("SELECT t.Name FROM Track t JOIN Album al ON t.TrackId = al.AlbumId")
+        assert "Track.TrackId = Album.AlbumId" in join
+        [literal] = issues("SELECT Name FROM Genre WHERE Name = 'rock'")
+        assert "Closest real value(s): Rock." in literal
 
 
 def test_search_and_describe_read_the_semantic_layer_and_the_catalog(
