@@ -491,6 +491,19 @@ def _stop_engine(pid: int) -> None:
         time.sleep(0.2)
 
 
+def control_todo(
+    questions: Sequence[Question], stored: Mapping[str, runs.Record]
+) -> list[Question]:
+    """The questions the control store has no answer for. A stored `no_answer` (a rate limit, an
+    error) is asked again: the store keeps answers, not the failures to get one."""
+    return [
+        q
+        for q in questions
+        if (rec := stored.get(runs.question_key(*q.key))) is None
+        or rec["score"]["failure"] == "no_answer"
+    ]
+
+
 async def _control_arm(
     home: Path,
     gateway: ClaudeGateway,
@@ -506,7 +519,7 @@ async def _control_arm(
     route = config.agent
     path = runs.control_path(home, route)
     stored: dict[str, runs.Record] = runs.read_json(path) if path.exists() else {}
-    todo = [q for q in questions if runs.question_key(*q.key) not in stored]
+    todo = control_todo(questions, stored)
     asked = 0
     for n, q in enumerate(todo, 1):
         key = runs.question_key(*q.key)

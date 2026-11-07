@@ -220,3 +220,13 @@ def test_an_agent_record_keeps_only_answering_s_calls() -> None:
     assert rec["other_calls"] == ["table_terms"]
     assert rec["key"] == "bird:7" and rec["sql_validated"] and rec["seconds"] == 12.3
     json.dumps(rec)
+
+
+def test_the_control_asks_again_where_it_stored_no_answer() -> None:
+    qs = [Question("bird", i, "financial", "", "", "", "") for i in (1, 2, 3)]
+    no_answer = runner.verify.score([(1,)], None, no_answer=True).to_json()
+    stored: dict[str, runs.Record] = {
+        "bird:1": {"score": runner.verify.score([(1,)], [(2,)]).to_json()},  # answered, wrong
+        "bird:2": {"score": no_answer},  # rate-limited last time
+    }
+    assert [q.id for q in runner.control_todo(qs, stored)] == [2, 3]
