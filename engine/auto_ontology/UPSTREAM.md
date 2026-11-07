@@ -18,7 +18,8 @@ Upstream's `alembic.ini` isn't vendored. `ontological/store/chains.py` configure
 | `alembic/README`, `alembic/script.py.mako`, `alembic/versions/*.py` (7 revisions, head `99d4d343dd0b`) | Unchanged |
 | `alembic/env.py` | Modified: drops the `auto_ontology.env` import (python-dotenv) and uses `sqlalchemy.url` when the engine has set it |
 | `__init__.py`, `infra/__init__.py` | Unchanged |
-| `dal/*.py` except the six below and `model_interchange.py` | Unchanged |
+| `dal/*.py` except the seven below | Unchanged |
+| `dal/model_interchange.py` | Ported with `server/model_interchange/*` (M6.4), keeping upstream's functions and signatures: the document is `ontological/interchange/schemas.py`, with synonyms and certification, which the export reads and an import writes onto the rows it creates; SQL resolves with the engine's parser and its statement is written with `catalog/query_history.py`, both imported when used, so the DAL still loads without sqlglot; the embed buffer names the databases the import wrote, which are re-embedded as a `reembed` job once it commits |
 | `dal/schema_version.py` | Modified: finds the chain at `auto_ontology/alembic`, not two levels above `dal/` |
 | `dal/connections.py` | Modified: imports `read_secret` from `infra/keychain.py`, not `connectors/vault.py` |
 | `dal/custom_analyses.py` | Modified: takes `SqlParseError` from `server/sql_errors.py`; `embed_custom_analyses` takes a LangChain `Embeddings` in place of `EmbedParams` |
@@ -62,6 +63,6 @@ Each modified or added file says so under its SPDX header.
 
 ## The conformance suite
 
-Upstream's DAL tests and golden fixtures run against this package as M2's conformance gate (`engine/tests/golden_dal/`, M2.1), with the seed and the code it needs vendored as test-only code under `engine/tests/upstream_fixtures/` (its `UPSTREAM.md` lists the files and edits). The edits here show up there as a regenerated `dal_surface.json` (the `embed_custom_analyses` and `embed_pql_analyses` signatures, no `model_interchange`) and a `test_migration_revision.py` that finds `auto_ontology/alembic`.
+Upstream's DAL tests and golden fixtures run against this package as M2's conformance gate (`engine/tests/golden_dal/`, M2.1), with the seed and the code it needs vendored as test-only code under `engine/tests/upstream_fixtures/` (its `UPSTREAM.md` lists the files and edits). The edits here show up there as a regenerated `dal_surface.json` (the `embed_custom_analyses` and `embed_pql_analyses` signatures; `model_interchange`'s entry is upstream's) and a `test_migration_revision.py` that finds `auto_ontology/alembic`.
 
 To check a file against upstream: `diff <upstream checkout>/auto_ontology/dal/connections.py engine/auto_ontology/dal/connections.py`.

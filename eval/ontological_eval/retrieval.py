@@ -305,11 +305,13 @@ def run(
     *,
     ks: Sequence[int] = KS,
     configs: Mapping[str, tuple[str, ...]] = CONFIGS,
+    others: Sequence[str] = (),
     progress: Callable[[str], None] = lambda _: None,
 ) -> Report:
     """Run the benchmark on `questions` for each model in `specs`. The store must be connected
-    (`ontological.store.dal.connect`) and hold every question's database."""
-    databases = sorted({q.db for q in questions})
+    (`ontological.store.dal.connect`) and hold every question's database, and `others`, more
+    databases that are searched and calibrated against but have no questions."""
+    databases = sorted({q.db for q in questions} | set(others))
     indexes = {d: read_catalog_index(d) for d in databases}
     tables_of: dict[str, str] = {}
     for index in indexes.values():
@@ -439,18 +441,23 @@ def bench(
     set_name: str,
     keys: Sequence[str],
     *,
+    store: str | None = None,
     progress: Callable[[str], None] = lambda _: None,
 ) -> tuple[Report, Path]:
     """Run the benchmark on one frozen set against the eval store, fetching each model into
     <home>/models/<key> first, and write the report to <home>/results/retrieval-<layer>-<set>.json.
-    The store's Postgres is started if it isn't running, and stopped again if this started it."""
+    The store's Postgres is started if it isn't running, and stopped again if this started it.
+
+    With `store`, it runs against that compile-review store (BUILD_PLAN.md M3.10) instead, on the
+    set's questions whose database the store holds, calibrating against its other databases,
+    and the report's name ends in `-<store>`."""
     specs = [models.CANDIDATES[k] for k in keys]
     for spec in specs:
         progress(f"{spec.key}: checking {spec.id}")
         models.fetch(models_dir(home) / spec.key, spec)
     by_key = questions.load(home)
     chosen = [by_key[k] for k in sets.read()[set_name]]
-    lay = pg.Layout(app_data_dir(home), pg_bin)
+    lay = pg.Layout(app_data_dir(home, store), pg_bin)
     with discovery.engine_lock(lay.app_data):
         if (live := discovery.find_engine(lay.app_data)) is not None:
             raise BenchmarkError(f"an engine (pid {live.pid}) serves {lay.app_data}: stop it first")
@@ -458,16 +465,26 @@ def bench(
         try:
             pg.migrate(lay)
             dal.connect(lay)
+            others: list[str] = []
+            if store:
+                held = set(pg.psql(lay, "SELECT name FROM catalog_database").splitlines())
+                chosen = [q for q in chosen if q.db in held]
+                others = sorted(held - {q.db for q in chosen})
             try:
                 report = run(
-                    layer, chosen, specs, lambda s: models_dir(home) / s.key, progress=progress
+                    layer,
+                    chosen,
+                    specs,
+                    lambda s: models_dir(home) / s.key,
+                    others=others,
+                    progress=progress,
                 )
             finally:
                 dal.close()
         finally:
             if server.action != "adopt":
                 pg.stop(lay)
-    out = results_dir(home) / f"retrieval-{layer}-{set_name}.json"
+    out = results_dir(home) / f"retrieval-{layer}-{set_name}{f'-{store}' if store else ''}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report.to_json())
     return report, out

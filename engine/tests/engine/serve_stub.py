@@ -74,6 +74,9 @@ class FakeStore:
     def answers(self, embedder: LocalEmbedder | None) -> FakeAnswers:
         return FakeAnswers()
 
+    def interchange(self, jobs: JobsService) -> None:
+        return None  # no store to import into or export from
+
 
 if __name__ == "__main__":
     sys.exit(

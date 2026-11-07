@@ -35,8 +35,9 @@ checks warn instead of failing the SQL.
 
 `run_sql`'s result has an `outcome`: `rows`, or `empty` when the SQL returned none. An empty
 result isn't an error, since it can be the answer, but the model is told to recheck its filters
-and literals first, with the fixes the literal check finds once the query has come back empty.
-Those probes count against the same cap as the gate's.
+and literals first, with the fixes the literal check finds once the query has come back empty,
+and, when the SQL filters with LIKE or ILIKE, what the query returns without those filters
+(`ontological.answer.like_check`). Those probes count against the same cap as the gate's.
 
 A result's `data` is the tool's record of what it did, for the post-run check
 (`ontological.answer.postcheck`); the gateway keeps it from the model, which reads the text.
@@ -55,7 +56,7 @@ from typing import Any, Protocol
 from claude_agent_sdk import SdkMcpTool
 from sqlglot import exp
 
-from ontological.answer import literal_check
+from ontological.answer import like_check, literal_check
 from ontological.answer.gate import DIALECT, GateResult, KeyColumns, Probing, check_sql
 from ontological.answer.join_check import JoinGraph
 from ontological.answer.models import CALC_SUBTYPES, SUBTYPE_TEMPLATES, Review
@@ -423,6 +424,9 @@ class AnswerTools:
         if rows.rows:
             return _ok(ran)
         ran["repairs"] = await asyncio.to_thread(self._repairs, validation.database, validation.sql)
+        ran["without_like"] = await asyncio.to_thread(
+            self._without_like, validation.database, validation.sql
+        )
         return {"content": [_text(_empty_message(ran))], "data": ran}
 
     async def review_answer(self, args: dict[str, Any]) -> ToolResult:
@@ -595,6 +599,20 @@ class AnswerTools:
             **{k: _cell(summary.get(k)) for k in ("min", "max", "distinct_count", "nulls")},
         }
 
+    def _without_like(self, database: str, sql: str) -> dict[str, Any] | None:
+        """What SQL that returned no rows returns without its LIKE and ILIKE filters, when that
+        is some rows; otherwise None."""
+        found = like_check.probe_without_like(self._session_probing(database).probes, DIALECT, sql)
+        if found is None:
+            return None
+        return {
+            "dropped": found.dropped,
+            "sql": found.sql,
+            "columns": found.columns,
+            "rows": [[_cell(v) for v in row] for row in found.rows],
+            "truncated": found.truncated,
+        }
+
 
 def _resolve_column(catalog: CatalogIndex, named: str) -> tuple[str, str, str] | str:
     """`(schema, table, column)` as the catalog spells the table and column, for
@@ -660,15 +678,33 @@ def _empty_message(ran: dict[str, Any]) -> str:
         "filter or a literal is wrong. Before you answer, recheck each filter and literal "
         "against the question and the values the source holds."
     )
-    if ran["repairs"]:
+    found = [part for part in (ran["repairs"], _without_like_message(ran["without_like"])) if part]
+    if found:
         return (
-            f"{head}\n\n{ran['repairs']}\n\nIf a fix above matches the question, make it, call "
-            "validate_sql with the new SQL and run that. If none does, the empty result can be "
-            f"the answer: answer with {validation_id}."
+            f"{head}\n\n" + "\n\n".join(found) + "\n\nIf a fix above matches the question, "
+            "make it, call validate_sql with the new SQL and run that. If none does, the empty "
+            f"result can be the answer: answer with {validation_id}."
         )
     return (
         f"{head} Probing the filters' literals found no near-miss. If the filters are right, "
         f"the empty result can be the answer: answer with {validation_id}."
+    )
+
+
+def _without_like_message(without_like: dict[str, Any] | None) -> str:
+    if without_like is None:
+        return ""
+    dropped = without_like["dropped"]
+    filters = "this LIKE filter" if len(dropped) == 1 else "these LIKE filters"
+    more = ", and more" if without_like["truncated"] else ""
+    rows = "\n".join(json.dumps(row, ensure_ascii=False) for row in without_like["rows"])
+    return (
+        f"Without {filters}, the same query returns rows, so the LIKE filtering emptied the "
+        "result:\n"
+        + "\n".join(f"- {f}" for f in dropped)
+        + f"\nIts first rows ({', '.join(without_like['columns'])}){more}:\n{rows}\n"
+        "Check each pattern against how the source writes the value: its case, its spelling, "
+        "its wildcards, or whether the value is in another column."
     )
 
 
@@ -794,7 +830,8 @@ VALIDATE_SCHEMA: dict[str, Any] = {
 
 RUN_DOC = (
     "Run SQL that passed validate_sql, by its validation_id. Returns the columns and rows, or, "
-    "when the SQL returns no rows, says so with any fixes its filters' literals need."
+    "when the SQL returns no rows, says so with any fixes its filters' literals need and "
+    "whether its LIKE filters are what emptied it."
 )
 RUN_SCHEMA: dict[str, Any] = {
     "type": "object",

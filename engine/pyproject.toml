@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
     "alembic>=1.19.1",
+    "apache-ossie-nvidia-auto-ontology",
     "bm25s>=0.3.16",
     "claude-agent-sdk>=0.2.178",
     "duckdb>=2.0.0",
@@ -20,6 +21,7 @@ dependencies = [
     "pandas>=2.3.3,<3",
     "psycopg[binary]>=3.3.4",
     "pydantic>=2.14.2",
+    "pyyaml>=6.0.3",
     "sqlalchemy>=2.0.52,<2.1",
     "sqlglot==30.17.0",
     "tokenizers>=0.23.3",
@@ -40,6 +42,9 @@ module-root = ""
 # auto_ontology is upstream's package, vendored under its own name so each file diffs cleanly
 # against upstream (auto_ontology/UPSTREAM.md).
 module-name = ["ontological", "auto_ontology"]
+
+[tool.uv.sources]
+apache-ossie-nvidia-auto-ontology = { git = "https://github.com/apache/ossie-converters.git", subdirectory = "nvidia", rev = "cb4b46b97bcdb9f2685ef2f7023b9134a4426da2" }
 
 [tool.ruff]
 line-length = 100

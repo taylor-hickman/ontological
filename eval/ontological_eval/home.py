@@ -10,6 +10,7 @@ inside the repo wouldn't.
     <home>/bird/<db_id>.sqlite
     <home>/cluster/          the eval cluster's <appData>: pgdata, pgsocket, logs, pg.lock
     <home>/app/              the eval store: an engine <appData> that holds the eval's catalogs
+    <home>/review/<config>/  a store per compile-quality review config (BUILD_PLAN.md M3.10)
 """
 
 from __future__ import annotations
@@ -37,8 +38,9 @@ def cluster_dir(home: Path) -> Path:
     return home / "cluster"
 
 
-def app_data_dir(home: Path) -> Path:
-    return home / "app"
+def app_data_dir(home: Path, store: str | None = None) -> Path:
+    """The eval store, or with `store` the review config of that name's own store."""
+    return home / "review" / store if store else home / "app"
 
 
 def models_dir(home: Path) -> Path:

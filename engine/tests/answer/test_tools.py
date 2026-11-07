@@ -721,6 +721,42 @@ def test_the_empty_result_probes_share_the_questions_probe_cap() -> None:
     assert ran["outcome"] == "empty" and ran["repairs"] == ""
 
 
+def test_an_empty_result_says_its_like_filter_emptied_it() -> None:
+    h = Harness()
+    h.runner = chinook_runner()
+    sql = "SELECT Name FROM Artist WHERE Name LIKE 'ac/dc%' AND ArtistId < 3"
+    result = h.call("run_sql", validation_id=h.validated(sql))
+    ran = data(result)
+    assert ran["outcome"] == "empty"
+    without_like = ran["without_like"]
+    assert without_like["dropped"] == ["Name LIKE 'ac/dc%'"]
+    assert without_like["columns"] == ["Name"]
+    assert without_like["rows"] == [["AC/DC"], ["Artist 00"]]
+    message = text(result)
+    assert "LIKE filter" in message and "Name LIKE 'ac/dc%'" in message and "AC/DC" in message
+    assert "validate_sql" in message
+
+
+def test_an_empty_result_still_empty_without_its_like_filter_says_nothing_of_it() -> None:
+    h = Harness()
+    h.runner = chinook_runner()
+    sql = "SELECT Name FROM Artist WHERE Name LIKE 'Nobody%' AND Name = 'Nobody At All'"
+    result = h.call("run_sql", validation_id=h.validated(sql))
+    ran = data(result)
+    assert ran["outcome"] == "empty" and ran["without_like"] is None
+    assert "LIKE filter" not in text(result) and "can be the answer" in text(result)
+
+
+def test_the_like_probe_shares_the_questions_probe_cap() -> None:
+    h = Harness()
+    h.runner = chinook_runner()
+    validation_id = h.validated("SELECT Name FROM Artist WHERE Name LIKE 'ac/dc%'")
+    probes = h.tools._probings["chinook"].probes  # pyright: ignore[reportPrivateUsage]
+    probes.calls = probes.max_calls
+    ran = data(h.call("run_sql", validation_id=validation_id))
+    assert ran["outcome"] == "empty" and ran["without_like"] is None
+
+
 # --- review_answer ---------------------------------------------------------------------------
 
 

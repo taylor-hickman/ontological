@@ -1,6 +1,7 @@
 // What the engine's /jobs routes return (engine/ontological/jobs/view.py).
 
-export type JobKind = 'compile' | 'ingest'
+/** `reembed` makes a database's vectors current, after an import or a change of embedding model. */
+export type JobKind = 'compile' | 'ingest' | 'reembed'
 export type JobState = 'running' | 'paused' | 'held' | 'stopped' | 'done'
 export type StepState = 'pending' | 'done' | 'skipped'
 export type Outcome = 'ok' | 'invalid' | 'limited' | 'error'

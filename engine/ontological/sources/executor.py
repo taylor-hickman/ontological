@@ -207,6 +207,13 @@ class SourceExecutor:
             raise ValueError(f"max_rows must be between 1 and {MAX_PROFILE_ROWS}, not {max_rows}")
         return Rows(**self._call("rows", (sql, max_rows), timeout_s))
 
+    def fetch(self, sql: str, *, max_rows: int, timeout_s: float = RUN_SQL_TIMEOUT_S) -> Rows:
+        """One read-only query with a caller's row cap, for the eval's verifier, which compares
+        the whole result with the gold query's (BUILD_PLAN.md, Scoring and runs)."""
+        if max_rows < 1:
+            raise ValueError(f"max_rows must be at least 1, not {max_rows}")
+        return Rows(**self._call("rows", (sql, max_rows), timeout_s))
+
     def cancel(self) -> None:
         """Stop the operation in flight, from any thread. Does nothing when there is none."""
         if self._busy:
