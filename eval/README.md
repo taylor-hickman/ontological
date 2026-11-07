@@ -17,6 +17,7 @@ uv run python -m ontological_eval sets check      # every set's gold SQL runs an
 uv run python -m ontological_eval retrieval       # the retrieval benchmark: recall@k, no Claude
 uv run python -m ontological_eval review run      # the compile-quality review: spends Claude quota (~$3.75)
 uv run python -m ontological_eval review dump     # what each review config wrote, for reading side by side
+uv run python -m ontological_eval answerable      # check_answerable's distance on entities: 76 Haiku calls
 ```
 
 ## The data
@@ -109,6 +110,17 @@ The report prints as Markdown and is written to `<home>/results/retrieval-<layer
 - **Pagila** loads into the eval cluster the first time it's asked for, from the trimmed copy in `engine/tests/upstream_fixtures/dev_tools/fixtures/sql/` and its `analytics` schema, so there's nothing to download.
 - **What's recorded.** `<home>/results/compile-review.json` holds each compile's wall time, the gateway's utilization before and after, and from the call log its calls, outcomes, tokens and API-equivalent cost per task and per model. `review dump` writes `<home>/results/compile-review-<database>.json`, keyed by table, then config: the keys, Terms with their attributes and descriptions, FK edges marked declared or inferred, and the columns with neither.
 - **Retrieval per config.** `retrieval --store <config>` runs the benchmark against a review store instead, on the set's questions whose database the store holds (WWI's), calibrating against its other database (Pagila). The report ends in `-<config>`.
+
+## The coverage distance on entities
+
+`answerable` calibrates `check_answerable`'s coverage distance (`ModelSpec.coverage_distance`) on the entities it scores rather than on whole questions. It runs the engine's own `answerable_extract` call on each question of a set (one Haiku call a question, about $0.03 for dev at API prices, cached in the store's `ops.llm_call`, so a rerun makes none), then, for each model, takes each entity's nearest attribute in its own database as a positive and in each other database as a negative, and picks the Youden's-J cut as `retrieval` does. [`ontological_eval/answerable.py`](ontological_eval/answerable.py) holds it.
+
+```sh
+uv run python -m ontological_eval answerable                  # dev, all four models
+uv run python -m ontological_eval answerable --models arctic-m
+```
+
+The report sets each spec's value beside the cut and says what `check_answerable` would return at the spec's value, at the cut, and at upstream's 0.75: entity TPR and FPR, mean coverage in a question's own database and in the others, and how often a question is fully covered. It is written to `<home>/results/answerable-<set>.json` with every entity and distance. It needs a compiled eval store, and refuses while an engine serves it.
 
 ## Tests
 
