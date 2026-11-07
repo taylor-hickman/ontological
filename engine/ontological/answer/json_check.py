@@ -8,9 +8,10 @@
 # `jsonb_object_keys` and `jsonb_typeof`. On DuckDB a text column can hold JSON (a Postgres or
 # MySQL source's JSON reaches DuckDB as VARCHAR), so only a type that is neither JSON nor text is
 # the wrong type. Probe SQL is built through sqlglot, so a key is quoted as a literal, and the
-# keys found are sorted, so the message is the same each time. The repair message says JSON where
-# upstream's says JSONB. `try_self_apply_fixes` isn't ported: the gate reports issues, and the
-# model rewrites its own SQL.
+# keys found are sorted, so the message is the same each time. A listing the probe's row cap cut
+# short is "can't confirm", where upstream reads it as the column's every key. The repair message
+# says JSON where upstream's says JSONB. `try_self_apply_fixes` isn't ported: the gate reports
+# issues, and the model rewrites its own SQL.
 
 """JSON key-path check (check 6).
 
@@ -119,14 +120,20 @@ def _keys_probe(table_node: exp.Table, col: exp.Column, container: str | None, d
     )
 
 
+# The keys a probe found, and whether that is all of them.
+Listing = tuple[list[str], bool]
+
+
 def _fetch_json_keys(
     executor: ProbeExecutor,
     table_node: exp.Table,
     col: exp.Column,
     container: str | None,
     dialect: str,
-) -> list[str] | None:
-    """Real keys present under ``col`` (or ``col->container``) via a live probe.
+) -> Listing | None:
+    """Real keys present under ``col`` (or ``col->container``) via a live probe, and whether
+    they are all of them: a probe returns at most ``MAX_PROBE_ROWS`` rows, so a column whose
+    objects hold more keys than that between them comes back cut short.
 
     Returns ``None`` when the column isn't in this table, the value there is
     never a JSON object, or the probe fails — i.e. "not resolvable here", not
@@ -137,7 +144,7 @@ def _fetch_json_keys(
     if not res["ok"] or not res["rows"]:
         return None
     values = [_first_value(r) for r in res["rows"]]
-    return sorted(str(v) for v in values if v is not None)
+    return sorted(str(v) for v in values if v is not None), not res["truncated"]
 
 
 def _is_wrong_type(data_type: str, dialect: str) -> bool:
@@ -186,7 +193,7 @@ def find_json_path_mismatches(
         return []
 
     mismatches: list[dict[str, Any]] = []
-    keys_cache: dict[tuple[str, str, str | None], list[str] | None] = {}
+    keys_cache: dict[tuple[str, str, str | None], Listing | None] = {}
 
     for extract in tree.find_all(exp.JSONExtractScalar):
         parsed = _parse_extract(extract)
@@ -195,7 +202,7 @@ def find_json_path_mismatches(
         col, container, key = parsed
 
         candidates = _candidate_tables(col, all_nodes, by_key)
-        available: list[str] | None = None
+        listing: Listing | None = None
         owning_table: str | None = None
         for node in candidates:
             if not executor.budget_left:
@@ -204,10 +211,10 @@ def find_json_path_mismatches(
             if cache_key not in keys_cache:
                 keys_cache[cache_key] = _fetch_json_keys(executor, node, col, container, dialect)
             if keys_cache[cache_key] is not None:
-                available = keys_cache[cache_key]
+                listing = keys_cache[cache_key]
                 owning_table = node.name
                 break
-        if available is None or owning_table is None:
+        if listing is None or owning_table is None:
             # Not resolvable, never an object, or the probe failed. If the column's real type
             # can't hold JSON, the probe's silence means the operator is misused.
             if known_types is not None:
@@ -226,6 +233,9 @@ def find_json_path_mismatches(
                         break
             continue
 
+        available, complete = listing
+        if not complete:
+            continue  # a listing cut short can't show that a key is missing
         if key not in available:
             sibling_containers: list[str] | None = None
             if container is not None:
@@ -240,7 +250,9 @@ def find_json_path_mismatches(
                         if node is not None and executor.budget_left
                         else None
                     )
-                sibling_containers = keys_cache[top_cache_key]
+                top = keys_cache[top_cache_key]
+                if top is not None and top[1]:
+                    sibling_containers = top[0]
 
             mismatches.append(
                 {

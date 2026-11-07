@@ -13,13 +13,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fakes import DuckProber
+import pytest
+from fakes import DuckProber, ScriptedProber, frame
 
 from ontological.answer.json_check import (
     build_json_path_repair_error,
     find_json_path_mismatches,
 )
-from ontological.answer.probe import ProbeExecutor
+from ontological.answer.probe import MAX_PROBE_ROWS, ProbeExecutor
+from ontological.sources.executor import Rows
 
 
 def _dead_executor() -> ProbeExecutor:
@@ -202,3 +204,63 @@ def test_other_dialects_are_not_checked() -> None:
         )
         == []
     )
+
+
+def _wide_bag(keys: int) -> DuckProber:
+    """One row per key, so the column's objects hold `keys` distinct keys between them."""
+    return DuckProber(
+        "CREATE TABLE events (payload JSON)",
+        f"INSERT INTO events SELECT json_object('k' || i, i) FROM range({keys}) t(i)",
+    )
+
+
+@pytest.mark.parametrize("key", ["k59", "k3", "no_such_key"])
+def test_duckdb_a_key_set_larger_than_the_probe_cap_is_never_judged(key: str) -> None:
+    """60 distinct keys is more than one probe returns (`MAX_PROBE_ROWS`), so the listing is
+    cut short and can't show a key is missing: no path into the column is flagged."""
+    source = _wide_bag(60)
+
+    found = find_json_path_mismatches(
+        ProbeExecutor(source),
+        "duckdb",
+        f"SELECT payload->>'{key}' FROM events",
+        known_types={("events", "payload"): "JSON"},
+    )
+
+    assert found == []
+    assert source.seen  # it was probed, and came back truncated
+
+
+def test_duckdb_a_key_set_within_the_probe_cap_is_judged() -> None:
+    [m] = find_json_path_mismatches(
+        ProbeExecutor(_wide_bag(MAX_PROBE_ROWS)), "duckdb", "SELECT payload->>'nope' FROM events"
+    )
+
+    assert len(m["available_keys"]) == MAX_PROBE_ROWS
+
+
+def test_a_truncated_listing_on_a_text_column_isnt_the_wrong_type() -> None:
+    """The probe returned keys, so the column holds JSON objects whatever its catalog type."""
+    cut_short = Rows(["value"], ["VARCHAR"], [(f"k{i}",) for i in range(MAX_PROBE_ROWS)], True)
+
+    found = find_json_path_mismatches(
+        ProbeExecutor(ScriptedProber([cut_short])),
+        "postgres",
+        "SELECT notes->>'summary' FROM aliens",
+        known_types={("aliens", "notes"): "text"},
+    )
+
+    assert found == []
+
+
+def test_a_truncated_top_level_listing_lists_no_sibling_sections() -> None:
+    nested = frame(value=["towing"])
+    top = Rows(["value"], ["VARCHAR"], [(f"k{i}",) for i in range(MAX_PROBE_ROWS)], True)
+
+    [m] = find_json_path_mismatches(
+        ProbeExecutor(ScriptedProber([nested, top])),
+        "postgres",
+        "SELECT cost->'fees'->>'parts' FROM claims",
+    )
+
+    assert (m["available_keys"], m["sibling_containers"]) == (["towing"], None)
