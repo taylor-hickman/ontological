@@ -28,6 +28,17 @@ it, the validated SQL, its rows and the tool log (`ontological.answer.service.As
 `database`, the database whose ontology covers the question best answers it. It answers 404 for
 a database with no source, or a question no database's ontology matches, and 503 in an engine
 with no store or no embedder.
+`POST /ask/stream` asks the same question as server-sent events, as upstream's
+`/chat/completions` streams (§8.4): each frame is `data: <JSON>`, the JSON's `type` saying what it
+is (`run`, `step`, `sql`, `usage`, then `result` or `error`; `ontological.answer.runs`), and
+the stream ends with `data: [DONE]`. The question runs in the background, keyed by its
+`conversation` (the client's id, or a new one the `run` event names), so leaving the stream
+doesn't stop it. `GET /ask/watch?conversation=` re-attaches: it replays the conversation's latest
+run from its first event and follows it to the end, or ends at once when there is none.
+`POST /ask/cancel?conversation=` stops a run in flight: its streams end with a `cancelled` error,
+and the session's `claude` child and source query are stopped. A second question in a
+conversation whose last is still running is 409. Failures that `/ask` answers 404 or 503 for
+end the stream with an `error` event carrying that status.
 `POST /answerable` is `check_answerable` (§8.3), the pre-check: one Haiku call, then how much of
 the question the semantic layer covers, within the database given or the one that covers it best
 (`ontological.answer.answerable.Answerability`). It answers 503 as `/ask` does.
@@ -49,13 +60,17 @@ token stays the API's protection; CORS only lets the app's own page through.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
+from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Response
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ontological.answer.runs import Busy, Event, Runs
 from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder, NothingFound
 from ontological.api.curate import add_curate_routes
 from ontological.api.interchange import add_interchange_routes
@@ -108,6 +123,32 @@ class AskRequest(BaseModel):
     question: str
     database: str | None = None  # none: the database that covers the question best
     critic: bool = True  # the `answer.critic` setting (§8.1)
+
+
+class StreamRequest(AskRequest):
+    conversation: str | None = Field(default=None, min_length=1, max_length=200)  # None: new
+
+
+class Cancelled(BaseModel):
+    cancelled: bool  # False when nothing was running
+
+
+# `no-store`: the frames carry the user's SQL and its rows, as upstream's chat streams do
+SSE_HEADERS = {"Cache-Control": "no-store"}
+
+
+def event_stream(events: AsyncIterator[Event]) -> StreamingResponse:
+    async def frames() -> AsyncIterator[str]:
+        async for event in events:
+            yield f"data: {json.dumps(event)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(frames(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+async def nothing() -> AsyncIterator[Event]:
+    return
+    yield
 
 
 class AnswerableRequest(BaseModel):
@@ -198,6 +239,9 @@ def create_app(
     # The jobs running now, paused ones included: the count idle shutdown reads (§4.4). A job
     # started from a route runs under it.
     app.state.jobs = jobs or ActiveJobs()
+    # Questions streamed by conversation (§8.4); the engine closes them at shutdown.
+    runs = Runs(answers, activity=lifetime) if answers is not None else None
+    app.state.runs = runs
 
     def service() -> JobsService:
         if jobs_service is None:
@@ -251,6 +295,29 @@ def create_app(
             ) from None
         except NoEmbedder:
             raise HTTPException(503, "this engine has no embedding model to search with") from None
+
+    @app.post("/ask/stream")
+    async def ask_stream(body: StreamRequest) -> StreamingResponse:  # pyright: ignore[reportUnusedFunction]
+        if runs is None:
+            raise HTTPException(503, "this engine has no store to answer from")
+        try:
+            run = runs.start(
+                body.question, body.database, critic=body.critic, conversation=body.conversation
+            )
+        except Busy:
+            raise HTTPException(
+                409, "a question is still being answered in this conversation; cancel it first"
+            ) from None
+        return event_stream(run.watch())
+
+    @app.get("/ask/watch")
+    async def ask_watch(conversation: str) -> StreamingResponse:  # pyright: ignore[reportUnusedFunction]
+        run = runs.get(conversation) if runs is not None else None
+        return event_stream(run.watch() if run is not None else nothing())
+
+    @app.post("/ask/cancel")
+    async def ask_cancel(conversation: str) -> Cancelled:  # pyright: ignore[reportUnusedFunction]
+        return Cancelled(cancelled=runs is not None and runs.cancel(conversation))
 
     @app.post("/answerable")
     async def answerable(body: AnswerableRequest) -> Answerability:  # pyright: ignore[reportUnusedFunction]

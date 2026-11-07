@@ -483,7 +483,9 @@ async def _serve(
             await asyncio.wait({task}, timeout=tick)
         await task
     finally:
-        # Before the store stops: a compile and a refresh write to it.
+        # Before the store stops: a compile and a refresh write to it, and a question reads it.
+        if app.state.runs is not None:
+            await app.state.runs.close()
         await service.stop()
         staleness.cancel()
         await asyncio.to_thread(staleness.join)

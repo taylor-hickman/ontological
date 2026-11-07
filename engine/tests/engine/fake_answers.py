@@ -4,14 +4,27 @@ Chinook is the one database with a source. Every question gets the same verified
 session that ran plan, a validate_sql the gate refused, a validate_sql that passed, run_sql and
 review_answer, unless `critic=False`, when the review is left out and the answer is unverified
 (as if the critic were on: a fake has no post-run check to vary). Each call is kept in `asked`.
+`stream` yields each step, the SQL once it passes and the answer; `ask` is its answer.
 `check` covers "artist" and misses "release year" in Chinook, or in no database for any other.
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 from ontological.answer.answerable import Answerability, CoveringAttribute, EntityCoverage
 from ontological.answer.models import AnswerModel
-from ontological.answer.service import Asked, NoSource, Ran, Step
+from ontological.answer.service import (
+    AnswerEvent,
+    Asked,
+    Finished,
+    NoSource,
+    Ran,
+    SqlPassed,
+    Step,
+    ToolStep,
+    answer_of,
+)
 
 SQL = (
     "SELECT ar.Name, COUNT(al.AlbumId) AS albums FROM Artist ar "
@@ -102,11 +115,20 @@ class FakeAnswers:
         )
 
     async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked:
+        return await answer_of(self.stream(question, database, critic=critic))
+
+    async def stream(
+        self, question: str, database: str | None, *, critic: bool = True
+    ) -> AsyncIterator[AnswerEvent]:
         self.asked.append((question, database, critic))
         database = database or "chinook"  # the one database, which covers every question
         if database != "chinook":
             raise NoSource(database)
-        return Asked(
+        for step in steps(critic=critic):
+            yield ToolStep(**step.model_dump())
+            if step.name == "validate_sql" and not step.is_error:
+                yield SqlPassed(session=1, sql=SQL, validation_id="val-1")
+        yield Finished(
             question=question,
             database=database,
             answer=AnswerModel(
