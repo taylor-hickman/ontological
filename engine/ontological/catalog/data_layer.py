@@ -4,7 +4,8 @@ collection (ARCHITECTURE.md §1.2 step 5, §7.1).
 The texts are upstream's (`auto_ontology/utils/embedding_rows.py`, vendored unchanged), built
 from the store, so they are built after profiling has written `sample_values` and each column's
 text carries them. Upstream built them from ingest's frames, before compile profiled anything,
-and its data layer never saw a sample value.
+and its data layer never saw a sample value. Ingest embeds them, and compile and a re-embed embed
+them again when they've changed since, such as once compile has written the descriptions.
 """
 
 # The vendored DAL and embedding rows are untyped.
@@ -85,3 +86,32 @@ def embed_data_layer(database_name: str, embedder: LocalEmbedder) -> int:
         vdb.close()
     logger.info("%s: %d data-layer rows embedded", database_name, written)
     return written
+
+
+def data_layer_current(database_name: str, model: str) -> bool:
+    """Whether the database's data-layer rows are this model's, one per table and column of its
+    catalog, each with its text as the catalog would build it now."""
+    wanted = sorted(
+        (str(row["metadata"].get("id")), content_hash(row["text"]))
+        for row in data_layer_rows(database_name)
+    )
+    [exists] = store().query_read("SELECT to_regclass(:t) AS t", {"t": "vdb.data_objects_layer"})
+    if exists["t"] is None:
+        return not wanted
+    stored = store().query_read(
+        "SELECT langchain_metadata ->> 'id' AS id, langchain_metadata ->> 'content_hash' AS hash, "
+        "langchain_metadata ->> 'model' AS model FROM vdb.data_objects_layer "
+        "WHERE database_name = :db",
+        {"db": database_name},
+    )
+    return all(r["model"] == model for r in stored) and wanted == sorted(
+        (str(r["id"]), str(r["hash"])) for r in stored
+    )
+
+
+def refresh_data_layer(database_name: str, embedder: LocalEmbedder) -> int:
+    """Embed `database_name`'s data layer again unless it is current. Returns the number of rows
+    written, 0 when it was."""
+    if data_layer_current(database_name, embedder.model):
+        return 0
+    return embed_data_layer(database_name, embedder)

@@ -561,7 +561,7 @@ The runtime is ONNX Runtime (the macOS arm64 wheel is 20.9 MB) on the CPU provid
 
 - Upstream embeds asymmetrically (`input_type=query|passage`). Use the model's query/passage prefixes where it defines them.
 - Every vector's metadata stores `model` and `content_hash`. Changing the embedding model triggers a re-embed job (`embed/reembed.py`, an `ops.job` of kind `reembed` per database); vectors from different models are never compared. An edit re-embeds only the texts whose `content_hash` it changed (§5.7).
-- **Fix upstream's ordering bug**: build data-layer texts *after* profiling so that `sample_values` are included. Ingest profiles each table through its executor, writes the result to the store, and then builds the texts from the store (`catalog/data_layer.py`, M2.5).
+- **Fix upstream's ordering bug**: build data-layer texts *after* profiling so that `sample_values` are included. Ingest profiles each table through its executor, writes the result to the store, and then builds the texts from the store (`catalog/data_layer.py`, M2.5). Compile writes the table and column descriptions after ingest has embedded those texts, so compile embeds the data layer again whenever it syncs the semantic layer, if a text's `content_hash` changed, and its texts carry the descriptions.
 
 ### 7.2 Choosing the model
 
