@@ -183,7 +183,7 @@ async def suggest_keys(
     result = await ask(gateway, TASK, SYSTEM, prompt, FkAndPkResult, PROMPT_VERSION)
     if result is None:
         return TableKeys()
-    return _sanitize(result, candidates, profiling)
+    return sanitize(result, candidates, profiling)
 
 
 @dataclass(frozen=True)
@@ -223,11 +223,11 @@ async def suggest_keys_pack(
         if entry is None:
             out[i] = await suggest_keys(gateway, r.table, r.ctx, r.profiling)
         else:
-            out[i] = _sanitize(entry, candidates, r.profiling)
+            out[i] = sanitize(entry, candidates, r.profiling)
     return out
 
 
-def _sanitize(
+def sanitize(
     result: FkAndPkResult,
     candidates: list[dict[str, Any]],
     profiling: dict[str, dict[str, Any]],

@@ -130,10 +130,10 @@ async def describe_batch(
     if result is None:
         logger.warning("column description batch failed; proceeding without them")
         return {}
-    return _matched(columns, result.descriptions)
+    return matched(columns, result.descriptions)
 
 
-def _matched(columns: list[dict[str, Any]], answered: list[ColumnDescription]) -> dict[str, str]:
+def matched(columns: list[dict[str, Any]], answered: list[ColumnDescription]) -> dict[str, str]:
     # The prompt annotates each column as "<name> (<dtype>)", and the model sometimes echoes
     # that back as the column name. Match exactly first, then the longest requested name the
     # returned one starts with.
@@ -216,11 +216,11 @@ async def describe_pack(
             if entry is None:
                 out[i] = await describe_columns(gateway, columns, profiling)
             else:
-                out[i] = _matched(columns, entry.descriptions)
+                out[i] = matched(columns, entry.descriptions)
     return out
 
 
-def _split(
+def split_columns(
     columns: list[dict[str, Any]], fks: list[dict[str, Any]], suggested_fk_columns: set[str]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The non-FK columns: those with a description, and those without."""
@@ -231,7 +231,7 @@ def _split(
     return described, undescribed
 
 
-def _specs(
+def column_specs(
     described: list[dict[str, Any]],
     undescribed: list[dict[str, Any]],
     generated: dict[str, str],
@@ -275,9 +275,9 @@ async def column_attribute_specs(
 ) -> list[ColumnAttributeSpec]:
     """The non-FK columns, one ColumnAttribute candidate each, described."""
     profiling = profiling or {}
-    described, undescribed = _split(columns, fks, suggested_fk_columns or set())
+    described, undescribed = split_columns(columns, fks, suggested_fk_columns or set())
     generated = await describe_columns(gateway, undescribed, profiling)
-    return _specs(described, undescribed, generated, profiling)
+    return column_specs(described, undescribed, generated, profiling)
 
 
 async def column_attribute_specs_pack(
@@ -285,7 +285,7 @@ async def column_attribute_specs_pack(
 ) -> list[list[ColumnAttributeSpec]]:
     """`column_attribute_specs` for each table of a pack, its undescribed columns described in
     packed calls (`describe_pack`)."""
-    split = [_split(r.columns, r.fks, r.suggested_fk_columns) for r in requests]
+    split = [split_columns(r.columns, r.fks, r.suggested_fk_columns) for r in requests]
     generated = await describe_pack(
         gateway,
         [
@@ -294,6 +294,6 @@ async def column_attribute_specs_pack(
         ],
     )
     return [
-        _specs(described, undescribed, made, r.profiling)
+        column_specs(described, undescribed, made, r.profiling)
         for r, (described, undescribed), made in zip(requests, split, generated, strict=True)
     ]

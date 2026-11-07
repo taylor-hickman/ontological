@@ -9,9 +9,11 @@ from typing import Any
 
 import httpx2
 import pytest
+from fake_answers import SQL, FakeAnswers
 from fake_jobs import FakeJobs
 from fastapi.testclient import TestClient
 
+from ontological.answer.service import Answers, Asked, NoEmbedder
 from ontological.api.app import create_app
 from ontological.engine.lifetime import Lifetime
 
@@ -62,6 +64,7 @@ def client(lifetime: Lifetime) -> Iterator[TestClient]:
         ("DELETE", "/sources/x"),
         ("GET", "/sources/x/catalog"),
         ("GET", "/tables/x"),
+        ("POST", "/ask"),
         ("GET", "/docs"),
         ("GET", "/openapi.json"),
         ("GET", "/no-such-route"),
@@ -278,3 +281,73 @@ def test_jobs_routes_answer_404_for_what_isnt_there(jobs_client: TestClient) -> 
     assert jobs_client.post("/jobs/99/hold").status_code == 404
     assert jobs_client.post("/jobs/3/explode").status_code == 404
     assert jobs_client.post("/jobs/compile", json={"database_name": "nope"}).status_code == 404
+
+
+# --- ask -------------------------------------------------------------------------------------
+
+
+def ask_client(lifetime: Lifetime, answers: Answers) -> TestClient:
+    app = create_app(token=TOKEN, lifetime=lifetime, pid=1, version="9.9.9", answers=answers)
+    c = TestClient(app, base_url="http://127.0.0.1")
+    c.headers["Authorization"] = f"Bearer {TOKEN}"
+    return c
+
+
+def test_ask_returns_the_answer_its_sql_rows_and_steps(lifetime: Lifetime) -> None:
+    answers = FakeAnswers()
+    with ask_client(lifetime, answers) as c:
+        r = c.post("/ask", json={"question": "Who has the most albums?", "database": "chinook"})
+    assert r.status_code == 200
+    got = Asked.model_validate(r.json())
+    assert got.verified and got.reason is None
+    assert got.sql == SQL
+    assert got.result is not None and got.result.rows[0] == ["Iron Maiden", 21]
+    assert [s.name for s in got.steps] == [
+        "plan",
+        "validate_sql",
+        "validate_sql",
+        "run_sql",
+        "review_answer",
+    ]
+    assert got.steps[1].is_error
+    assert answers.asked == [("Who has the most albums?", "chinook", True)]
+
+
+def test_ask_passes_the_critic_setting(lifetime: Lifetime) -> None:
+    answers = FakeAnswers()
+    with ask_client(lifetime, answers) as c:
+        r = c.post("/ask", json={"question": "q", "database": "chinook", "critic": False})
+    assert r.status_code == 200
+    assert answers.asked == [("q", "chinook", False)]
+
+
+def test_ask_answers_404_for_a_database_with_no_source(lifetime: Lifetime) -> None:
+    with ask_client(lifetime, FakeAnswers()) as c:
+        r = c.post("/ask", json={"question": "q", "database": "nope"})
+    assert r.status_code == 404
+    assert "nope" in r.json()["detail"]
+
+
+def test_ask_needs_a_store_and_an_embedder(client: TestClient, lifetime: Lifetime) -> None:
+    assert client.post("/ask", json={"question": "q", "database": "chinook"}).status_code == 503
+
+    class NoModel:
+        async def ask(self, question: str, database: str, *, critic: bool = True) -> Asked:
+            raise NoEmbedder
+
+    with ask_client(lifetime, NoModel()) as c:
+        r = c.post("/ask", json={"question": "q", "database": "chinook"})
+    assert r.status_code == 503
+    assert "embedding" in r.json()["detail"]
+
+
+def test_ask_counts_as_activity_while_it_runs(lifetime: Lifetime, clock: Clock) -> None:
+    class Slow:
+        async def ask(self, question: str, database: str, *, critic: bool = True) -> Asked:
+            assert lifetime.should_exit() is False
+            clock.now += 10_000  # a long session: no lease, but a request in flight
+            assert lifetime.should_exit() is False
+            return await FakeAnswers().ask(question, database, critic=critic)
+
+    with ask_client(lifetime, Slow()) as c:
+        assert c.post("/ask", json={"question": "q", "database": "chinook"}).status_code == 200

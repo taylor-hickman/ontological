@@ -40,7 +40,7 @@ def build_prompt(description: str) -> str:
     return f"Description: {description}"
 
 
-def _clean(synonyms: list[str]) -> list[str]:
+def clean(synonyms: list[str]) -> list[str]:
     return list(dict.fromkeys(s.strip() for s in synonyms if s.strip()))
 
 
@@ -52,7 +52,7 @@ async def extract_synonyms(gateway: Structured, description: str | None) -> list
     result = await ask(
         gateway, TASK, SYSTEM, build_prompt(description), SynonymExtraction, PROMPT_VERSION
     )
-    return [] if result is None else _clean(result.synonyms)
+    return [] if result is None else clean(result.synonyms)
 
 
 async def extract_synonyms_pack(
@@ -76,5 +76,5 @@ async def extract_synonyms_pack(
         if entry is None:
             out.append(await extract_synonyms(gateway, description))
         else:
-            out.append(_clean(entry.synonyms))
+            out.append(clean(entry.synonyms))
     return out

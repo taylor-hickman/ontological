@@ -24,7 +24,7 @@ from sdk_fakes import (
     said,
 )
 
-from ontological.compile import descriptions, keys, synonyms, terms
+from ontological.compile import descriptions, keys, merged, synonyms, terms
 from ontological.compile.gateway import ClaudeUnavailable, Structured
 from ontological.compile.models import (
     ColumnAttributeSpec,
@@ -32,6 +32,7 @@ from ontological.compile.models import (
     FkAndPkResult,
     RawTableTermsResult,
     SynonymExtraction,
+    TableSemantics,
 )
 from ontological.llm.gateway import ClaudeGateway
 
@@ -89,8 +90,41 @@ def test_each_stage_spawns_on_its_route_with_upstream_s_prompt(tmp_path: Path) -
     ]
 
 
+def test_the_merged_call_spawns_on_its_route_with_its_schema(tmp_path: Path) -> None:
+    answer = {
+        "fk_suggestions": [{"column_name": "ParentId"}],
+        "column_descriptions": [{"column_name": "Name", "description": "x"}],
+        "terms": [
+            {"name": "Genre", "attributes": [{"source_column": "Name", "display_name": "Name"}]}
+        ],
+    }
+    query = FakeQuery([answered(answer, model=SONNET)])
+    calls = MemoryCalls()
+    gateway = ClaudeGateway(
+        calls=calls, sandbox=tmp_path / "sandbox", cli_path=fake_claude(tmp_path), query=query
+    )
+
+    got = asyncio.run(merged.table_semantics(gateway, TABLE, {"columns": COLUMNS, "fks": []}))
+
+    assert got is not None
+    assert [s.source_column for s in got.specs] == ["GenreId", "Name"]
+    [spawn] = query.spawns
+    assert (spawn.options.model, spawn.options.effort) == ("sonnet", "high")
+    assert spawn.options.system_prompt == merged.SYSTEM
+    assert spawn.options.output_format == schema(TableSemantics)
+    assert [(r.task, r.prompt_version) for r in calls.rows] == [
+        ("table_semantics", "2a24f5d+merged.1")
+    ]
+
+
 def schema(
-    model: type[FkAndPkResult | ColumnDescriptionResult | RawTableTermsResult | SynonymExtraction],
+    model: type[
+        FkAndPkResult
+        | ColumnDescriptionResult
+        | RawTableTermsResult
+        | SynonymExtraction
+        | TableSemantics
+    ],
 ) -> dict[str, object]:
     return {"type": "json_schema", "schema": model.model_json_schema()}
 

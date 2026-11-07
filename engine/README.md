@@ -34,6 +34,16 @@ uv run ontological-engine --pg-bin <tree>/bin --model-dir ~/.cache/ontological/m
 
 At start the engine times one batch and caps bulk batches at what takes about 100 ms, up to 1,024 padded tokens. Without a model directory it runs with no embedder.
 
+## Asking a question
+
+`ontological ask` answers one question from one database with the gated agent ([ARCHITECTURE.md §8.1](../docs/ARCHITECTURE.md#81-shape-a-gated-agent)), through the engine's `POST /ask`. It attaches to the running engine, or starts one headless, and holds a lease until the answer is in. It prints the agent's steps, the SQL `validate_sql` passed, the rows `run_sql` returned, the answer and whether the post-run check verified it. The database must be ingested and compiled; the session uses Claude quota.
+
+```sh
+uv run ontological ask "Which artists have the most albums?" --source chinook --pg-bin <tree>/bin --model-dir <model>
+```
+
+It exits 0 for a verified answer, 2 for an unverified one, and 1 if it couldn't ask. `--no-critic` skips the critic's review; options it doesn't know go to the engine it starts.
+
 ## The MCP server
 
 `ontological-mcp` is the stdio MCP server for Claude Code, Claude Desktop and Cursor ([ARCHITECTURE.md §9.2](../docs/ARCHITECTURE.md#92-mcp-for-external-agents)). It answers `initialize` at once, then attaches to the running engine, or starts one with `--headless`, and holds a lease on it until the client disconnects. It passes its options to the engine it starts, and logs to stderr.
@@ -69,7 +79,7 @@ The catalog ingest tests in `tests/store/test_ingest.py` build Chinook from upst
 
 The staleness check's tests in `tests/store/test_staleness.py` ingest copies of Chinook, back-date their `pulled` stamps and re-ingest the stale ones the same way. `test_engine_pg.py` also starts the real engine on a store with a source ingested 25 hours ago and waits for the refresh.
 
-The compile tests answer for Claude with a scripted gateway, so they spend no quota. `tests/compile` checks the split stages' prompts and fallbacks, their packed calls, the terms stage's 40-column chunks and the synonyms stage (`test_packed_stages.py`), and profiles a SQLite file through a real executor. `tests/store/test_compile.py` ingests Chinook, compiles it and checks the calls each pack makes, the profile, the Terms, attributes and synonyms, the semantic FKs, and that a recompile keeps certified descriptions, so it needs `ONTOLOGICAL_PG_BIN`. `tests/store/test_grounding.py` compiles Chinook with the embedder, then checks the semantic layer's vectors and the grounding pack built from them: retrieval, the database chosen by coverage, and the join paths. `tests/store/test_compile_jobs.py` runs the compile as a job on a clock whose sleeps return at once, and checks its checkpoints, the pause until `resets_at`, and the resume after a stop, a crash or an engine restart mid-pause. `tests/compile/test_packing.py` checks the plan's order and packs. `tests/llm/test_compile_routes.py` runs each stage through the real gateway on a scripted `query()`, to check its route and schema.
+The compile tests answer for Claude with a scripted gateway, so they spend no quota. `tests/compile` checks the split stages' prompts and fallbacks, their packed calls, the terms stage's 40-column chunks and the synonyms stage (`test_packed_stages.py`), the merged option's `table_semantics` call and that its answer gives what the split stages give (`test_merged.py`), and profiles a SQLite file through a real executor. `tests/store/test_compile.py` ingests Chinook, compiles it with `split` and again with `merged`, and checks the calls each makes, the profile, the Terms, attributes and synonyms, the semantic FKs, and that a recompile keeps certified descriptions, each the same for both options, so it needs `ONTOLOGICAL_PG_BIN`. `tests/store/test_grounding.py` compiles Chinook with the embedder, then checks the semantic layer's vectors and the grounding pack built from them: retrieval, the database chosen by coverage, and the join paths. `tests/store/test_compile_jobs.py` runs the compile as a job on a clock whose sleeps return at once, and checks its checkpoints, the pause until `resets_at`, and the resume after a stop, a crash or an engine restart mid-pause. `tests/compile/test_packing.py` checks the plan's order and packs. `tests/llm/test_compile_routes.py` runs each stage through the real gateway on a scripted `query()`, to check its route and schema.
 
 `tests/store/test_curation.py` compiles Chinook and embeds it with hash vectors (no model), then edits Terms and attributes and checks the change log, which vectors each edit re-embeds, that hybrid search sees an edit and its undo, undo's refusals, and the re-embed job a model change runs.
 

@@ -1,6 +1,7 @@
-"""The answer agent on Chinook (BUILD_PLAN.md M1.7): the tools reading the real store through
-`StoreOntology`, and a scripted session that plans, fails and passes the gate, runs its SQL on the
-Chinook source and is reviewed. Chinook is compiled with test_compile.py's scripted gateway and
+"""The answer agent on Chinook (BUILD_PLAN.md M1.7, M1.8): the tools reading the real store through
+`StoreOntology`, and a scripted session, run as `POST /ask` runs it (`StoreAnswers`), that plans,
+fails and passes the gate, runs its SQL on the Chinook source it finds in the catalog and is
+reviewed. Chinook is compiled with test_compile.py's scripted gateway and
 embedded by the real model, as in test_grounding.py. Needs the model and the binaries."""
 
 from __future__ import annotations
@@ -9,7 +10,6 @@ import asyncio
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fakes import ScriptedGateway
@@ -30,11 +30,10 @@ from test_compile import claude
 from test_grounding import compile_source
 
 from auto_ontology.vdb.postgres import PostgresVDB
-from ontological.answer.agent import ask
 from ontological.answer.gate import Probing, check_sql
 from ontological.answer.ontology import StoreOntology
-from ontological.answer.pack import build_pack
 from ontological.answer.probe import ProbeExecutor
+from ontological.answer.service import Asked, StoreAnswers
 from ontological.compile.split import Compiled
 from ontological.embed.embedder import LocalEmbedder
 from ontological.embed.search import semantic_vdb
@@ -148,9 +147,11 @@ def test_search_and_describe_read_the_semantic_layer_and_the_catalog(
 
 
 def test_a_scripted_session_answers_from_chinook_and_is_verified(
-    ontology: StoreOntology, vdb: PostgresVDB, chinook: Path, tmp_path: Path
+    ontology: StoreOntology,
+    embedder: LocalEmbedder,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pack = build_pack(vdb, QUESTION, database="chinook")
     answer = {
         "answer": "AC/DC has two albums.",
         "sql": SQL,
@@ -182,19 +183,26 @@ def test_a_scripted_session_answers_from_chinook_and_is_verified(
         query=query,
     )
 
-    with SourceExecutor(SqliteSource(chinook)) as executor:
+    closed: list[bool] = []
 
-        async def go() -> Any:
-            return await ask(
-                QUESTION, pack, gateway=gateway, ontology=ontology, runner=executor
-            ).answered()
+    def open_vdb(e: LocalEmbedder) -> PostgresVDB:
+        vdb = semantic_vdb(e)
+        close = vdb.close
+        monkeypatch.setattr(vdb, "close", lambda: (closed.append(True), close())[1])
+        return vdb
 
-        got = asyncio.run(go())
+    answers = StoreAnswers(gateway=gateway, embedder=embedder, open_vdb=open_vdb)
+    got: Asked = asyncio.run(answers.ask(QUESTION, "chinook"))
 
     assert got.verified, got.reason
-    log = {c.name: c for c in got.tool_log}
+    assert closed == [True], "the question's VDB is closed, its pool disposed"
+    assert "Artist" in str(query.spawns[0].options.system_prompt)  # the pack, from the store
+    assert got.sql == SQL
+    assert got.result is not None
+    assert (got.result.columns, got.result.rows) == (["Name", "albums"], [["AC/DC", 2]])
+    log = {c.name: c for c in got.steps}
     assert log["describe_table"].data["table"]["name"] == "Album"
-    failed = got.tool_log[2]
+    failed = got.steps[2]
     assert failed.is_error and "Albums" in failed.text and "Album" in failed.text
     assert log["run_sql"].data["rows"] == [["AC/DC", 2]]
     assert json.loads(query.results[4]["content"][0]["text"])["rows"] == [["AC/DC", 2]]
