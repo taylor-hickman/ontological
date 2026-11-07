@@ -4,7 +4,8 @@
 executor its catalog row names and the engine's one Claude gateway. A person can see a compile's
 estimate first (§6.5), start or resume a compile with split or merged, switch an unfinished one's
 option for the tables it has left, hold one (pause it until they resume it), and dismiss a
-refresh's new-tables prompt.
+refresh's new-tables prompt. With the auto-compile setting on, a refresh that finds new tables
+starts their compile itself (`auto_compile`), as the person's Compile on that prompt would.
 
 When the engine starts, it resumes every compile an earlier engine left `running` (it crashed or
 was stopped mid-table) or `paused` (it was waiting out a usage limit, and picks up by itself). A
@@ -26,6 +27,7 @@ from sqlalchemy import select
 
 from auto_ontology.dal import schema as s
 from auto_ontology.dal.session import store
+from ontological import settings
 from ontological.compile.estimate import Estimate, estimate_database
 from ontological.compile.gateway import Structured
 from ontological.compile.packing import TableCalls
@@ -40,6 +42,7 @@ from ontological.sources.spec import Source, from_record
 log = logging.getLogger(__name__)
 
 STOP_TIMEOUT_S = 10.0
+HANDOFF_TIMEOUT_S = 10.0  # starting a compile only reads the store and makes a task
 
 
 class NoSuchJob(Exception):
@@ -64,6 +67,7 @@ class JobsService(Protocol):
     async def hold(self, job_id: int) -> None: ...
     async def resume(self, job_id: int) -> None: ...
     async def dismiss(self, job_id: int) -> None: ...
+    async def auto_compile(self, refresh_id: int) -> bool: ...
     async def resume_unfinished(self) -> None: ...
     async def stop(self) -> None: ...
 
@@ -108,6 +112,7 @@ class Jobs:
         self._find_source = find_source
         self._open = open_executor
         self._running: dict[str, _Running] = {}  # by database
+        self._stopping = False
 
     # --- reads ----------------------------------------------------------------------------------
 
@@ -176,6 +181,34 @@ class Jobs:
         await self._job(job_id)
         await asyncio.to_thread(job_store.dismiss, job_id)
 
+    async def auto_compile(self, refresh_id: int) -> bool:
+        """A refresh found new tables. With the auto-compile setting on, start its database's
+        compile and put away the refresh's "compile?" prompt, which that answers. Off, the
+        default, the prompt waits for the person, as it does when no new compile can start: one of
+        that database isn't done, or its source has gone. An unfinished compile (running, paused,
+        held or stopped) resumes with the tables it planned, which leaves out the new ones, and a
+        held or stopped one waits for the person. True when it started one."""
+        if self._stopping or not await asyncio.to_thread(settings.auto_compile):
+            return False
+        refresh = await self._job(refresh_id)
+        unfinished = await asyncio.to_thread(job_store.open_job, "compile", refresh.database_name)
+        if unfinished is not None:
+            log.info(
+                "not auto-compiling %s: compile job %d is %s",
+                refresh.database_name,
+                unfinished.id,
+                unfinished.state,
+            )
+            return False
+        try:
+            await self.compile(refresh.database_name)
+        except (NoSource, JobBusy) as e:
+            log.warning("can't auto-compile the new tables of %s: %s", refresh.database_name, e)
+            return False
+        await asyncio.to_thread(job_store.dismiss, refresh.id)
+        log.info("auto-compiling %s for refresh job %d", refresh.database_name, refresh.id)
+        return True
+
     # --- the engine's start and stop ------------------------------------------------------------
 
     async def resume_unfinished(self) -> None:
@@ -189,7 +222,9 @@ class Jobs:
                 log.warning("can't resume compile job %d: %s", job.id, e)
 
     async def stop(self) -> None:
-        """Cancel the running compiles, leaving their rows for the next engine to resume."""
+        """Cancel the running compiles, leaving their rows for the next engine to resume. A refresh
+        that ends after this starts none."""
+        self._stopping = True
         tasks = [r.task for r in self._running.values()]
         for task in tasks:
             task.cancel()
@@ -232,6 +267,19 @@ class Jobs:
         running = self._running.get(database_name)
         if running is not None and running.task is task:
             del self._running[database_name]
+
+
+def auto_compile_from(
+    service: JobsService, loop: asyncio.AbstractEventLoop
+) -> Callable[[job_store.Job], bool]:
+    """`service.auto_compile` for the staleness check, which runs on a thread of its own: each
+    refresh with new tables is handed to the engine's loop, and the check waits for its answer."""
+
+    def new_tables(refresh: job_store.Job) -> bool:
+        handed = asyncio.run_coroutine_threadsafe(service.auto_compile(refresh.id), loop)
+        return handed.result(HANDOFF_TIMEOUT_S)
+
+    return new_tables
 
 
 def _stop_open(database_name: str, error: str) -> None:

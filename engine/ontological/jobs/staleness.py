@@ -13,9 +13,10 @@ is down or a file that moved, is logged and left for the next start; the others 
 engine cancels the check before it stops the store.
 
 Each refresh is recorded in ops.job as an `ingest` job, with the tables it found or the error it
-failed with (`jobs.store.record_ingest`). A refresh that finds new tables doesn't compile them:
-the Jobs screen reads that row and shows "N new tables, compile?" (M3.8). Auto-compile, a setting
-that is off by default, would start the compile job (M3.1) for them; it waits for `app.setting`.
+failed with (`jobs.store.record_ingest`), and a refresh that found new tables is passed on to
+`new_tables`. The engine hands it to `Jobs.auto_compile`: with the auto-compile setting on, that
+starts the database's compile job (M3.1); off, the default, the Jobs screen reads the row and
+shows "N new tables, compile?" (M3.8).
 """
 
 from __future__ import annotations
@@ -69,8 +70,10 @@ def stale_sources(now: datetime, stale_after: timedelta = STALE_AFTER) -> list[S
     return sources
 
 
-def _record(started: datetime, refreshed: Refreshed) -> None:
-    job_store.record_ingest(refreshed.database_name, started, refreshed.new_tables, refreshed.error)
+def _record(started: datetime, refreshed: Refreshed) -> job_store.Job:
+    return job_store.record_ingest(
+        refreshed.database_name, started, refreshed.new_tables, refreshed.error
+    )
 
 
 class StalenessCheck:
@@ -82,12 +85,15 @@ class StalenessCheck:
         find: Callable[[], list[Source]] = lambda: stale_sources(datetime.now(UTC)),
         open_executor: Callable[[Source], SourceExecutor] = SourceExecutor,
         extract_timeout_s: float = EXTRACT_TIMEOUT_S,
-        record: Callable[[datetime, Refreshed], object] | None = None,
+        record: Callable[[datetime, Refreshed], job_store.Job] | None = None,
+        new_tables: Callable[[job_store.Job], object] = lambda _: None,
     ) -> None:
-        """`record` keeps each result, with when its refresh started; by default in ops.job."""
+        """`record` keeps each result, with when its refresh started; by default in ops.job.
+        `new_tables` is given each recorded refresh that found new tables."""
         self._find = find
         self._open = open_executor
         self._record = record or _record
+        self._new_tables = new_tables
         self._extract_timeout_s = extract_timeout_s
         self._cancelled = threading.Event()
         self._lock = threading.Lock()
@@ -128,11 +134,20 @@ class StalenessCheck:
                 refreshed = self._refresh(source, pool)
                 self.results.append(refreshed)
                 try:
-                    self._record(started, refreshed)
+                    job = self._record(started, refreshed)
                 except Exception:
                     log.exception(
                         "staleness: couldn't record the refresh of %s", source.database_name
                     )
+                    continue
+                if refreshed.new_tables and refreshed.error is None:
+                    try:
+                        self._new_tables(job)
+                    except Exception:
+                        log.exception(
+                            "staleness: couldn't pass on the new tables of %s",
+                            source.database_name,
+                        )
         return self.results
 
     def _run_logged(self) -> None:

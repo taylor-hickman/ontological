@@ -8,6 +8,7 @@ without spawning anything.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import uuid
@@ -53,6 +54,18 @@ class FakeSources:
         self._sources: dict[str, SourceOut] = {}
         self._catalogs: dict[str, SourceCatalog] = {}
         self._tables: dict[str, TableDetail] = {}
+
+    @classmethod
+    def seeded(cls, path: Path) -> FakeSources:
+        """Sources listed in `path`, a JSON list of SourceOut, when it exists; their catalogs
+        are empty."""
+        sources = cls()
+        if path.exists():
+            for row in json.loads(path.read_text()):
+                source = SourceOut.model_validate(row)
+                sources._sources[source.id] = source
+                sources._catalogs[source.id] = SourceCatalog(source=source, schemas=[])
+        return sources
 
     def list(self) -> list[SourceOut]:
         return sorted(self._sources.values(), key=lambda s: s.name)

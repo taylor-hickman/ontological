@@ -7,16 +7,16 @@ pack starts, so the Jobs screen counts the right stages for it: a run can mix th
 resumed or switched job takes the other for the packs left, and merged leaves some tables to
 split. NULL until the step's pack starts.
 
-Revision ID: 0008
-Revises: 0007
+Revision ID: 0009
+Revises: 0008
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0008"
-down_revision: str | None = "0007"
+revision: str = "0009"
+down_revision: str | None = "0008"
 branch_labels: str | None = None
 depends_on: str | None = None
 

@@ -9,6 +9,9 @@ import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
 import { JobsRail, useJobsScreen } from './jobs/JobsScreen'
 import { useJobs } from './jobs/useJobs'
+import { CertificationMeter, OntologyTools, SourcePicker } from './ontology/OntologyScreen'
+import { TermEditor } from './ontology/TermEditor'
+import { type OntologyState, useOntology } from './ontology/useOntology'
 import { FRAMES } from './screens'
 import { TablePanel } from './screens/Catalog'
 import { Onboarding, type Step } from './screens/onboarding/Onboarding'
@@ -38,6 +41,8 @@ export function App(): React.JSX.Element {
   const [onboardingDismissed, setOnboardingDismissed] = useState(api.initial.setupClosed)
   const [catalogTable, setCatalogTable] = useState<string | null>(null)
   const noSources = sources.data?.length === 0
+  const ontologyScreen = screen === 'ontology' || screen === 'terms' ? screen : null
+  const ontologyBase = useOntology(sources.data, onboarding === null ? ontologyScreen : null)
 
   useEffect(() => {
     if (noSources && !onboardingDismissed) setOnboarding((step) => step ?? 'claude')
@@ -107,11 +112,25 @@ export function App(): React.JSX.Element {
     )
   }
 
-  const selectTable = (id: string): void => {
-    setCatalogTable(id)
+  const openRail = (): void => {
     if (narrowRef.current) setSheetOpen(true)
     else setRailOpen(true)
   }
+
+  const selectTable = (id: string): void => {
+    setCatalogTable(id)
+    openRail()
+  }
+
+  // Selecting a Term opens the term editor in the rail, as selecting a table does on Catalog.
+  const ontology: OntologyState = {
+    ...ontologyBase,
+    selectTerm: (id) => {
+      ontologyBase.selectTerm(id)
+      if (id !== null) openRail()
+    }
+  }
+  const glossary = ontology.glossary.data
 
   return (
     <div className="flex h-full flex-col" data-screen={screen}>
@@ -122,9 +141,26 @@ export function App(): React.JSX.Element {
           jobs={jobs.jobs}
           onNavigate={navigate}
           onAddSource={() => setOnboarding('source')}
+          context={
+            screen === 'ontology' && glossary && glossary.source_id === ontology.source?.id ? (
+              <CertificationMeter certified={glossary.certified} total={glossary.total} />
+            ) : null
+          }
         />
         <div className="flex min-w-0 flex-1 flex-col">
-          <Header title={frame.title} screen={screen} searchRef={searchRef} onAddSource={() => setOnboarding('source')} />
+          <Header
+            title={frame.title}
+            screen={screen}
+            searchRef={searchRef}
+            onAddSource={() => setOnboarding('source')}
+            tools={
+              screen === 'ontology' && ontology.source ? (
+                <OntologyTools state={ontology} />
+              ) : screen === 'terms' ? (
+                <SourcePicker state={ontology} />
+              ) : undefined
+            }
+          />
           <div className="relative flex min-h-0 flex-1 flex-wrap overflow-auto">
             <ScreenBody
               screen={screen}
@@ -142,6 +178,9 @@ export function App(): React.JSX.Element {
                 onSelect: selectTable,
                 onAddSource: () => setOnboarding('source')
               }}
+              ontology={ontology}
+              onAddSource={() => setOnboarding('source')}
+              onOpenJobs={() => navigate('jobs')}
             />
             {showRail && frame.rail !== null && (
               <Rail label={frame.rail} sheet={narrow} onClose={() => setSheetOpen(false)}>
@@ -149,6 +188,8 @@ export function App(): React.JSX.Element {
                   <TablePanel tableId={catalogTable} />
                 ) : screen === 'jobs' ? (
                   <JobsRail state={jobsScreen} />
+                ) : ontologyScreen ? (
+                  <TermEditor termId={ontology.termId} onOpenTerm={ontology.selectTerm} onChanged={ontology.changed} />
                 ) : undefined}
               </Rail>
             )}

@@ -91,3 +91,151 @@ export interface TableDetail {
   columns: CatalogColumn[]
   tags: string[]
 }
+
+// The ontology (engine/ontological/curate/ontology.py and service.py, api/curate.py).
+
+export interface TermRef {
+  id: string
+  name: string
+}
+
+/** An association when a table it represents is a junction table. */
+export type TermKind = 'entity' | 'association'
+
+export interface TermRow {
+  id: string
+  name: string
+  kind: TermKind
+  description: string | null
+  synonyms: string[]
+  name_certified: boolean
+  description_certified: boolean
+  /** Name and description both certified. */
+  certified: boolean
+  tables: string[]
+  attributes: number
+  sql_attributes: number
+  changed_at: string | null
+}
+
+export interface Glossary {
+  source_id: string
+  database_name: string
+  terms: TermRow[]
+  certified: number
+  total: number
+}
+
+export interface TermAttribute {
+  id: string
+  name: string
+  column: string
+  table: string
+  datatype: string | null
+  description: string | null
+  certified: boolean
+  joins_to: TermRef | null
+}
+
+export interface TermJoin {
+  table: string
+  column: string
+  to: TermRef
+}
+
+export interface SqlAttribute {
+  id: string
+  name: string
+  description: string | null
+  expression: string | null
+  /** manual, sql (from query history), table, bridgeTable */
+  source: string | null
+  certified: boolean
+  uses: number
+}
+
+export type TermField = 'name' | 'description' | 'synonyms' | 'name_certified' | 'description_certified'
+
+export interface TermChange {
+  id: number
+  edit: number
+  ts: string
+  field: TermField
+  old: unknown
+  new: unknown
+  actor: 'user' | 'compile' | 'import'
+  undoes: number | null
+}
+
+export interface TermDetail {
+  id: string
+  name: string
+  kind: TermKind
+  description: string | null
+  synonyms: string[]
+  name_certified: boolean
+  description_certified: boolean
+  created: string | null
+  tables: { id: string; name: string; schema_name: string; database_name: string }[]
+  attributes: TermAttribute[]
+  joins: TermJoin[]
+  sql_attributes: SqlAttribute[]
+  /** Newest first. */
+  history: TermChange[]
+  /** The edit Undo reverts. */
+  undoable: number | null
+}
+
+export interface TermChanges {
+  name?: string
+  description?: string
+  synonyms?: string[]
+  name_certified?: boolean
+  description_certified?: boolean
+}
+
+export interface Saved {
+  edit: number | null
+  reembedded: number | null
+  term: TermDetail | null
+}
+
+export type Layer = 'semantic' | 'data'
+
+export interface GraphNode {
+  /** A Term's id on the semantic layer, a table's on the data layer. */
+  id: string
+  name: string
+  certified: boolean
+  /** On the data layer, the Terms the table represents. */
+  terms: TermRef[]
+}
+
+export interface GraphEdge {
+  source: string
+  target: string
+  /** The junction table a semantic edge passes through. */
+  via: string | null
+  join: string
+}
+
+export interface Graph {
+  layer: Layer
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+}
+
+export interface PathHop {
+  source: string
+  target: string
+  via: string | null
+  join: string
+  tables: string[]
+}
+
+export interface JoinPath {
+  /** In order; empty when nothing joins the two. */
+  terms: TermRef[]
+  hops: PathHop[]
+  tables: string[]
+}

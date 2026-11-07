@@ -109,6 +109,9 @@ class FakeJobs:
         self._find(job_id)
         self._set(job_id, dismissed=True)
 
+    async def auto_compile(self, refresh_id: int) -> bool:
+        return False  # the fake store finds no sources to refresh
+
     async def resume_unfinished(self) -> None:
         pass
 
