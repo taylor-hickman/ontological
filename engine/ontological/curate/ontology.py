@@ -13,6 +13,10 @@
   two-key junction, bridges each pair of its neighbours as an edge `via` that table (`graph`).
 - **The join path** between two Terms is a shortest path over the semantic layer's edges, so
   each hop is a join the graph draws, and its tables are what the data layer highlights (`path`).
+- **A SQL attribute** in full, for the MCP shim's `get_sql_attribute` (M6.2): its expression, the
+  statement it was derived from, its Term and the tables its SQL reads (`sql_attribute`).
+- **A table's semantics**, for the shim's `describe_table`: the Terms that represent it and the
+  SQL attributes whose SQL reads it (`table_semantics`).
 
 Every call blocks and needs the DAL connected; async callers run them in a thread.
 """
@@ -105,6 +109,34 @@ class SqlAttributeOut(BaseModel):
     source: str | None  # manual, sql (query history), table, bridgeTable
     certified: bool
     uses: int  # logged queries it was derived from
+
+
+class SqlAttributeDetail(BaseModel):
+    id: str
+    name: str
+    description: str | None
+    expression: str | None
+    sql: str | None  # the first statement it was derived from
+    source: str | None  # manual, sql (query history), table, bridgeTable
+    certified: bool
+    uses: int  # logged queries it was derived from
+    term: TermRef | None
+    tables: list[TableRef]  # the tables its SQL reads
+
+
+class SqlAttributeRef(BaseModel):
+    id: str
+    name: str
+    description: str | None
+    term: TermRef | None
+
+
+class TableSemantics(BaseModel):
+    """What the semantic layer says about one table."""
+
+    table_id: str
+    terms: list[TermRef]  # the Terms that represent it
+    sql_attributes: list[SqlAttributeRef]  # those whose SQL reads it
 
 
 class ChangeOut(BaseModel):
@@ -353,6 +385,92 @@ def term(term_id: str) -> TermDetail:
         history=[ChangeOut.of(c) for c in changes],
         undoable=_undoable(changes),
     )
+
+
+_SQL_ATTRIBUTE_TERM = (
+    "(SELECT st.term_id FROM sql_attribute__term st WHERE st.attribute_id = s.id "
+    "ORDER BY st.term_id LIMIT 1)"
+)
+
+
+def sql_attribute(attr_id: str) -> SqlAttributeDetail:
+    rows = store().query_read(
+        "SELECT s.id, s.name, s.description, s.expression, s.source, s.certified, "
+        f"{_SQL_ATTRIBUTE_TERM} AS term_id, "
+        "(SELECT q.sql_full_query FROM sql_attribute__sql a JOIN sql_query q "
+        "  ON q.id = a.sql_query_id WHERE a.attribute_id = s.id ORDER BY q.id LIMIT 1) AS sql, "
+        "(SELECT count(*) FROM sql_attribute__sql a WHERE a.attribute_id = s.id) AS uses "
+        "FROM sql_attribute s WHERE s.id = :id",
+        {"id": attr_id},
+    )
+    if not rows:
+        raise NotFound(f"no SQL attribute {attr_id}")
+    row = rows[0]
+    tables = store().query_read(
+        "SELECT DISTINCT t.id, t.name, sc.name AS schema_name, d.name AS database_name "
+        "FROM sql_attribute__sql a JOIN sql_query__table qt ON qt.sql_query_id = a.sql_query_id "
+        f"JOIN {_DB_TABLES} ON t.id = qt.table_id WHERE a.attribute_id = :id "
+        "ORDER BY t.name, t.id",
+        {"id": attr_id},
+    )
+    names = _term_names([row["term_id"]] if row["term_id"] else [])
+    return SqlAttributeDetail(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        expression=row["expression"],
+        sql=row["sql"],
+        source=row["source"],
+        certified=row["certified"],
+        uses=int(row["uses"]),
+        term=_ref(row["term_id"], names),
+        tables=[
+            TableRef(
+                id=t["id"],
+                name=t["name"],
+                schema_name=t["schema_name"],
+                database_name=t["database_name"],
+            )
+            for t in tables
+        ],
+    )
+
+
+def table_semantics(table_id: str) -> TableSemantics:
+    if not store().query_read("SELECT 1 FROM catalog_table WHERE id = :id", {"id": table_id}):
+        raise NotFound(f"no table {table_id}")
+    terms = store().query_read(
+        "SELECT te.id, te.name FROM table__term tt JOIN term te ON te.id = tt.term_id "
+        "WHERE tt.table_id = :id ORDER BY te.name, te.id",
+        {"id": table_id},
+    )
+    attributes = store().query_read(
+        f"SELECT DISTINCT s.id, s.name, s.description, {_SQL_ATTRIBUTE_TERM} AS term_id "
+        "FROM sql_attribute s JOIN sql_attribute__sql a ON a.attribute_id = s.id "
+        "JOIN sql_query__table qt ON qt.sql_query_id = a.sql_query_id "
+        "WHERE qt.table_id = :id ORDER BY s.name, s.id",
+        {"id": table_id},
+    )
+    names = _term_names({a["term_id"] for a in attributes if a["term_id"]})
+    return TableSemantics(
+        table_id=table_id,
+        terms=[TermRef(id=t["id"], name=t["name"]) for t in terms],
+        sql_attributes=[
+            SqlAttributeRef(
+                id=a["id"],
+                name=a["name"],
+                description=a["description"],
+                term=_ref(a["term_id"], names),
+            )
+            for a in attributes
+        ],
+    )
+
+
+def _ref(term_id: str | None, names: dict[str, str]) -> TermRef | None:
+    if term_id is None or term_id not in names:
+        return None
+    return TermRef(id=term_id, name=names[term_id])
 
 
 def _undoable(changes: list[Change]) -> int | None:

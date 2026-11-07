@@ -416,18 +416,17 @@ class AnswerTools:
             "outcome": "rows" if rows.rows else "empty",
             "columns": rows.columns,
             "types": rows.types,
-            "rows": [[_cell(v) for v in row] for row in rows.rows],
+            "rows": [[cell(v) for v in row] for row in rows.rows],
             "row_count": len(rows.rows),
             "truncated": rows.truncated,
         }
         self._state.runs[validation_id] = ran
         if rows.rows:
             return _ok(ran)
-        ran["repairs"] = await asyncio.to_thread(self._repairs, validation.database, validation.sql)
-        ran["without_like"] = await asyncio.to_thread(
-            self._without_like, validation.database, validation.sql
-        )
-        return {"content": [_text(_empty_message(ran))], "data": ran}
+        probing = self._session_probing(validation.database)
+        ran["repairs"] = await asyncio.to_thread(empty_repairs, probing, validation.sql)
+        ran["without_like"] = await asyncio.to_thread(rows_without_like, probing, validation.sql)
+        return {"content": [_text(empty_message(ran))], "data": ran}
 
     async def review_answer(self, args: dict[str, Any]) -> ToolResult:
         withheld = self._withheld("review_answer", "prediction", "information")
@@ -533,15 +532,6 @@ class AnswerTools:
             )
         return self._probings[database]
 
-    def _repairs(self, database: str, sql: str) -> str:
-        """Fixes the literal check finds for SQL that returned no rows. The query is empty, so
-        literals on columns with more than `LOW_CARD_THRESHOLD` values, which the gate leaves
-        alone, are probed for case and whitespace variants too."""
-        probes = self._session_probing(database).probes
-        found = literal_check.find_literal_mismatches(probes, DIALECT, sql, result_was_empty=True)
-        found += literal_check.find_numeric_scale_mismatches(probes, DIALECT, sql)
-        return literal_check.build_value_repair_error(found) if found else ""
-
     def _column_values(
         self, database: str, named: str, like: str | None, limit: int
     ) -> dict[str, Any]:
@@ -594,24 +584,35 @@ class AnswerTools:
         return {
             "column": f"{table}.{column}",
             "like": like,
-            "values": [{"value": _cell(r["value"]), "rows": _cell(r["rows"])} for r in rows],
+            "values": [{"value": cell(r["value"]), "rows": cell(r["rows"])} for r in rows],
             "more": len(rows) >= limit,
-            **{k: _cell(summary.get(k)) for k in ("min", "max", "distinct_count", "nulls")},
+            **{k: cell(summary.get(k)) for k in ("min", "max", "distinct_count", "nulls")},
         }
 
-    def _without_like(self, database: str, sql: str) -> dict[str, Any] | None:
-        """What SQL that returned no rows returns without its LIKE and ILIKE filters, when that
-        is some rows; otherwise None."""
-        found = like_check.probe_without_like(self._session_probing(database).probes, DIALECT, sql)
-        if found is None:
-            return None
-        return {
-            "dropped": found.dropped,
-            "sql": found.sql,
-            "columns": found.columns,
-            "rows": [[_cell(v) for v in row] for row in found.rows],
-            "truncated": found.truncated,
-        }
+
+def empty_repairs(probing: Probing, sql: str) -> str:
+    """Fixes the literal check finds for SQL that returned no rows. The query is empty, so
+    literals on columns with more than `LOW_CARD_THRESHOLD` values, which the gate leaves alone,
+    are probed for case and whitespace variants too."""
+    probes = probing.probes
+    found = literal_check.find_literal_mismatches(probes, DIALECT, sql, result_was_empty=True)
+    found += literal_check.find_numeric_scale_mismatches(probes, DIALECT, sql)
+    return literal_check.build_value_repair_error(found) if found else ""
+
+
+def rows_without_like(probing: Probing, sql: str) -> dict[str, Any] | None:
+    """What SQL that returned no rows returns without its LIKE and ILIKE filters, when that is
+    some rows; otherwise None."""
+    found = like_check.probe_without_like(probing.probes, DIALECT, sql)
+    if found is None:
+        return None
+    return {
+        "dropped": found.dropped,
+        "sql": found.sql,
+        "columns": found.columns,
+        "rows": [[cell(v) for v in row] for row in found.rows],
+        "truncated": found.truncated,
+    }
 
 
 def _resolve_column(catalog: CatalogIndex, named: str) -> tuple[str, str, str] | str:
@@ -670,7 +671,8 @@ def _refuse(message: str) -> ToolResult:
     return {"content": [_text(f"Refused: {message}")], "is_error": True, "data": {}}
 
 
-def _empty_message(ran: dict[str, Any]) -> str:
+def empty_message(ran: dict[str, Any]) -> str:
+    """What an empty result tells the caller: recheck the filters, with the fixes found."""
     validation_id = ran["validation_id"]
     head = (
         f"run_sql ran {validation_id} and it returned no rows (columns: "
@@ -712,7 +714,7 @@ def _text(text: str) -> dict[str, str]:
     return {"type": "text", "text": text}
 
 
-def _cell(value: Any) -> Any:
+def cell(value: Any) -> Any:
     """A value as JSON holds it."""
     if value is None or isinstance(value, bool | int | float | str):
         return value

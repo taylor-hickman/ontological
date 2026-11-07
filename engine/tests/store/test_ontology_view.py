@@ -22,7 +22,7 @@ from ontological.catalog.ingest import ingest
 from ontological.compile.split import compile_database
 from ontological.curate import ontology
 from ontological.curate.edits import edit_term, undo
-from ontological.curate.ontology import NotFound
+from ontological.curate.ontology import NotFound, TermRef
 from ontological.curate.service import StoreOntology
 from ontological.engine.lifetime import Lifetime
 from ontological.sources.executor import SourceExecutor, SqliteSource
@@ -214,6 +214,34 @@ def test_the_join_path_between_two_terms_follows_the_semantic_layer(chinook_id: 
     assert [t.name for t in same.terms] == ["Genre"] and same.hops == []
 
 
+def test_a_sql_attribute_and_a_tables_semantics_for_the_mcp_shim(chinook_id: str) -> None:
+    # M6.2: get_sql_attribute and describe_table read these
+    ids = term_ids(chinook_id)
+    [bridge] = ontology.term(ids["Playlist"]).sql_attributes
+    got = ontology.sql_attribute(bridge.id)
+
+    assert (got.id, got.name, got.expression) == (bridge.id, bridge.name, bridge.expression)
+    assert got.term == TermRef(id=ids["Playlist"], name="Playlist")
+    assert got.sql and got.uses == 1
+    tables = {t.name: t for t in got.tables}
+    assert "PlaylistTrack" in tables
+    assert {t.database_name for t in got.tables} == {"chinook"}
+
+    junction = ontology.table_semantics(tables["PlaylistTrack"].id)
+    assert junction.terms == []  # it represents no Term
+    assert [a.id for a in junction.sql_attributes] == [bridge.id]
+    assert junction.sql_attributes[0].term == got.term
+
+    [track_table] = ontology.term(ids["Track"]).tables
+    track = ontology.table_semantics(track_table.id)
+    assert [t.name for t in track.terms] == ["Track"]
+
+    with pytest.raises(NotFound):
+        ontology.sql_attribute("nope")
+    with pytest.raises(NotFound):
+        ontology.table_semantics("nope")
+
+
 # --- through the API --------------------------------------------------------------------------
 
 
@@ -277,4 +305,11 @@ def test_a_person_renames_certifies_and_undoes_through_the_api(
         "Customer", "Invoice", "Invoice Line", "Song", "Genre",
     ]  # fmt: skip
     assert api.get("/sources/nope/terms").status_code == 404
+    [bridge] = api.get(f"/terms/{ids['Playlist']}").json()["sql_attributes"]
+    assert api.get(f"/sql-attributes/{bridge['id']}").json()["term"]["name"] == "Playlist"
+    assert api.get("/sql-attributes/nope").status_code == 404
+    [song_table] = api.get(f"/terms/{ids['Track']}").json()["tables"]
+    semantics = api.get(f"/tables/{song_table['id']}/semantics").json()
+    assert [t["name"] for t in semantics["terms"]] == ["Song"]
+    assert api.get("/tables/nope/semantics").status_code == 404
     assert api.get(f"/sources/{chinook_id}/graph", params={"layer": "x"}).status_code == 422

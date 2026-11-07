@@ -13,7 +13,15 @@ from fake_answers import SQL, FakeAnswers
 from fake_jobs import FakeJobs
 from fastapi.testclient import TestClient
 
-from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder, NothingFound
+from ontological.answer.service import (
+    Answerability,
+    Answers,
+    Asked,
+    NoEmbedder,
+    NothingFound,
+    RanSql,
+    TermHit,
+)
 from ontological.api.app import create_app
 from ontological.compile.estimate import EstimatedTable, estimate
 from ontological.engine.lifetime import Lifetime
@@ -453,3 +461,86 @@ def test_answerable_needs_a_store_and_an_embedder(client: TestClient, lifetime: 
         r = c.post("/answerable", json={"question": "q"})
     assert r.status_code == 503
     assert "embedding" in r.json()["detail"]
+
+
+# --- for the MCP shim: term search and the gate with no session (M6.2) -----------------------
+
+
+def test_terms_are_searched_in_a_database_or_in_all(lifetime: Lifetime) -> None:
+    with ask_client(lifetime, FakeAnswers()) as c:
+        every = c.get("/terms", params={"q": "musicians"})
+        scoped = c.get("/terms", params={"q": "musicians", "database": "chinook", "limit": 1})
+        other = c.get("/terms", params={"q": "musicians", "database": "sakila"})
+        too_many = c.get("/terms", params={"q": "musicians", "limit": 51})
+    assert [t["name"] for t in every.json()["terms"]] == ["Artist", "Album"]
+    assert every.json()["terms"][0] == {
+        "id": "term-artist",
+        "name": "Artist",
+        "database": "chinook",
+        "text": "Artist: a person or band that records albums.",
+        "distance": 0.31,
+    }
+    assert [t["name"] for t in scoped.json()["terms"]] == ["Artist"]
+    assert other.json()["terms"] == []
+    assert too_many.status_code == 422
+
+
+def test_term_search_needs_a_store_and_an_embedder(client: TestClient, lifetime: Lifetime) -> None:
+    assert client.get("/terms", params={"q": "x"}).status_code == 503
+
+    class NoModel(FakeAnswers):
+        async def search_terms(
+            self, query: str, database: str | None = None, limit: int = 10
+        ) -> list[TermHit]:
+            raise NoEmbedder
+
+    with ask_client(lifetime, NoModel()) as c:
+        r = c.get("/terms", params={"q": "x"})
+    assert r.status_code == 503 and "embedding" in r.json()["detail"]
+
+
+def test_sql_is_validated_then_run_by_its_id(lifetime: Lifetime) -> None:
+    with ask_client(lifetime, FakeAnswers()) as c:
+        bad = c.post("/sql/validate", json={"sql": "SELECT * FROM Albums", "database": "chinook"})
+        good = c.post("/sql/validate", json={"sql": SQL, "database": "chinook"})
+        ran = c.post("/sql/run", json={"validation_id": good.json()["validation_id"]})
+    assert bad.status_code == 200
+    assert bad.json()["ok"] is False and bad.json()["validation_id"] is None
+    assert "Did you mean Album?" in bad.json()["issues"][0]
+    assert good.json()["ok"] is True and good.json()["validation_id"] == "val-1"
+    assert ran.status_code == 200
+    got = RanSql.model_validate(ran.json())
+    assert got.outcome == "rows" and got.sql == SQL and got.rows[0] == ["Iron Maiden", 21]
+
+
+def test_the_soft_checks_warn_when_asked_to(lifetime: Lifetime) -> None:
+    sql = "SELECT Name FROM Artist WHERE Name = 'ac/dc'"
+    with ask_client(lifetime, FakeAnswers()) as c:
+        blocked = c.post("/sql/validate", json={"sql": sql, "database": "chinook"})
+        warned = c.post(
+            "/sql/validate", json={"sql": sql, "database": "chinook", "soft_as_warnings": True}
+        )
+    assert blocked.json()["ok"] is False
+    assert warned.json()["ok"] is True and "AC/DC" in warned.json()["warnings"][0]
+
+
+def test_validate_answers_404_for_a_database_with_no_source(lifetime: Lifetime) -> None:
+    with ask_client(lifetime, FakeAnswers()) as c:
+        r = c.post("/sql/validate", json={"sql": SQL, "database": "nope"})
+    assert r.status_code == 404 and "nope" in r.json()["detail"]
+
+
+def test_run_answers_404_for_an_id_it_did_not_issue_and_422_for_a_source_error(
+    lifetime: Lifetime,
+) -> None:
+    with ask_client(lifetime, FakeAnswers()) as c:
+        unknown = c.post("/sql/run", json={"validation_id": "val-9"})
+        boom = c.post("/sql/validate", json={"sql": "SELECT boom()", "database": "chinook"})
+        failed = c.post("/sql/run", json={"validation_id": boom.json()["validation_id"]})
+    assert unknown.status_code == 404 and "validate the SQL again" in unknown.json()["detail"]
+    assert failed.status_code == 422 and "Binder Error" in failed.json()["detail"]
+
+
+def test_the_gate_routes_need_a_store(client: TestClient) -> None:
+    assert client.post("/sql/validate", json={"sql": SQL, "database": "c"}).status_code == 503
+    assert client.post("/sql/run", json={"validation_id": "val-1"}).status_code == 503

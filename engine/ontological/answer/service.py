@@ -18,6 +18,12 @@ It returns an `Asked`: the answer, the verified flag, the SQL the answer carries
 `StoreAnswers.check()` is `check_answerable` (M4.4) on the same semantic layer, scored at the
 engine's embedding model's coverage distance: one Haiku call, and no source or executor.
 
+For the MCP shim (M6.2): `search_terms()` searches the Terms with the same hybrid search, and
+`validate_sql()` and `run_sql()` are the gate for a caller with no agent session
+(`ontological.answer.sql_checks`). They use no Claude quota. Their source executors are opened
+once per database and kept until `close()`, as a calling session validates and runs one query
+after another.
+
 The API holds an `Answers`, so the API and CLI tests can answer from a fake.
 """
 
@@ -30,12 +36,21 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
+from auto_ontology.semantic.constants import LABEL_TERM
 from auto_ontology.vdb.postgres import PostgresVDB
 from ontological.answer.agent import Answered, ask
 from ontological.answer.answerable import Answerability, check_answerable
 from ontological.answer.models import AnswerModel
-from ontological.answer.ontology import StoreOntology
+from ontological.answer.ontology import StoreCatalog, StoreOntology
 from ontological.answer.pack import build_pack
+from ontological.answer.retrieval import search_by_label
+from ontological.answer.sql_checks import (
+    NoSuchValidation,
+    RanSql,
+    RunFailed,
+    SqlChecks,
+    Validated,
+)
 from ontological.answer.tools import SqlRunner
 from ontological.embed.embedder import LocalEmbedder
 from ontological.embed.hybrid import HybridSearch, searcher
@@ -52,14 +67,21 @@ __all__ = [
     "Asked",
     "NoEmbedder",
     "NoSource",
+    "NoSuchValidation",
     "NothingFound",
     "Ran",
+    "RanSql",
+    "RunFailed",
     "Step",
     "StoreAnswers",
+    "TermHit",
+    "Validated",
     "asked",
 ]
 
 log = logging.getLogger(__name__)
+
+SEARCH_TERMS_K = 10  # Terms search_terms returns unless asked for fewer or more
 
 # How long the first question waits for the BM25 index's first build. Past it, the question is
 # searched without BM25 until the build lands (S8: about 1.7 s at 10^5 rows).
@@ -110,10 +132,31 @@ class Asked(BaseModel):
     restarted: str | None = None  # why a fresh session answered again, if one did
 
 
+class TermHit(BaseModel):
+    """One Term search found: the text its vector embeds (name, description and synonyms), and
+    its cosine distance to the query, lower nearer. Hits come best first by the fused ranking."""
+
+    id: str
+    name: str
+    database: str | None
+    text: str
+    distance: float
+
+
 class Answers(Protocol):
     async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked: ...
 
     async def check(self, question: str, database: str | None = None) -> Answerability: ...
+
+    async def search_terms(
+        self, query: str, database: str | None = None, limit: int = SEARCH_TERMS_K
+    ) -> list[TermHit]: ...
+
+    async def validate_sql(
+        self, sql: str, database: str, *, soft_as_warnings: bool = False
+    ) -> Validated: ...
+
+    async def run_sql(self, validation_id: str) -> RanSql: ...
 
 
 def asked(answered: Answered) -> Asked:
@@ -206,6 +249,8 @@ class StoreAnswers:
         self._open_hybrid = open_hybrid
         self._searching: tuple[PostgresVDB, HybridSearch] | None = None
         self._lock = asyncio.Lock()
+        self._gate_runners = SourceRunners(find_source, open_executor)
+        self._gate = SqlChecks(StoreCatalog(), self._gate_runners)
 
     async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked:
         """Answer `question` from `database`, or with none, from the database whose ontology
@@ -253,7 +298,9 @@ class StoreAnswers:
             return self._searching
 
     def close(self) -> None:
-        """Stop the hybrid search and close the VDB, at the engine's shutdown."""
+        """Stop the hybrid search, close the VDB and the gate's executors, at the engine's
+        shutdown."""
+        self._gate_runners.close()
         if self._searching is not None:
             vdb, hybrid = self._searching
             self._searching = None
@@ -276,3 +323,37 @@ class StoreAnswers:
             )
         finally:
             await asyncio.to_thread(vdb.close)
+
+    async def search_terms(
+        self, query: str, database: str | None = None, limit: int = SEARCH_TERMS_K
+    ) -> list[TermHit]:
+        """The Terms nearest `query`, in `database` or in every database, by hybrid search."""
+        if self._embedder is None:
+            raise NoEmbedder
+        vdb, hybrid = await self._search(self._embedder)
+        hits = await asyncio.to_thread(
+            search_by_label, vdb, query, LABEL_TERM, limit, database, searcher(hybrid)
+        )
+        return [
+            TermHit(
+                id=str(h["id"]),
+                name=str(h.get("name") or ""),
+                database=h.get("database_name"),
+                text=h["text"],
+                distance=h["score"],
+            )
+            for h in hits
+        ]
+
+    async def validate_sql(
+        self, sql: str, database: str, *, soft_as_warnings: bool = False
+    ) -> Validated:
+        """The gate on `sql` for `database`. Raises NoSource when the database has none."""
+        return await asyncio.to_thread(
+            self._gate.validate, database, sql, soft_as_warnings=soft_as_warnings
+        )
+
+    async def run_sql(self, validation_id: str) -> RanSql:
+        """Run SQL that passed `validate_sql`. Raises NoSuchValidation for an id it didn't
+        issue, RunFailed when the source refuses the SQL."""
+        return await asyncio.to_thread(self._gate.run, validation_id)

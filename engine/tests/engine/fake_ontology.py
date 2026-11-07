@@ -4,7 +4,9 @@
 
     {"glossaries": {"<source id>": Glossary}, "terms": {"<term id>": TermDetail},
      "graphs": {"<source id>": {"semantic": Graph, "data": Graph}},
-     "paths": {"<from term id>:<to term id>": JoinPath}}
+     "paths": {"<from term id>:<to term id>": JoinPath},
+     "sql_attributes": {"<attribute id>": SqlAttributeDetail},
+     "tables": {"<table id>": TableSemantics}}
 
 Edits and undos change the Terms in memory as `curate.edits` changes their rows: each changed
 field is logged in the Term's history under a new edit id, a rename onto a taken name is refused,
@@ -27,6 +29,8 @@ from ontological.curate.ontology import (
     JoinPath,
     Layer,
     NotFound,
+    SqlAttributeDetail,
+    TableSemantics,
     TermDetail,
 )
 from ontological.curate.service import Saved, TermChanges, clean_synonyms
@@ -48,6 +52,13 @@ class FakeOntology:
             for k, v in scenario.get("graphs", {}).items()
         }
         self._paths = {k: JoinPath.model_validate(v) for k, v in scenario.get("paths", {}).items()}
+        self._sql_attributes = {
+            k: SqlAttributeDetail.model_validate(v)
+            for k, v in scenario.get("sql_attributes", {}).items()
+        }
+        self._tables = {
+            k: TableSemantics.model_validate(v) for k, v in scenario.get("tables", {}).items()
+        }
         self._next_change = 1 + max(
             (c.id for t in self._terms.values() for c in t.history), default=0
         )
@@ -76,6 +87,16 @@ class FakeOntology:
 
     async def path(self, source_id: str, from_term: str, to_term: str) -> JoinPath:
         return self._paths.get(f"{from_term}:{to_term}", JoinPath(terms=[], hops=[], tables=[]))
+
+    async def sql_attribute(self, attr_id: str) -> SqlAttributeDetail:
+        if attr_id not in self._sql_attributes:
+            raise NotFound(f"no SQL attribute {attr_id}")
+        return self._sql_attributes[attr_id]
+
+    async def table_semantics(self, table_id: str) -> TableSemantics:
+        if table_id not in self._tables:
+            raise NotFound(f"no table {table_id}")
+        return self._tables[table_id]
 
     async def edit_term(self, term_id: str, changes: TermChanges) -> Saved:
         term = await self.term(term_id)

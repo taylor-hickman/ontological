@@ -32,6 +32,14 @@ with no store or no embedder.
 the question the semantic layer covers, within the database given or the one that covers it best
 (`ontological.answer.answerable.Answerability`). It answers 503 as `/ask` does.
 
+For the MCP shim (M6.2): `GET /terms?q=&database=&limit=` searches the Terms by hybrid search,
+503 in an engine with no embedder. `POST /sql/validate` runs the gate (§8.2) on SQL for a
+database with no agent session and returns its issues, or a `validation_id`; 404 for a database
+with no source. `POST /sql/run` runs SQL by that id: its rows, or an `empty` outcome with what to
+recheck; 404 for an id the engine didn't issue (or has forgotten, as a restart does), 422 when the
+source refuses the SQL. None of them use Claude quota, and all answer 503 in an engine with no
+store.
+
 The Terms and Ontology screens read and edit the ontology through the routes in `curate.py`, and
 models are imported and exported through the routes in `interchange.py`.
 
@@ -49,13 +57,26 @@ from __future__ import annotations
 
 import hmac
 import logging
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder, NothingFound
+from ontological.answer.service import (
+    SEARCH_TERMS_K,
+    Answerability,
+    Answers,
+    Asked,
+    NoEmbedder,
+    NoSuchValidation,
+    NothingFound,
+    RanSql,
+    RunFailed,
+    TermHit,
+    Validated,
+)
 from ontological.api.curate import add_curate_routes
 from ontological.api.interchange import add_interchange_routes
 from ontological.api.setup import add_setup_routes
@@ -110,6 +131,20 @@ class AskRequest(BaseModel):
 class AnswerableRequest(BaseModel):
     question: str
     database: str | None = None  # None: the database that covers the question best
+
+
+class ValidateRequest(BaseModel):
+    sql: str
+    database: str
+    soft_as_warnings: bool = False  # the soft checks warn instead of failing the SQL
+
+
+class RunRequest(BaseModel):
+    validation_id: str
+
+
+class TermHits(BaseModel):
+    terms: list[TermHit]
 
 
 class TableCallsRequest(BaseModel):
@@ -255,6 +290,44 @@ def create_app(
             return await answers.check(body.question, body.database)
         except NoEmbedder:
             raise HTTPException(503, "this engine has no embedding model to search with") from None
+
+    def need_answers() -> Answers:
+        if answers is None:
+            raise HTTPException(503, "this engine has no store")
+        return answers
+
+    @app.get("/terms")
+    async def search_terms(  # pyright: ignore[reportUnusedFunction]
+        q: str,
+        database: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=50)] = SEARCH_TERMS_K,
+    ) -> TermHits:
+        try:
+            return TermHits(terms=await need_answers().search_terms(q, database, limit))
+        except NoEmbedder:
+            raise HTTPException(503, "this engine has no embedding model to search with") from None
+
+    @app.post("/sql/validate")
+    async def validate_sql(body: ValidateRequest) -> Validated:  # pyright: ignore[reportUnusedFunction]
+        try:
+            return await need_answers().validate_sql(
+                body.sql, body.database, soft_as_warnings=body.soft_as_warnings
+            )
+        except NoSource as e:
+            raise HTTPException(404, f"no source for {e}") from None
+
+    @app.post("/sql/run")
+    async def run_sql(body: RunRequest) -> RanSql:  # pyright: ignore[reportUnusedFunction]
+        try:
+            return await need_answers().run_sql(body.validation_id)
+        except NoSuchValidation:
+            raise HTTPException(
+                404,
+                f"{body.validation_id!r} isn't a validation_id this engine issued; validate the "
+                "SQL again",
+            ) from None
+        except RunFailed as e:
+            raise HTTPException(422, f"the source couldn't run the SQL: {e}") from None
 
     @app.get("/jobs")
     async def list_jobs() -> JobList:  # pyright: ignore[reportUnusedFunction]

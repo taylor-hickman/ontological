@@ -15,7 +15,15 @@ from pydantic import BaseModel
 
 from auto_ontology.vdb.postgres import PostgresVDB
 from ontological.curate import edits, ontology
-from ontological.curate.ontology import Glossary, Graph, JoinPath, Layer, TermDetail
+from ontological.curate.ontology import (
+    Glossary,
+    Graph,
+    JoinPath,
+    Layer,
+    SqlAttributeDetail,
+    TableSemantics,
+    TermDetail,
+)
 from ontological.embed.embedder import LocalEmbedder
 from ontological.embed.search import semantic_vdb
 
@@ -45,6 +53,8 @@ class OntologyService(Protocol):
     async def undo(self, edit_id: int) -> Saved: ...
     async def graph(self, source_id: str, layer: Layer) -> Graph: ...
     async def path(self, source_id: str, from_term: str, to_term: str) -> JoinPath: ...
+    async def sql_attribute(self, attr_id: str) -> SqlAttributeDetail: ...
+    async def table_semantics(self, table_id: str) -> TableSemantics: ...
 
 
 def clean_synonyms(synonyms: list[str]) -> list[str]:
@@ -73,6 +83,12 @@ class StoreOntology:
 
     async def path(self, source_id: str, from_term: str, to_term: str) -> JoinPath:
         return await asyncio.to_thread(ontology.path, source_id, from_term, to_term)
+
+    async def sql_attribute(self, attr_id: str) -> SqlAttributeDetail:
+        return await asyncio.to_thread(ontology.sql_attribute, attr_id)
+
+    async def table_semantics(self, table_id: str) -> TableSemantics:
+        return await asyncio.to_thread(ontology.table_semantics, table_id)
 
     async def edit_term(self, term_id: str, changes: TermChanges) -> Saved:
         def run(vdb: PostgresVDB | None) -> Saved:
