@@ -51,6 +51,7 @@ Rules:
 - Return exactly one entry per column provided, using the physical column name."""
 
 _FORMAT_MARKER = "format:"
+_SAMPLES_MARKER = " — samples: "
 
 
 def to_term_name(table_name: str) -> str:
@@ -78,9 +79,11 @@ def _get_column_samples(col: dict[str, Any], profiling: dict[str, dict[str, Any]
 
 
 def _add_samples_suffix(text: str, samples: list[str]) -> str:
-    if not samples:
+    """Attach the samples, once: a recompile reads an attribute's description, suffix and all,
+    back as its column's own."""
+    if not samples or _SAMPLES_MARKER in text:
         return text
-    return f"{text} — samples: {', '.join(samples)}"
+    return f"{text}{_SAMPLES_MARKER}{', '.join(samples)}"
 
 
 def _date_format_clause(col: dict[str, Any], profiling: dict[str, dict[str, Any]]) -> str | None:

@@ -197,6 +197,40 @@ def test_specs_leave_out_fk_columns_and_describe_only_undescribed_ones() -> None
     ]
 
 
+def test_a_recompile_leaves_a_description_carrying_its_samples_and_format_as_it_is() -> None:
+    # A recompile reads each attribute's description back as its column's own
+    profiling = {
+        **PROFILING,
+        "BilledOn": {"sample_values": ["2021-02-01"], "is_unique": False, "format": "YYYY-MM-DD"},
+    }
+    columns = [
+        {"name": "BillingCountry", "data_type": "VARCHAR", "description": "Country billed."},
+        {"name": "InvoiceDate", "data_type": "TIMESTAMP", "description": "When billed."},
+        {"name": "BilledOn", "data_type": "VARCHAR", "description": "Day billed."},
+    ]
+    first = run(
+        descriptions.column_attribute_specs(
+            ScriptedGateway(describe_all), columns, [], profiling=profiling
+        )
+    )
+    recompiled = [
+        {**col, "description": spec.description} for col, spec in zip(columns, first, strict=True)
+    ]
+
+    again = run(
+        descriptions.column_attribute_specs(
+            ScriptedGateway(describe_all), recompiled, [], profiling=profiling
+        )
+    )
+
+    assert [s.description for s in first] == [
+        "Country billed. — samples: USA, Canada",
+        "When billed. — format: YYYY-MM-DD HH:MM:SS",
+        "Day billed. — samples: 2021-02-01 — format: YYYY-MM-DD",
+    ]
+    assert [s.description for s in again] == [s.description for s in first]
+
+
 def test_an_invalid_description_batch_leaves_its_columns_undescribed() -> None:
     gateway = ScriptedGateway(lambda task, user: None)
     columns = [{"name": "Total", "data_type": "DOUBLE"}]

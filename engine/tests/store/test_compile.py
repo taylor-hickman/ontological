@@ -399,14 +399,16 @@ def test_a_recompile_keeps_certified_descriptions(
         for name in ("Customer", "Invoice")
     ]  # fmt: skip
 
-    asyncio.run(
-        compile_pack(
-            [(t, None) for t in tables],
-            executor,
-            ScriptedGateway(claude),
-            table_calls=table_calls,
+    # Twice: the second reads the first's suffixed description back as the column's own
+    for _ in range(2):
+        asyncio.run(
+            compile_pack(
+                [(t, None) for t in tables],
+                executor,
+                ScriptedGateway(claude),
+                table_calls=table_calls,
+            )
         )
-    )
 
     assert rows(
         store,
@@ -419,7 +421,7 @@ def test_a_recompile_keeps_certified_descriptions(
         "WHERE term_name = 'Invoice' AND source_column IN ('BillingCity', 'Total') ORDER BY 1",
     ) == [
         # The column reads its attribute's description as its own, so it isn't asked again,
-        # and the write appends its samples; the certified one is left exactly as it was
+        # and the write appends its samples, once; the certified one is left exactly as it was
         "BillingCity|Stale city. — samples: Berlin, Paris, London, Mountain View, São Paulo",
         "Total|Curated total.",
     ]
