@@ -250,6 +250,8 @@ Produces: the full answer path, the chat screen, and defaults set from measured 
 | M4.6 | Chat screen: steps, validated SQL, rows and CSV, ResultChart port, usage meter, source selector | M4.5, M2.7 |
 | M4.7 | First tuning round (four runs, see [Tuning rounds](#tuning-rounds)), then held-out; set the defaults in §6.3 and record the scores here | M4.3, M3.9, M3.10 |
 
+**M4.2 decided (2026-11-07): an empty result is `run_sql`'s second outcome, with the literal check run again.** The probe cap (40 probes of at most 50 rows a question) and the statement timeouts (5 s a probe, 60 s for `run_sql`, which interrupt the query and come back as a `SourceError`) were already built by M1.2 and M4.1. What M4.2 adds is in `AnswerTools.run_sql`: its result carries `outcome`, `rows` or `empty`. An empty result isn't `is_error`, since it can be the answer, so it counts as a run for review and the post-run check. Its text tells the model it got no rows and to recheck its filters and literals before answering. It reruns check 5 with `result_was_empty`, so a literal on a column of more than 20 values, which the gate leaves alone, is point-probed for case and whitespace variants (a fuzzy spelling near-miss still needs a column of 20 values or fewer), and passes on the fixes it finds as `repairs`. Those probes share the gate's `ProbeExecutor`, so its cap. The post-run check is unchanged: an `information` or `answerable=false` answer after an empty run is still unverified, since "the data has nothing on it" is what a wrong literal says. Upstream's drop-LIKE rerun isn't built.
+
 ### M5: Curation
 
 Produces: editing that changes answers, with history and undo.
