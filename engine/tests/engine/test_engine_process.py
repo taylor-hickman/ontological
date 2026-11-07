@@ -220,6 +220,13 @@ def test_the_engine_waits_for_engine_lock(app_data: Path) -> None:
     assert e.wait_ready()["started"]
 
 
+def test_once_it_serves_the_engine_re_embeds_what_another_model_embedded(app_data: Path) -> None:
+    Proc.stub(app_data)
+    log = app_data / "jobs.log"
+    wait_until(lambda: log.exists() and "reembed stale" in log.read_text(), 15, "the re-embed")
+    assert log.read_text().splitlines() == ["reembed stale"]
+
+
 def test_an_idle_engine_shuts_down(app_data: Path) -> None:
     t0 = time.monotonic()
     e = Proc.stub(app_data, *FAST)
