@@ -72,7 +72,7 @@ describe('contentSecurityPolicy', () => {
 
 describe('engineCommand', () => {
   it('runs the repo’s engine through uv when the app runs from the repo', () => {
-    expect(engineCommand({ env: {}, isPackaged: false, appPath: '/repo/apps/desktop' })).toEqual([
+    expect(engineCommand({ env: {}, isPackaged: false, appPath: '/repo/apps/desktop', resourcesPath: '/r' })).toEqual([
       'uv',
       'run',
       '--quiet',
@@ -84,16 +84,35 @@ describe('engineCommand', () => {
 
   it('takes ONTOLOGICAL_ENGINE_CMD as a JSON array', () => {
     const env = { ONTOLOGICAL_ENGINE_CMD: '["python", "stub.py", "--idle-timeout", "2"]' }
-    expect(engineCommand({ env, isPackaged: true, appPath: '/x' })).toEqual(['python', 'stub.py', '--idle-timeout', '2'])
+    expect(engineCommand({ env, isPackaged: false, appPath: '/x', resourcesPath: '/r' })).toEqual([
+      'python',
+      'stub.py',
+      '--idle-timeout',
+      '2'
+    ])
+  })
+
+  it('points a packaged app’s engine at the folders it bundles', () => {
+    const env = { ONTOLOGICAL_ENGINE_CMD: '["engine"]' }
+    const resources = '/Applications/Ontological.app/Contents/Resources'
+    expect(engineCommand({ env, isPackaged: true, appPath: '/x', resourcesPath: resources })).toEqual([
+      'engine',
+      '--pg-bin',
+      join(resources, 'postgres', 'bin'),
+      '--model-dir',
+      join(resources, 'model'),
+      '--duckdb-extensions',
+      join(resources, 'duckdb-extensions')
+    ])
   })
 
   it.each(['python stub.py', '[]', '[1]', '{}'])('refuses ONTOLOGICAL_ENGINE_CMD=%s', (value) => {
-    expect(() => engineCommand({ env: { ONTOLOGICAL_ENGINE_CMD: value }, isPackaged: false, appPath: '/x' })).toThrow(
+    expect(() => engineCommand({ env: { ONTOLOGICAL_ENGINE_CMD: value }, isPackaged: false, appPath: '/x', resourcesPath: '/r' })).toThrow(
       'JSON array'
     )
   })
 
   it('says a packaged build has no engine yet', () => {
-    expect(() => engineCommand({ env: {}, isPackaged: true, appPath: '/x' })).toThrow('M7')
+    expect(() => engineCommand({ env: {}, isPackaged: true, appPath: '/x', resourcesPath: '/r' })).toThrow('M7.1')
   })
 })
