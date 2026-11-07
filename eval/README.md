@@ -15,6 +15,8 @@ uv run python -m ontological_eval ingest          # WWI and the four BIRD databa
 uv run python -m ontological_eval compile         # compile them there: spends Claude quota (~$1.50 at API prices)
 uv run python -m ontological_eval sets check      # every set's gold SQL runs and returns rows
 uv run python -m ontological_eval retrieval       # the retrieval benchmark: recall@k, no Claude
+uv run python -m ontological_eval review run      # the compile-quality review: spends Claude quota (~$3.75)
+uv run python -m ontological_eval review dump     # what each review config wrote, for reading side by side
 uv run python -m ontological_eval answerable      # check_answerable's distance on entities: 76 Haiku calls
 uv run python -m ontological_eval run smoke       # answer and score a set: spends Claude quota
 uv run python -m ontological_eval report <run id> # print a stored run's report again
@@ -100,6 +102,16 @@ uv run python -m ontological_eval retrieval --models arctic-m bge-small --set sm
 - **Coverage threshold.** It is recalibrated per model from dense distances. A question's nearest row in its own database counts as a positive, and its nearest row in each other eval database as a negative. The threshold is the distance that best separates the two (Youden's J), shown beside upstream's 0.75.
 
 The report prints as Markdown and is written to `<home>/results/retrieval-<layer>-<set>.json`, with every distance the threshold came from. The data layer on dev takes about a minute a model on an M-series Mac.
+
+## The compile-quality review
+
+`review` compiles Pagila and WWI four ways for BUILD_PLAN.md M3.10 and records what each compile cost. [`ontological_eval/review.py`](ontological_eval/review.py) holds it.
+
+- **Configs.** `split` and `merged` are `compile.table_calls` on the default routes. `split-cheaper` and `merged-cheaper` move every compile route one step down: Opus to Sonnet and Sonnet to Haiku at the same effort, and a Haiku route one effort level down.
+- **A store each.** Each config ingests into and compiles in `<home>/review/<config>`, so each starts with no Terms and no cache. A second `review run` makes no calls and keeps the figures the first recorded.
+- **Pagila** loads into the eval cluster the first time it's asked for, from the trimmed copy in `engine/tests/upstream_fixtures/dev_tools/fixtures/sql/` and its `analytics` schema, so there's nothing to download.
+- **What's recorded.** `<home>/results/compile-review.json` holds each compile's wall time, the gateway's utilization before and after, and from the call log its calls, outcomes, tokens and API-equivalent cost per task and per model. `review dump` writes `<home>/results/compile-review-<database>.json`, keyed by table, then config: the keys, Terms with their attributes and descriptions, FK edges marked declared or inferred, and the columns with neither.
+- **Retrieval per config.** `retrieval --store <config>` runs the benchmark against a review store instead, on the set's questions whose database the store holds (WWI's), calibrating against its other database (Pagila). The report ends in `-<config>`.
 
 ## The coverage distance on entities
 
