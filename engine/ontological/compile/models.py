@@ -251,6 +251,37 @@ class PackedSynonyms(BaseModel):
     tables: list[TableSynonymsEntry] = Field(..., description="One entry per table in the request.")
 
 
+# --- table_semantics (merged) ------------------------------------------------------------------
+# One answer for all four stages of a table (ARCHITECTURE.md §6.4): upstream's keys answer, with
+# each other stage's answer as a field beside it.
+
+
+class TableSemantics(FkAndPkResult):
+    """LLM output: keys, column descriptions, Terms and synonyms for one table."""
+
+    column_descriptions: list[ColumnDescription] = Field(
+        default_factory=list[ColumnDescription],
+        description=(
+            "One entry per column listed in the Column descriptions section; empty when it has "
+            "nothing to ask."
+        ),
+    )
+    terms: list[RawTermProposal] = Field(
+        ...,
+        description=(
+            "Usually one Term. Propose multiple only when columns clearly belong "
+            "to distinct business concepts."
+        ),
+    )
+    synonyms: list[str] = Field(
+        default_factory=list[str],
+        description=(
+            "Abbreviations, acronyms, or alternate names explicitly written in the table "
+            "description. Empty list if none are stated."
+        ),
+    )
+
+
 # --- sql_attribute_judge -----------------------------------------------------------------------
 # Upstream's `_SuggestedAttr` and `_Suggestions` (semantic/sql_attribute_suggester.py).
 

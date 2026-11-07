@@ -14,6 +14,11 @@ a database's compile, which uses Claude quota; `POST /jobs/{id}/hold` pauses one
 `POST /jobs/{id}/resume`; `POST /jobs/{id}/dismiss` puts off a refresh's new-tables prompt. The
 routes answer 503 in an engine with no store to keep jobs in.
 
+Ask: `POST /ask` answers one question from one database with the gated agent (§8.1), which uses
+Claude quota, and returns once the session ends: the answer, whether the post-run check verified
+it, the validated SQL, its rows and the tool log (`ontological.answer.service.Asked`). It answers
+404 for a database with no source, and 503 in an engine with no store or no embedder.
+
 The Terms and Ontology screens read and edit the ontology through the routes in `curate.py`.
 
 Leases: `POST /leases` takes one, `PUT /leases/{id}` renews it, `DELETE /leases/{id}` releases
@@ -36,6 +41,7 @@ from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ontological.answer.service import Answers, Asked, NoEmbedder
 from ontological.api.curate import add_curate_routes
 from ontological.api.setup import add_setup_routes
 from ontological.catalog.sources import Sources
@@ -73,6 +79,12 @@ class LeaseOut(BaseModel):
 
 class CompileRequest(BaseModel):
     database_name: str
+
+
+class AskRequest(BaseModel):
+    question: str
+    database: str
+    critic: bool = True  # the `answer.critic` setting (§8.1)
 
 
 class JobList(BaseModel):
@@ -134,6 +146,7 @@ def create_app(
     sources: Sources | None = None,
     jobs_service: JobsService | None = None,
     ontology: OntologyService | None = None,
+    answers: Answers | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Ontological engine",
@@ -183,6 +196,17 @@ def create_app(
 
     add_setup_routes(app, claude=claude, sources=sources)
     add_curate_routes(app, ontology=ontology)
+
+    @app.post("/ask")
+    async def ask(body: AskRequest) -> Asked:  # pyright: ignore[reportUnusedFunction]
+        if answers is None:
+            raise HTTPException(503, "this engine has no store to answer from")
+        try:
+            return await answers.ask(body.question, body.database, critic=body.critic)
+        except NoSource:
+            raise HTTPException(404, f"no source for {body.database}") from None
+        except NoEmbedder:
+            raise HTTPException(503, "this engine has no embedding model to search with") from None
 
     @app.get("/jobs")
     async def list_jobs() -> JobList:  # pyright: ignore[reportUnusedFunction]

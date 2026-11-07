@@ -27,6 +27,7 @@ dependencies = [
 ]
 
 [project.scripts]
+ontological = "ontological.cli:cli"
 ontological-engine = "ontological.engine.main:cli"
 ontological-mcp = "ontological.mcp.main:cli"
 

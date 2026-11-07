@@ -56,10 +56,12 @@ class _Lease:
 
 
 class EngineLink:
-    def __init__(self, app_data: Path, start: Sequence[str]) -> None:
-        """`start` is the whole command that starts an engine, `--headless` included."""
+    def __init__(self, app_data: Path, start: Sequence[str], *, client: str = CLIENT) -> None:
+        """`start` is the whole command that starts an engine, `--headless` included. `client`
+        names the holder in the engine's log."""
         self.app_data = app_data
         self.start = list(start)
+        self.client = client
         self._http = httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S, trust_env=False)  # no proxy
         self._engine: discovery.EngineInfo | None = None
         self._lease: _Lease | None = None
@@ -162,7 +164,7 @@ class EngineLink:
 
     async def _take_lease(self, info: discovery.EngineInfo) -> _Lease | None:
         """A new lease, or None if the engine doesn't answer. Raises _Closing on a 503."""
-        status, body = await self._call(info, "POST", "/leases", {"client": CLIENT})
+        status, body = await self._call(info, "POST", "/leases", {"client": self.client})
         if status == 201 and body is not None:
             return _Lease(str(body["lease"]), float(body["renew_every_s"]))
         if status == 503:
@@ -213,9 +215,11 @@ class EngineLink:
 
 
 @contextlib.asynccontextmanager
-async def hold_engine(app_data: Path, start: Sequence[str]) -> AsyncGenerator[EngineLink]:
+async def hold_engine(
+    app_data: Path, start: Sequence[str], *, client: str = CLIENT
+) -> AsyncGenerator[EngineLink]:
     """An EngineLink attaching in the background; its lease is released on exit."""
-    link = EngineLink(app_data, start)
+    link = EngineLink(app_data, start, client=client)
     try:
         async with anyio.create_task_group() as tg:
             tg.start_soon(link.run)

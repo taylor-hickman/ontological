@@ -47,6 +47,7 @@ from typing import Any, Protocol
 import uvicorn
 
 import ontological
+from ontological.answer.service import Answers, StoreAnswers
 from ontological.api.app import create_app
 from ontological.catalog.sources import Sources, StoreSources
 from ontological.curate.service import OntologyService, StoreOntology
@@ -99,6 +100,7 @@ class Store(Protocol):
     def claude(self, config: Config) -> Claude: ...
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService: ...
     def ontology(self, embedder: LocalEmbedder | None) -> OntologyService: ...
+    def answers(self, embedder: LocalEmbedder | None) -> Answers: ...
 
 
 class PgStore:
@@ -156,6 +158,10 @@ class PgStore:
     def ontology(self, embedder: LocalEmbedder | None) -> OntologyService:
         """The Terms and Ontology screens' reads and edits; an edit re-embeds with `embedder`."""
         return StoreOntology(embedder)
+
+    def answers(self, embedder: LocalEmbedder | None) -> Answers:
+        """Questions, answered through the same gateway."""
+        return StoreAnswers(gateway=self._gateway(), embedder=embedder)
 
 
 def pg_store(config: Config) -> Store:
@@ -355,6 +361,7 @@ async def _serve(
         sources=store.sources(jobs, embedder),
         jobs_service=service,
         ontology=store.ontology(embedder),
+        answers=store.answers(embedder),
     )
     server = _Server(
         uvicorn.Config(

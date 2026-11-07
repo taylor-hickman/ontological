@@ -6,10 +6,10 @@ It runs `ontological.engine.main.main` with the same arguments, but in place of 
 Postgres the store appends what it was asked to do to <appData>/store.log: `start` when the
 engine starts it, `quit-dump` and `stop` when the engine stops it. If <appData>/slow-start exists,
 the store takes that many seconds to start; if <appData>/slow-stop exists, it takes that many
-between `quit-dump` and `stop`. Jobs come from <appData>/jobs.json (`fake_jobs.py`), and the
-ontology from <appData>/ontology.json (`fake_ontology.py`). Its sources live in memory, starting
-with those in <appData>/sources.json if it exists (`fake_sources.py`), and the test call answers
-without spawning `claude`.
+between `quit-dump` and `stop`. Jobs come from <appData>/jobs.json (`fake_jobs.py`), the ontology
+from <appData>/ontology.json (`fake_ontology.py`) and answers from `fake_answers.py`. Its sources
+live in memory, starting with those in <appData>/sources.json if it exists (`fake_sources.py`), and
+the test call answers without spawning `claude`.
 `--headless` relaunches this file, so the detached engine has the fake store too.
 """
 
@@ -19,6 +19,7 @@ import sys
 import time
 from pathlib import Path
 
+from fake_answers import FakeAnswers
 from fake_jobs import FakeJobs
 from fake_ontology import FakeOntology
 from fake_sources import FakeClaude, FakeSources
@@ -67,6 +68,9 @@ class FakeStore:
 
     def ontology(self, embedder: LocalEmbedder | None) -> FakeOntology:
         return FakeOntology(self.app_data)
+
+    def answers(self, embedder: LocalEmbedder | None) -> FakeAnswers:
+        return FakeAnswers()
 
 
 if __name__ == "__main__":
