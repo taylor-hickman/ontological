@@ -109,7 +109,26 @@ def test_checks_4_to_6_read_chinooks_graph_and_probe_its_source(
     track_album = graph.column_id("Track", "AlbumId")
     album_id = graph.column_id("album", "albumid")  # any case, as the SQL writes it
     assert track_album and album_id and graph.in_semantic_fk(album_id)
-    [hop] = graph.join_path(track_album, album_id)
+    found = graph.join_path(track_album, album_id)
+    if not found:  # TEMPORARY diagnostic for CI
+        from auto_ontology.dal import attributes as A
+        from auto_ontology.dal.datasources import fetch_col_table_contexts
+        from sqlalchemy import select
+
+        from auto_ontology.dal import schema as S
+        from auto_ontology.dal.session import store as _store
+
+        ctx = fetch_col_table_contexts([track_album, album_id])
+        db = ctx.get(track_album, {}).get("database_id")
+        edges = _store().query_read(A._SEMANTIC_TABLE_EDGES, {"database_id": db}) if db else []
+        f = S.column__semantic_fk
+        raw = _store().query_read(select(f.c.column_id, f.c.attribute_id, f.c.use_in_join_paths))
+        raise AssertionError(
+            f"ids={track_album},{album_id} ctx={ctx} edges={len(edges)} "
+            f"rev={graph.join_path(album_id, track_album)} raw={raw[:12]} "
+            f"hops={A._find_table_join_hops(ctx[track_album]['table_id'], ctx[album_id]['table_id'], db) if db else None}"
+        )
+    [hop] = found
     assert (hop["source_table"], hop["target_table"]) == ("Track", "Album")
 
     with SourceExecutor(SqliteSource(chinook)) as executor:
