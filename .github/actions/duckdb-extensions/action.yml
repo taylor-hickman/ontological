@@ -1,0 +1,22 @@
+# DuckDB's source extensions (ARCHITECTURE.md §10): sqlite_scanner, postgres_scanner and
+# mysql_scanner for the locked DuckDB, installed once into a cached directory and checked to load
+# from there with autoinstall off. Sets ONTOLOGICAL_DUCKDB_EXTENSIONS, which every source session
+# loads them from, as the packaged app does. Run it after uv is set up.
+name: DuckDB extensions
+description: Cache and install DuckDB's source extensions, and point the engine's tests at them
+runs:
+  using: composite
+  steps:
+    - id: duckdb
+      shell: bash
+      working-directory: engine
+      run: echo "version=$(uv run --locked python -c 'import duckdb; print(duckdb.__version__)')" >>"$GITHUB_OUTPUT"
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/ontological/duckdb-extensions
+        key: duckdb-extensions-${{ runner.os }}-${{ runner.arch }}-${{ steps.duckdb.outputs.version }}
+    - shell: bash
+      working-directory: engine
+      run: |
+        uv run --locked python -m ontological.sources.extensions "$HOME/.cache/ontological/duckdb-extensions"
+        echo "ONTOLOGICAL_DUCKDB_EXTENSIONS=$HOME/.cache/ontological/duckdb-extensions" >>"$GITHUB_ENV"

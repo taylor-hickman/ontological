@@ -33,6 +33,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - uses: ./.github/actions/embedding-model
+      - uses: ./.github/actions/duckdb-extensions
       - uses: ./.github/actions/postgres-linux
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -69,6 +70,7 @@ jobs:
       - uses: ./.github/actions/postgres-linux
       # The retrieval benchmark's end-to-end test runs the default embedding model.
       - uses: ./.github/actions/embedding-model
+      - uses: ./.github/actions/duckdb-extensions
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pyright

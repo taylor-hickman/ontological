@@ -34,6 +34,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - uses: ./.github/actions/embedding-model
+      - uses: ./.github/actions/duckdb-extensions
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pyright

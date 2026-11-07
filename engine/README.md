@@ -25,7 +25,7 @@ Both print one JSON line, `{"pid", "port", "version", "started"}`, where `starte
 
 ## The embedding model
 
-The engine embeds with `snowflake-arctic-embed-m-v1.5`'s int8 ONNX file on the CPU, loaded through `onnxruntime` and `tokenizers` ([ARCHITECTURE.md §7.1](../docs/ARCHITECTURE.md#71-a-local-model-with-nothing-to-set-up)). The app will bundle it; until then, fetch it once (110 MB, pinned by revision and SHA-256) and point the engine at it with `--model-dir` (or `ONTOLOGICAL_MODEL_DIR`):
+The engine embeds with `snowflake-arctic-embed-m-v1.5`'s int8 ONNX file on the CPU, loaded through `onnxruntime` and `tokenizers` ([ARCHITECTURE.md §7.1](../docs/ARCHITECTURE.md#71-a-local-model-with-nothing-to-set-up)). The app bundles it (`packaging/resources.sh`) and passes `--model-dir`; the engine checks the files against their pinned SHA-256s at start and never downloads them. From the repo, fetch it once (110 MB, pinned by revision) and point the engine at it with `--model-dir` (or `ONTOLOGICAL_MODEL_DIR`):
 
 ```sh
 uv run python -m ontological.embed.model ~/.cache/ontological/model
@@ -33,6 +33,15 @@ uv run ontological-engine --pg-bin <tree>/bin --model-dir ~/.cache/ontological/m
 ```
 
 At start the engine times one batch and caps bulk batches at what takes about 100 ms, up to 1,024 padded tokens. Without a model directory it runs with no embedder.
+
+## DuckDB's extensions
+
+Sources are read through DuckDB ([ARCHITECTURE.md §5.5](../docs/ARCHITECTURE.md#55-source-databases)), which needs `sqlite_scanner`, `postgres_scanner` and `mysql_scanner`; `json` and `parquet` are built into DuckDB's library. Every source session connects with autoinstall and autoload off and loads its scanner by name from one `extension_directory`, so a source opens offline and a missing extension is an error that names the directory. The app bundles that directory and passes `--duckdb-extensions` (or `ONTOLOGICAL_DUCKDB_EXTENSIONS`); the engine checks the scanners load from it before it starts the store. From the repo, install them once for the locked DuckDB:
+
+```sh
+uv run python -m ontological.sources.extensions ~/.cache/ontological/duckdb-extensions
+uv run ontological-engine --pg-bin <tree>/bin --duckdb-extensions ~/.cache/ontological/duckdb-extensions
+```
 
 ## Asking a question
 
@@ -73,7 +82,7 @@ docker run -d --rm --name src-mysql -e MYSQL_ROOT_PASSWORD=pw -p 53306:3306 mysq
 ONTOLOGICAL_PG_BIN=<tree>/bin ONTOLOGICAL_MYSQL_URL=mysql://root:pw@127.0.0.1:53306 uv run pytest tests/sources
 ```
 
-`ONTOLOGICAL_MYSQL_REQUIRED=1` turns a missing server into a failure. DuckDB downloads its `sqlite_scanner`, `postgres_scanner` and `mysql_scanner` extensions the first time a test needs them; bundling the extensions with autoinstall off is M7.2.
+`ONTOLOGICAL_MYSQL_REQUIRED=1` turns a missing server into a failure. DuckDB never downloads an extension: autoinstall and autoload are off, and each session loads its scanner from `ONTOLOGICAL_DUCKDB_EXTENSIONS` (DuckDB's default `~/.duckdb/extensions` without it), so install them there once (see [DuckDB's extensions](#duckdbs-extensions)). CI does that with `.github/actions/duckdb-extensions`.
 
 The catalog ingest tests in `tests/store/test_ingest.py` build Chinook from upstream's fixture SQL (`tests/upstream_fixtures/dev_tools/fixtures/sql/chinook.sql`), extract it through a real source executor and write it to the bundled Postgres, so they need `ONTOLOGICAL_PG_BIN` like the rest of `tests/store`.
 

@@ -23,6 +23,8 @@ from ontological.sources.spec import SqliteSource
 
 
 class SqliteSession(Session):
+    extension = "sqlite_scanner"
+
     def __init__(self, source: SqliteSource) -> None:
         path = source.path
         if not path.is_file():
