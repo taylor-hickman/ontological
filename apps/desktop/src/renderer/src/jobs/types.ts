@@ -4,6 +4,8 @@ export type JobKind = 'compile' | 'ingest'
 export type JobState = 'running' | 'paused' | 'held' | 'stopped' | 'done'
 export type StepState = 'pending' | 'done' | 'skipped'
 export type Outcome = 'ok' | 'invalid' | 'limited' | 'error'
+/** How a compile asks about its tables: split's four stages, or one merged call a table. */
+export type TableCalls = 'split' | 'merged'
 
 export interface JobSummary {
   id: number
@@ -23,19 +25,24 @@ export interface JobSummary {
   /** A refresh's new tables, `schema.table`. */
   new_tables: string[]
   dismissed: boolean
+  /** A compile's option for the tables it has left. */
+  table_calls: TableCalls
 }
 
 export interface TableProgress {
   name: string
   state: StepState
+  /** The option the table ran with, or will. */
+  table_calls: TableCalls
+  /** Of `JobDetail.stages[table_calls]`. */
   stages_done: number
   skipped: string | null
 }
 
 export interface JobDetail {
   job: JobSummary
-  /** The route names of a table's stages, in order. */
-  stages: string[]
+  /** Each option's stages, by route name, in order. */
+  stages: Record<TableCalls, string[]>
   tables: TableProgress[]
 }
 
@@ -49,4 +56,27 @@ export interface CallRow {
   cached: boolean
   attempt: number
   duration_ms: number | null
+}
+
+/** One option's estimate (engine/ontological/compile/estimate.py, ARCHITECTURE.md §6.5). */
+export interface OptionEstimate {
+  table_calls: TableCalls
+  calls: number
+  calls_high: number
+  calls_by_model: Record<string, number>
+  /** Claude usage as its cost at API prices, in USD. */
+  usd: number
+  usd_low: number
+  usd_high: number
+  seconds: number
+  seconds_low: number
+  seconds_high: number
+}
+
+export interface Estimate {
+  database_name: string
+  tables: number
+  split: OptionEstimate
+  merged: OptionEstimate
+  spawn_overhead_s: number
 }

@@ -11,10 +11,15 @@ import {
   modelName,
   newTablePrompts,
   segments,
+  dollars,
+  estimateLine,
+  estimateRange,
+  minutes,
+  optionsShown,
   stageLegend,
   tileLabel
 } from '../../src/renderer/src/jobs/format'
-import type { CallRow, JobSummary, TableProgress } from '../../src/renderer/src/jobs/types'
+import type { CallRow, JobSummary, OptionEstimate, TableProgress } from '../../src/renderer/src/jobs/types'
 
 const NOW = Date.parse('2026-11-06T15:32:00Z')
 
@@ -34,6 +39,7 @@ function job(overrides: Partial<JobSummary> = {}): JobSummary {
     cache_hits: 37,
     new_tables: [],
     dismissed: false,
+    table_calls: 'split',
     ...overrides
   }
 }
@@ -141,6 +147,7 @@ describe('table tiles', () => {
   const table = (overrides: Partial<TableProgress>): TableProgress => ({
     name: 'cities',
     state: 'pending',
+    table_calls: 'split',
     stages_done: 0,
     skipped: null,
     ...overrides
@@ -164,6 +171,53 @@ describe('table tiles', () => {
     expect(tileLabel(table({}), 3)).toBe('queued')
     expect(tileLabel(table({ state: 'skipped', skipped: 'no non-FK columns' }), 3)).toBe('skipped: no non-FK columns')
     expect(stageLegend(['table_keys', 'column_descriptions', 'table_terms'])).toBe('keys · descriptions · terms')
+  })
+})
+
+describe('merged runs', () => {
+  const table = (name: string, table_calls: 'split' | 'merged'): TableProgress => ({
+    name,
+    state: 'pending',
+    table_calls,
+    stages_done: 0,
+    skipped: null
+  })
+
+  it('names merged\'s one stage, and lists each option the tables ran with, split first', () => {
+    expect(stageLegend(['table_semantics'])).toBe('one merged call')
+    expect(optionsShown([table('a', 'merged'), table('b', 'split')], 'merged')).toEqual(['split', 'merged'])
+    expect(optionsShown([table('a', 'merged')], 'split')).toEqual(['merged'])
+    expect(optionsShown([], 'merged')).toEqual(['merged'])
+  })
+})
+
+describe('the estimate', () => {
+  const option = (overrides: Partial<OptionEstimate> = {}): OptionEstimate => ({
+    table_calls: 'split',
+    calls: 70,
+    calls_high: 77,
+    calls_by_model: { haiku: 30, sonnet: 40 },
+    usd: 0.42,
+    usd_low: 0.29,
+    usd_high: 0.63,
+    seconds: 900,
+    seconds_low: 630,
+    seconds_high: 1350,
+    ...overrides
+  })
+
+  it('says calls, time and usage on one line, and the range behind them', () => {
+    expect(estimateLine(option())).toBe('≈ 70 calls · ≈ 15 min · ≈ $0.42 of usage')
+    expect(estimateRange(option())).toBe('70–77 calls, 11 min to 23 min, $0.29 to $0.63 at API prices')
+    expect(estimateLine(option({ calls: 0, usd: 0, seconds: 0 }))).toBe('No Claude calls')
+    expect(estimateLine(option({ calls: 1, usd: 0.004, seconds: 20 }))).toBe('≈ 1 call · ≈ under a minute · ≈ under $0.01 of usage')
+  })
+
+  it('rounds time to minutes and hours, and usage to cents', () => {
+    expect(minutes(29)).toBe('under a minute')
+    expect(minutes(4800)).toBe('1 h 20 min')
+    expect(minutes(7200)).toBe('2 h')
+    expect(dollars(1.234)).toBe('$1.23')
   })
 })
 

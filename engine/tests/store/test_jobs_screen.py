@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from fakes import NoAnswer, ScriptedGateway
 from pydantic import BaseModel
-from test_compile import ORDER, claude, table_of
+from test_compile import ORDER, claude, table_of, tables_of
 
 from ontological.catalog.ingest import ingest
 from ontological.compile.split import STAGES, compile_database
@@ -166,7 +166,8 @@ def test_a_compile_shows_its_tables_calls_and_cache_hits(
     # through keys and descriptions; Invoice's pack hasn't started
     [paused] = during
     assert paused.job.state == "paused" and paused.job.paused_until is not None
-    assert paused.stages == list(STAGES)
+    assert paused.stages == {"split": list(STAGES), "merged": ["table_semantics"]}
+    assert {t.table_calls for t in paused.tables} == {"split"}
     progress = {t.name: (t.state, t.stages_done) for t in paused.tables}
     assert progress["Album"] == ("done", 4)
     assert progress["Employee"] == ("pending", 2)
@@ -192,6 +193,7 @@ def test_a_compile_shows_its_tables_calls_and_cache_hits(
         "no non-FK columns",
     )
     assert all(t.stages_done == len(STAGES) for t in done.tables if t.state == "done")
+    assert done.job.table_calls == "split"
 
     log = view.calls(got.job_id, limit=500)
     assert [c.id for c in log] == sorted((c.id for c in log), reverse=True), "newest first"
@@ -203,6 +205,81 @@ def test_a_compile_shows_its_tables_calls_and_cache_hits(
     assert {c.table_name for c in cached} == {"Employee"}
     assert all(c.model == "sonnet" and c.duration_ms is None for c in cached)
     assert view.calls(got.job_id, limit=5) == log[:5]
+
+
+def merged_limited_once_at(table: str) -> Callable[[str, str], Any]:
+    """Claude, except that `table`'s first `table_semantics` call hits the usage limit."""
+    seen: list[bool] = []
+
+    def answer(task: str, user: str) -> Any:
+        if task == "table_semantics" and tables_of(user)[0] == table and not seen:
+            seen.append(True)
+            return NoAnswer("limited", "limited", datetime.now(UTC) + timedelta(hours=1))
+        return claude(task, user)
+
+    return answer
+
+
+def test_a_merged_compile_shows_one_stage_a_table_and_a_switch_applies_from_the_next_pack(
+    source: SqliteSource, call_log: PgCallLog
+) -> None:
+    gateway = LoggingGateway(merged_limited_once_at("Employee"), log=call_log)
+    during: list[view.JobDetail] = []
+
+    def look_and_switch() -> None:
+        job = jobs.open_job("compile", "chinook")
+        assert job is not None
+        found = view.detail(job.id)
+        assert found is not None
+        during.append(found)
+        jobs.set_table_calls(job.id, "split")  # the person picks split for the rest
+
+    with SourceExecutor(source) as ex:
+        got = asyncio.run(
+            compile_database(
+                "chinook",
+                ex,
+                gateway,
+                clock=InstantClock(on_sleep=look_and_switch),
+                table_calls="merged",
+            )
+        )
+
+    # While paused at Employee's merged call: the small tables' pack ran merged, except Genre,
+    # whose answer was invalid and went to split, and PlaylistTrack, which merged doesn't suit;
+    # Employee's call hit the limit, so its one stage isn't through; Invoice's pack hasn't
+    # started, so it shows the job's option
+    [paused] = during
+    assert paused.job.table_calls == "merged"
+    tiles = {t.name: (t.state, t.table_calls, t.stages_done) for t in paused.tables}
+    assert tiles["Album"] == ("done", "merged", 1)
+    assert tiles["Genre"] == ("done", "split", 4)
+    assert tiles["PlaylistTrack"][:2] == ("skipped", "split")
+    assert tiles["Customer"] == ("done", "merged", 1)
+    assert tiles["Employee"] == ("pending", "merged", 0)
+    assert tiles["Invoice"] == ("pending", "merged", 0)
+
+    # After the switch, the packs left ran split. Employee's pack had started, so its retry kept
+    # merged, and asked the same call again
+    done = view.detail(got.job_id)
+    assert done is not None and done.job.table_calls == "split"
+    ran = {t.name: t.table_calls for t in done.tables}
+    assert (ran["Album"], ran["Customer"], ran["Employee"]) == ("merged", "merged", "merged")
+    assert (ran["Invoice"], ran["Track"]) == ("split", "split")
+    assert all(
+        t.stages_done == len(done.stages[t.table_calls]) for t in done.tables if t.state == "done"
+    )
+
+
+def test_a_pending_merged_table_counts_its_own_call() -> None:
+    """A merged table's one stage is through once its own call answered, whatever its pack's
+    other tables' calls did."""
+    ok = view.StageCall(task="table_semantics", outcome="ok", attempt=1)
+    limited = view.StageCall(task="table_semantics", outcome="limited", attempt=1)
+    merged = view.STAGES["merged"]
+    assert view.stages_done([ok], merged) == 1
+    assert view.stages_done([limited], merged) == 0
+    assert view.stages_done([limited, ok], merged) == 1
 
 
 def jobs_calls(job_id: int) -> list[view.CallRow]:
@@ -283,6 +360,41 @@ def test_the_person_holds_a_paused_compile_and_resumes_it(source: SqliteSource) 
             await service.resume(job.id)
 
     asyncio.run(scenario())
+
+
+def test_the_person_estimates_then_compiles_merged_and_switches_a_held_one_to_split(
+    source: SqliteSource,
+) -> None:
+    async def scenario() -> None:
+        clock = WaitingClock()
+        gateway = ScriptedGateway(merged_limited_once_at("Employee"))
+        service = Jobs(gateway=gateway, active=ActiveJobs(), clock=clock)
+        before = await service.estimate("chinook")
+        assert (before.tables, before.merged.calls < before.split.calls) == (11, True)
+
+        await service.compile("chinook", "merged")
+        await clock.sleeping.wait()
+        [job] = [j for j in view.summaries() if j.kind == "compile"]
+        assert (job.state, job.table_calls) == ("paused", "merged")
+        # What's left: Employee, whose pack started, and the wide tables after it
+        left = await service.estimate("chinook")
+        assert left.tables == 3
+
+        await service.hold(job.id)
+        await until(lambda: state() == "held")
+        await service.choose(job.id, "split")
+        clock.release.set()
+        await service.resume(job.id)
+        await until(lambda: state() == "done")
+        with pytest.raises(NotNow):
+            await service.choose(job.id, "merged")
+
+    asyncio.run(scenario())
+    [job] = [j for j in view.summaries() if j.kind == "compile"]
+    found = view.detail(job.id)
+    assert found is not None and job.table_calls == "split"
+    ran = {t.name: t.table_calls for t in found.tables}
+    assert (ran["Album"], ran["Employee"], ran["Invoice"]) == ("merged", "split", "split")
 
 
 def test_a_compile_that_fails_for_another_reason_is_stopped_not_left_running(

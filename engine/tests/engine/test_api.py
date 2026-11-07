@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder
 from ontological.api.app import create_app
+from ontological.compile.estimate import EstimatedTable, estimate
 from ontological.engine.lifetime import Lifetime
 
 TOKEN = "t" * 43
@@ -212,6 +213,10 @@ def test_responses_to_the_app_carry_its_origin(client: TestClient) -> None:
 
 # --- jobs ---------------------------------------------------------------------------------------
 
+WIDE_TABLE = EstimatedTable(
+    "t1", "dbo", "orders", columns=20, non_fk=18, undescribed=10, candidates=17, described=True
+)
+
 JOB: dict[str, Any] = {
     "id": 3,
     "kind": "compile",
@@ -227,6 +232,7 @@ JOB: dict[str, Any] = {
     "cache_hits": 37,
     "new_tables": [],
     "dismissed": False,
+    "table_calls": "split",
 }
 
 
@@ -234,9 +240,12 @@ JOB: dict[str, Any] = {
 def jobs_client(lifetime: Lifetime, tmp_path: Path) -> Iterator[TestClient]:
     scenario: dict[str, Any] = {
         "jobs": [JOB],
-        "details": {"3": {"stages": ["table_keys"], "tables": [
-            {"name": "cities", "state": "done", "stages_done": 1, "skipped": None},
+        "details": {"3": {"tables": [
+            {"name": "cities", "state": "done", "stages_done": 4, "skipped": None},
+            {"name": "orders", "state": "pending", "table_calls": "merged", "stages_done": 0,
+             "skipped": None},
         ]}},
+        "estimates": {"wwi": estimate("wwi", [WIDE_TABLE]).model_dump(mode="json")},
         "calls": {"3": [{
             "id": 9, "at": "2026-11-06T15:31:58Z", "task": "table_terms",
             "table_name": "cities_archive", "model": "claude-sonnet-5-5", "outcome": "limited",
@@ -261,9 +270,20 @@ def test_jobs_lists_reads_and_acts_on_jobs(jobs_client: TestClient) -> None:
     [job] = jobs_client.get("/jobs").json()["jobs"]
     assert (job["id"], job["state"], job["cache_hits"]) == (3, "paused", 37)
     detail = jobs_client.get("/jobs/3").json()
-    assert (detail["job"]["id"], detail["stages"], detail["tables"][0]["name"]) == (
-        3, ["table_keys"], "cities",
+    assert detail["stages"]["merged"] == ["table_semantics"]
+    assert [(t["name"], t["table_calls"]) for t in detail["tables"]] == [
+        ("cities", "split"), ("orders", "merged"),
+    ]  # fmt: skip
+
+    estimated = jobs_client.get("/jobs/estimate", params={"database_name": "wwi"}).json()
+    assert (estimated["tables"], estimated["split"]["calls"], estimated["merged"]["calls"]) == (
+        1, 4, 1,
     )  # fmt: skip
+    assert (
+        jobs_client.post("/jobs/3/table_calls", json={"table_calls": "merged"}).status_code == 202
+    )
+    assert jobs_client.get("/jobs").json()["jobs"][0]["table_calls"] == "merged"
+    assert jobs_client.post("/jobs/3/table_calls", json={"table_calls": "x"}).status_code == 422
     [call] = jobs_client.get("/jobs/3/calls").json()["calls"]
     assert (call["task"], call["outcome"], call["cached"]) == ("table_terms", "limited", False)
 
