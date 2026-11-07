@@ -8,9 +8,10 @@
 # (`ontological.answer.ontology` implements it with those functions). Probes go through
 # `ontological.answer.probe`, and name a table with the schema the SQL gave it. A join whose
 # overlap probe couldn't run is left alone, where upstream flags it: check 4 is a hard check
-# here, and upstream's is soft (see `_overlap`). The self-apply
-# rewrites (`try_self_apply_wrong_column_fixes`, `try_self_apply_missing_bridge_fixes`) aren't
-# ported: the gate reports issues, and the model rewrites its own SQL.
+# here, and upstream's is soft (see `_overlap`). The overlap is measured both ways in one probe,
+# so the side of `=` the model wrote first doesn't change the verdict (see `_value_overlap`). The
+# self-apply rewrites (`try_self_apply_wrong_column_fixes`, `try_self_apply_missing_bridge_fixes`)
+# aren't ported: the gate reports issues, and the model rewrites its own SQL.
 
 # sqlglot's expression tree is loosely typed.
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
@@ -197,51 +198,45 @@ def _table_ref(node: exp.Table, dialect: str | None, *, quoted: bool) -> str:
 def _value_overlap(
     executor: ProbeExecutor,
     dialect: str | None,
-    table_a: exp.Table,
-    col_a: str,
-    table_b: exp.Table,
-    col_b: str,
+    a: tuple[exp.Table, str],
+    b: tuple[exp.Table, str],
 ) -> float | None:
-    """Fraction of *table_a*'s distinct ``col_a`` values also present in *table_b*'s ``col_b``.
+    """The larger of two shares, from one probe: *a*'s distinct values found in *b*, and *b*'s
+    found in *a*. ``None`` when the probe couldn't run (no connector, budget exhausted, query
+    failure) or either side holds no values: callers must treat that as "can't confirm", not as
+    a verdict either way.
 
-    ``None`` when the probe couldn't run (no connector, budget exhausted,
-    query failure) — callers must treat that as "can't confirm", not as a
-    verdict either way.
+    Upstream measures only the left operand's values in the right, so a correct FK join written
+    parent first (``e.EmployeeId = c.SupportRepId``) measures the parent's keys, most of which no
+    child references, and is flagged. Taking the larger share makes operand order irrelevant: a
+    real FK child's values are nearly all in its parent, whichever side the model wrote first.
 
-    Identifiers are always quoted: *table_a*/*col_a*/etc. are already the
-    real, correctly-cased names resolved from schema metadata by the
-    caller, and an unquoted reference here would let the engine's own
-    case-folding rules silently rewrite it (e.g. Postgres lowercases an
-    unquoted ``ArtifactsCore`` to ``artifactscore``, which then doesn't
-    exist) — producing a query-execution failure that this function can
-    only see as "probe couldn't run," so the mismatch falls through to
-    "unverified" even when the join is actually correct. Quoting the
-    already-correct case is a no-op for lowercase-only identifiers in every
-    dialect this pipeline targets, so this can't regress a case that works
-    today — it only fixes the mixed-case ones that silently didn't.
+    Identifiers are always quoted: they are the real, correctly-cased names resolved from schema
+    metadata by the caller, and an unquoted reference would let the engine's case-folding rewrite
+    a mixed-case name (Postgres lowercases ``ArtifactsCore``), failing the probe, which this
+    function can only read as "couldn't run". Quoting a lowercase name changes nothing.
     """
     d = dialect or None
-    a_ref = exp.column(col_a, quoted=True).sql(dialect=d)
-    b_ref = exp.column(col_b, quoted=True).sql(dialect=d)
-    a_table_ref = _table_ref(table_a, d, quoted=True)
-    b_table_ref = _table_ref(table_b, d, quoted=True)
+    a_col = exp.column(a[1], quoted=True).sql(dialect=d)
+    b_col = exp.column(b[1], quoted=True).sql(dialect=d)
     sql = (
-        f"SELECT "
-        f"COUNT(DISTINCT a.{a_ref}) AS total, "
-        f"COUNT(DISTINCT CASE WHEN b.{b_ref} IS NOT NULL THEN a.{a_ref} END) AS matched "
-        f"FROM {a_table_ref} a "
-        f"LEFT JOIN {b_table_ref} b ON a.{a_ref} = b.{b_ref} "
-        f"WHERE a.{a_ref} IS NOT NULL"
+        f"WITH a AS (SELECT DISTINCT {a_col} AS v FROM {_table_ref(a[0], d, quoted=True)} "
+        f"WHERE {a_col} IS NOT NULL), "
+        f"b AS (SELECT DISTINCT {b_col} AS v FROM {_table_ref(b[0], d, quoted=True)} "
+        f"WHERE {b_col} IS NOT NULL) "
+        f"SELECT (SELECT COUNT(*) FROM a) AS a_total, (SELECT COUNT(*) FROM b) AS b_total, "
+        f"(SELECT COUNT(*) FROM a JOIN b ON a.v = b.v) AS matched"
     )
     res = executor.run(sql, purpose="join_path_check_overlap")
     if not res["ok"] or not res["rows"]:
         return None
     row = res["rows"][0]
-    total = row.get("total") or 0
+    a_total = row.get("a_total") or 0
+    b_total = row.get("b_total") or 0
     matched = row.get("matched") or 0
-    if not total:
+    if not a_total or not b_total:
         return None
-    return matched / total
+    return max(matched / a_total, matched / b_total)
 
 
 def _overlap(
@@ -250,8 +245,8 @@ def _overlap(
     a: tuple[exp.Table, str],
     b: tuple[exp.Table, str],
 ) -> float | None:
-    """``_value_overlap`` of *a*'s values in *b*, or else of *b*'s in *a*; ``None`` when neither
-    probe could run (the budget spent, no source, or both directions failed).
+    """``_value_overlap`` of *a* and *b*; ``None`` when it couldn't be measured (the budget
+    spent, no source, the probe failed, or a side is empty).
 
     Every caller leaves the join alone on ``None``, where upstream flags it anyway. Upstream's
     check is opt-in and soft; check 4 is hard, and the probe budget is shared by the question's
@@ -261,10 +256,7 @@ def _overlap(
     the overlap tells it apart from a fabricated join."""
     if not executor.budget_left:
         return None
-    overlap = _value_overlap(executor, dialect, a[0], a[1], b[0], b[1])
-    if overlap is None:
-        overlap = _value_overlap(executor, dialect, b[0], b[1], a[0], a[1])
-    return overlap
+    return _value_overlap(executor, dialect, a, b)
 
 
 def find_join_path_mismatches(

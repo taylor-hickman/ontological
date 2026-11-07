@@ -347,3 +347,71 @@ def test_a_join_off_the_graphs_path_whose_values_dont_overlap_is_flagged(
     )
 
     assert [m["verdict"] for m in mismatches] == [verdict]
+
+
+_SUPPORT = (
+    "CREATE TABLE employee (EmployeeId INTEGER)",
+    "CREATE TABLE customer (CustomerId INTEGER, SupportRepId INTEGER)",
+    "INSERT INTO employee SELECT i FROM range(1, 51) t(i)",  # 50 employees
+    "INSERT INTO customer SELECT i, 1 + i % 2 FROM range(100) t(i)",  # 2 of them support reps
+)
+
+
+@pytest.mark.parametrize("on", ["e.EmployeeId = c.SupportRepId", "c.SupportRepId = e.EmployeeId"])
+@pytest.mark.parametrize(
+    "graph",
+    [
+        FakeGraph(fk_columns={"customer.SupportRepId"}),
+        FakeGraph(
+            {
+                ("employee.EmployeeId", "customer.SupportRepId"): [
+                    hop("customer.CustomerId", "employee.EmployeeId")
+                ]
+            },
+            fk_columns={"customer.SupportRepId"},
+        ),
+    ],
+    ids=["no path", "graph knows another pair"],
+)
+def test_a_parent_key_joined_to_a_child_fk_passes_whichever_side_is_written_first(
+    on: str, graph: FakeGraph
+) -> None:
+    """2 of the 50 employees are support reps, so the employees' share in SupportRepId is 0.04,
+    and the support reps' share in EmployeeId is 1.0. The join is the same either way round."""
+    source = DuckProber(*_SUPPORT)
+
+    mismatches = find_join_path_mismatches(
+        ProbeExecutor(source),
+        "duckdb",
+        f"SELECT c.CustomerId FROM employee e JOIN customer c ON {on}",
+        graph,
+    )
+
+    assert mismatches == []
+    assert len(source.seen) == 1  # both shares from one probe
+
+
+@pytest.mark.parametrize("on", ["t.GenreId = a.AlbumId", "a.AlbumId = t.GenreId"])
+def test_a_fabricated_join_is_flagged_whichever_side_is_written_first(on: str) -> None:
+    mismatches = find_join_path_mismatches(
+        ProbeExecutor(DuckProber(*_TRACKS)),
+        "duckdb",
+        f"SELECT t.TrackId FROM album a JOIN track t ON {on}",
+        FakeGraph(fk_columns={"album.AlbumId"}),
+    )
+
+    assert [(m["verdict"], m["overlap"]) for m in mismatches] == [("unverified", 0.0)]
+
+
+def test_an_empty_side_measures_nothing() -> None:
+    source = DuckProber(*_TRACKS, "DELETE FROM track")
+
+    assert (
+        find_join_path_mismatches(
+            ProbeExecutor(source),
+            "duckdb",
+            "SELECT t.TrackId FROM album a JOIN track t ON t.GenreId = a.AlbumId",
+            FakeGraph(fk_columns={"album.AlbumId"}),
+        )
+        == []
+    )
