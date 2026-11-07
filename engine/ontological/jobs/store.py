@@ -6,10 +6,11 @@ logged-out `claude`, say), or `done`. A database has at most one unfinished job 
 the next run resumes it. A crashed job is left `running`, which is why the engine counts the jobs
 it is running in memory (`ActiveJobs`), never from this table.
 
-Each step is one table, `pending` until it is `done` or `skipped`. Writes go through the DAL's
-session, so `finish_step` inside a `write_transaction` commits with whatever else the block
-writes: a compiled table's Terms and its checkpoint commit together or not at all. Every call
-blocks; async callers run them in a thread.
+A compile's steps are its tables, each `pending` until it is `done` or `skipped`. A `reembed`
+job (ontological/embed/reembed.py) has no steps. Writes go through the DAL's session, so
+`finish_step` inside a `write_transaction` commits with whatever else the block writes: a
+compiled table's Terms and its checkpoint commit together or not at all. Every call blocks; async
+callers run them in a thread.
 """
 
 # The vendored DAL is untyped.
@@ -27,7 +28,7 @@ from typing import Any, Literal
 from auto_ontology.dal.session import store, write_transaction
 from ontological.compile.packing import PlannedStep
 
-Kind = Literal["compile"]
+Kind = Literal["compile", "reembed"]
 JobState = Literal["running", "paused", "stopped", "done"]
 StepState = Literal["pending", "done", "skipped"]
 

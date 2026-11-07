@@ -27,6 +27,7 @@ from ontological.curate import edits
 from ontological.curate.edits import (
     AlreadyUndone,
     Conflict,
+    EditRefused,
     NameTaken,
     NotFound,
     edit_attribute,
@@ -123,6 +124,15 @@ def attributes_of(lay: pg.Layout, term: str) -> int:
             f"WHERE term.name = '{term}'",
         )
     )
+
+
+def owners_named(lay: pg.Layout, term: str) -> list[str]:
+    """The `term_name` copies on a Term's attributes."""
+    return one(
+        lay,
+        "SELECT DISTINCT a.term_name FROM column_attribute a JOIN column_attribute__term at "
+        f"ON at.attribute_id = a.id WHERE at.term_id = '{term}'",
+    ).splitlines()
 
 
 def change_log(lay: pg.Layout) -> list[str]:
@@ -243,27 +253,21 @@ def test_a_rename_reaches_the_attributes_and_their_vectors(curated: Curated) -> 
     assert edit is not None
     n = attributes_of(lay, "Release")
     assert edit.vectors == Synced(embedded=1 + n, deleted=1 + n, current=curated.total - 1 - n)
-    assert one(
-        lay,
-        "SELECT DISTINCT a.term_name FROM column_attribute a JOIN column_attribute__term at "
-        f"ON at.attribute_id = a.id WHERE at.term_id = '{album}'",
-    ) == "Release"
+    assert owners_named(lay, album) == ["Release"]
     assert found(curated.ready().search("Release", k=10), "Term", "Release")
 
     undone = undo(edit.id, vdb=curated.vdb)
     assert undone.vectors == Synced(embedded=1 + n, deleted=1 + n, current=curated.total - 1 - n)
     assert one(lay, f"SELECT name FROM term WHERE id = '{album}'") == "Album"
-    assert one(
-        lay,
-        "SELECT DISTINCT a.term_name FROM column_attribute a JOIN column_attribute__term at "
-        f"ON at.attribute_id = a.id WHERE at.term_id = '{album}'",
-    ) == "Album"
+    assert owners_named(lay, album) == ["Album"]
 
 
 def test_a_rename_onto_a_name_already_taken_is_refused(curated: Curated) -> None:
     lay = curated.store
     with pytest.raises(NameTaken):
         edit_term(term_id(lay, "Album"), name="Artist", description="Changed.", vdb=curated.vdb)
+    with pytest.raises(EditRefused):
+        edit_term(term_id(lay, "Album"), name="  ")
     assert one(lay, "SELECT description FROM term WHERE name = 'Album'") == "A Album."
     assert change_log(lay) == []
 
@@ -415,7 +419,9 @@ def test_a_re_embed_that_fails_stops_its_job_with_the_error(curated: Curated) ->
         reembed.reembed_database("chinook", broken)
     [job] = [j for j in jobs(curated.store) if j.startswith("reembed")]
     assert job == "reembed chinook stopped"
-    assert "the embedder failed" in one(curated.store, "SELECT error FROM ops.job WHERE kind = 'reembed'")
+    assert "the embedder failed" in one(
+        curated.store, "SELECT error FROM ops.job WHERE kind = 'reembed'"
+    )
 
 
 def test_one_re_embed_of_a_database_runs_at_a_time(curated: Curated) -> None:
