@@ -163,12 +163,22 @@ class Jobs:
     async def auto_compile(self, refresh_id: int) -> bool:
         """A refresh found new tables. With the auto-compile setting on, start its database's
         compile and put away the refresh's "compile?" prompt, which that answers. Off, the
-        default, the prompt waits for the person, as it does when the compile can't start: a
-        compile of that database is already running (it compiles the tables it planned), or its
-        source has gone. True when it started one."""
+        default, the prompt waits for the person, as it does when no new compile can start: one of
+        that database isn't done, or its source has gone. An unfinished compile (running, paused,
+        held or stopped) resumes with the tables it planned, which leaves out the new ones, and a
+        held or stopped one waits for the person. True when it started one."""
         if self._stopping or not await asyncio.to_thread(settings.auto_compile):
             return False
         refresh = await self._job(refresh_id)
+        unfinished = await asyncio.to_thread(job_store.open_job, "compile", refresh.database_name)
+        if unfinished is not None:
+            log.info(
+                "not auto-compiling %s: compile job %d is %s",
+                refresh.database_name,
+                unfinished.id,
+                unfinished.state,
+            )
+            return False
         try:
             await self.compile(refresh.database_name)
         except (NoSource, JobBusy) as e:

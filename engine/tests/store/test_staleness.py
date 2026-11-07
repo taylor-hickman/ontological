@@ -24,6 +24,7 @@ from ontological.jobs import store as jobs
 from ontological.jobs.active import ActiveJobs
 from ontological.jobs.service import Jobs, auto_compile_from
 from ontological.jobs.staleness import Refreshed, StalenessCheck, stale_sources
+from ontological.jobs.store import JobState
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.sources.spec import to_record
 from ontological.store import pg
@@ -212,6 +213,29 @@ def test_with_auto_compile_on_a_refresh_with_new_tables_starts_their_compile(
     assert state("stale") == "paused", "a compile of stale started by itself"
     assert refresh.result == {"new_tables": ["main.Review"]}
     assert refresh.dismissed_at is not None, "the compile answers the refresh's prompt"
+
+
+@pytest.mark.parametrize("left", ["held", "stopped", "running", "paused"])
+def test_with_auto_compile_on_an_unfinished_compile_is_left_and_the_prompt_waits(
+    store: pg.Layout, chinook: Path, tmp_path: Path, left: JobState
+) -> None:
+    """Resuming it would compile only the tables it planned, which leave out the new ones, and a
+    held or stopped compile waits for the person. Running and paused are left by an earlier
+    engine: the check starts before the engine resumes them."""
+    stale_chinook(store, chinook, tmp_path, new_table=True)
+    settings.put(settings.AUTO_COMPILE, True)
+    unfinished = jobs.start_job("compile", "stale", [])
+    if left == "paused":
+        jobs.set_state(unfinished.id, "paused", paused_until=datetime.now(UTC) + timedelta(hours=1))
+    elif left != "running":
+        jobs.set_state(unfinished.id, left)
+
+    handed, refresh = refresh_with_jobs()
+
+    assert handed == [False]
+    assert jobs.job(unfinished.id).state == left, "not resumed"
+    assert [j.id for j in jobs.recent(5) if j.kind == "compile"] == [unfinished.id]
+    assert refresh.dismissed_at is None, "Jobs still asks: 1 new table, compile?"
 
 
 @pytest.mark.parametrize("setting", [None, False], ids=["unset", "off"])
