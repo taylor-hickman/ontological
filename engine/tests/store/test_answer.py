@@ -111,23 +111,7 @@ def test_checks_4_to_6_read_chinooks_graph_and_probe_its_source(
     assert track_album and album_id and graph.in_semantic_fk(album_id)
     found = graph.join_path(track_album, album_id)
     if not found:  # TEMPORARY diagnostic for CI
-        from auto_ontology.dal import attributes as A
-        from auto_ontology.dal.datasources import fetch_col_table_contexts
-        from sqlalchemy import select
-
-        from auto_ontology.dal import schema as S
-        from auto_ontology.dal.session import store as _store
-
-        ctx = fetch_col_table_contexts([track_album, album_id])
-        db = ctx.get(track_album, {}).get("database_id")
-        edges = _store().query_read(A._SEMANTIC_TABLE_EDGES, {"database_id": db}) if db else []
-        f = S.column__semantic_fk
-        raw = _store().query_read(select(f.c.column_id, f.c.attribute_id, f.c.use_in_join_paths))
-        raise AssertionError(
-            f"ids={track_album},{album_id} ctx={ctx} edges={len(edges)} "
-            f"rev={graph.join_path(album_id, track_album)} raw={raw[:12]} "
-            f"hops={A._find_table_join_hops(ctx[track_album]['table_id'], ctx[album_id]['table_id'], db) if db else None}"
-        )
+        raise AssertionError(_diagnose(track_album, album_id))  # pyright: ignore
     [hop] = found
     assert (hop["source_table"], hop["target_table"]) == ("Track", "Album")
 
@@ -216,3 +200,24 @@ def test_a_scripted_session_answers_from_chinook_and_is_verified(
     assert log["run_sql"].data["rows"] == [["AC/DC", 2]]
     assert json.loads(query.results[4]["content"][0]["text"])["rows"] == [["AC/DC", 2]]
     assert "AC/DC" in query.spawns[1].prompt  # the critic saw the row
+
+
+def _diagnose(a: str, b: str) -> str:  # TEMPORARY diagnostic for CI
+    from sqlalchemy import select
+
+    from auto_ontology.dal import attributes as attrs
+    from auto_ontology.dal import schema as sch
+    from auto_ontology.dal.datasources import fetch_col_table_contexts
+    from auto_ontology.dal.session import store as st
+
+    ctx = fetch_col_table_contexts([a, b])
+    db = ctx.get(a, {}).get("database_id")
+    edges = st().query_read(attrs._SEMANTIC_TABLE_EDGES, {"database_id": db}) if db else []  # type: ignore
+    f = sch.column__semantic_fk
+    raw = st().query_read(select(f.c.column_id, f.c.attribute_id, f.c.use_in_join_paths))  # type: ignore
+    hops = (
+        attrs._find_table_join_hops(ctx[a]["table_id"], ctx[b]["table_id"], db)  # type: ignore
+        if db and b in ctx
+        else None
+    )
+    return f"ids={a},{b} ctx={ctx} edges={edges} raw={raw[:12]} hops={hops}"  # type: ignore
