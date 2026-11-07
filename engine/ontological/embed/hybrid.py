@@ -21,7 +21,7 @@ rank, with a bonus for certified items (ARCHITECTURE.md §7.3).
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, cast
 
 import psycopg
@@ -69,6 +69,19 @@ def is_certified(metadata: Mapping[str, Any]) -> bool:
     """A row is certified when its metadata says `certified: true` (or upstream's aggregate
     status, "certified")."""
     return metadata.get("certified") in (True, "certified")
+
+
+def searcher(hybrid: HybridSearch, rankings: Sequence[str] = RANKINGS) -> Callable[..., list[Hit]]:
+    """`dense_search`'s shape (`ontological.answer.retrieval.Search`) over `hybrid`, fusing
+    `rankings`: what retrieval runs on in the engine, and on each ranking in the benchmark."""
+
+    def search(
+        vdb: object, query: str, *, k: int = 10, where: dict[str, Any] | None = None
+    ) -> list[Hit]:
+        del vdb  # the hybrid search holds its own
+        return hybrid.search(query, k=k, where=where, rankings=rankings)
+
+    return search
 
 
 def _vector(values: Sequence[float]) -> str:

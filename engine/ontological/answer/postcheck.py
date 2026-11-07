@@ -8,6 +8,8 @@ What the sequence must hold depends on the session:
 - an `information` answer needs only its plan, and no SQL;
 - with the critic off, no review is needed;
 - an `answerable=false` answer needs its plan and no SQL;
+- a `prediction` answer must be `answerable=false` with `prediction_unsupported` in `missing`,
+  since `plan` tells the model Ontological doesn't do predictions;
 - an `information` or `answerable=false` answer is unverified once run_sql has run in the
   session, since it would rest on what came back unchecked. That holds for an empty result too:
   "the data holds nothing on it" is what a wrong literal makes a query say, so it needs the SQL
@@ -22,6 +24,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from ontological.answer.models import AnswerModel
+from ontological.answer.tools import PREDICTION_UNSUPPORTED
 from ontological.llm.gateway import ToolCall
 
 
@@ -46,8 +49,16 @@ def post_run_check(log: Sequence[ToolCall], answer: AnswerModel | None, *, criti
     intent = plans[answer.plan_id][1].data.get("intent")
     sql = _normalized(answer.sql)
 
+    if intent == "prediction" and (
+        answer.answerable or PREDICTION_UNSUPPORTED not in answer.missing
+    ):
+        return _unverified(
+            f"a prediction answer should be answerable=false with {PREDICTION_UNSUPPORTED} "
+            "missing: Ontological doesn't do predictions"
+        )
+
     # The model picks the intent and answerable, and can re-plan at any time, so neither can
-    # vouch for SQL, nor for rows that run_sql returned (the tools don't withhold run_sql yet)
+    # vouch for SQL, nor for rows that run_sql returned under an earlier plan
     if not answer.answerable or intent == "information":
         kind = (
             "an answer with answerable=false" if not answer.answerable else "an information answer"

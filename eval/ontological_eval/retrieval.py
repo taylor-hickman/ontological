@@ -57,7 +57,7 @@ from ontological.catalog.query_history import read_catalog_index
 from ontological.catalog.sql_parse import parse_query
 from ontological.embed import model as models
 from ontological.embed.embedder import LocalEmbedder
-from ontological.embed.hybrid import RANKINGS, HybridSearch
+from ontological.embed.hybrid import RANKINGS, HybridSearch, searcher
 from ontological.embed.search import dense_search
 from ontological.embed.semantic import database_rows
 from ontological.engine import discovery
@@ -131,18 +131,6 @@ def recall(found: Iterable[str], wanted: frozenset[str]) -> float | None:
     if not wanted:
         return None
     return len(wanted & set(found)) / len(wanted)
-
-
-def searcher(hybrid: HybridSearch, rankings: Sequence[str]) -> Search:
-    """`dense_search`'s shape over `hybrid`, fusing only `rankings`."""
-
-    def search(
-        vdb: PostgresVDB, query: str, *, k: int = 10, where: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
-        del vdb  # the hybrid search holds it
-        return hybrid.search(query, k=k, where=where, rankings=rankings)
-
-    return search
 
 
 def pack_found(vdb: PostgresVDB, q: Question, k: int, search: Search) -> Found:

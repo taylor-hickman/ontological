@@ -42,7 +42,7 @@ At start the engine times one batch and caps bulk batches at what takes about 10
 uv run ontological ask "Which artists have the most albums?" --source chinook --pg-bin <tree>/bin --model-dir <model>
 ```
 
-It exits 0 for a verified answer, 2 for an unverified one, and 1 if it couldn't ask. `--no-critic` skips the critic's review; options it doesn't know go to the engine it starts.
+It exits 0 for a verified answer, 2 for an unverified one, and 1 if it couldn't ask. `--no-critic` skips the critic's review; options it doesn't know go to the engine it starts. Without `--source`, the database whose ontology covers the question best answers it, and the output names it.
 
 The engine's `--routes FILE` lays routes from a JSON file (`{"<task>": {"model", "effort"}}`) over the defaults. The eval runner starts its engine with one, to pin full model IDs.
 

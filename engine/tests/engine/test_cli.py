@@ -1,4 +1,4 @@
-"""`ontological ask` (BUILD_PLAN.md M1.8): what it prints, and the real command against
+"""`ontological ask` (BUILD_PLAN.md M1.8, M4.3): what it prints, and the real command against
 serve_stub.py, the real engine with a fake store whose answers are `fake_answers.py`'s. The engine
 starts headless, so its lease shows in logs/engine.log as `taken by ontological ask`."""
 
@@ -38,7 +38,21 @@ def test_render_prints_the_steps_the_sql_the_rows_and_the_verdict() -> None:
     assert f"SQL (validated)\n  {SQL}\n" in out
     assert "Rows (2)\n  Name          albums\n  Iron Maiden   21\n  Led Zeppelin  14\n" in out
     assert "Answer\n  Iron Maiden has the most albums" in out
-    assert lines[-2:] == ["Verified", "Model: claude-opus-5-5"]
+    assert lines[-3:] == ["Database: chinook", "Verified", "Model: claude-opus-5-5"]
+
+
+def test_render_marks_where_a_restart_began() -> None:
+    first, *rest = fake().steps
+    restarted = fake().model_copy(
+        update={
+            "steps": [first, *[s.model_copy(update={"session": 2}) for s in [first, *rest]]],
+            "restarted": "the session ended without SQL that passed validate_sql",
+        }
+    )
+    lines = render(restarted).splitlines()
+    assert lines[1].startswith("  1. plan ")
+    assert lines[2] == "  Restarted: the session ended without SQL that passed validate_sql"
+    assert lines[3].startswith("  2. plan ")
 
 
 def test_render_says_why_an_answer_is_unverified() -> None:
@@ -150,8 +164,17 @@ def test_no_engine_exits_1(app_data: Path, capsys: pytest.CaptureFixture[str]) -
     assert "ontological ask: no engine:" in capsys.readouterr().err
 
 
-def test_ask_needs_a_question_and_a_source(capsys: pytest.CaptureFixture[str]) -> None:
+def test_without_a_source_the_engine_chooses_the_database(
+    app_data: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert ask(app_data, "Who has the most albums?") == 0
+    out, err = capsys.readouterr()
+    assert "Asking the best-matching database…" in err
+    assert "Database: chinook" in out
+
+
+def test_ask_needs_a_question(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exited:
-        main(["ask", "q"])
+        main(["ask"])
     assert exited.value.code == 2
-    assert "--source" in capsys.readouterr().err
+    assert "question" in capsys.readouterr().err

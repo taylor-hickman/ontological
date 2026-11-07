@@ -128,6 +128,7 @@ class PgStore:
         self.claude_cli = claude_cli
         self.routes = routes
         self._shared_gateway: ClaudeGateway | None = None
+        self._answers: StoreAnswers | None = None
 
     def start(self) -> None:
         """Start or adopt the server, then bring both Alembic chains to their heads (a first
@@ -141,6 +142,8 @@ class PgStore:
         dal.connect(self.layout)
 
     def stop(self) -> None:
+        if self._answers is not None:
+            self._answers.close()
         if self._calls is not None:
             self._calls.close()
         dal.close()
@@ -178,8 +181,10 @@ class PgStore:
         return StoreOntology(embedder)
 
     def answers(self, embedder: LocalEmbedder | None) -> Answers:
-        """Questions, answered through the same gateway."""
-        return StoreAnswers(gateway=self._gateway(), embedder=embedder)
+        """Questions, answered through the same gateway, with one hybrid search for the engine's
+        lifetime."""
+        self._answers = StoreAnswers(gateway=self._gateway(), embedder=embedder)
+        return self._answers
 
     def interchange(self, jobs: JobsService) -> InterchangeService:
         """Model import and export; an import re-embeds what it wrote as `jobs`' re-embeds."""
