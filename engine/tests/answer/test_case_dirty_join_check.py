@@ -294,3 +294,56 @@ def test_an_unmodelled_join_whose_overlap_cant_be_measured_is_left_alone(
     )
 
     assert mismatches == []
+
+
+_ONE_HOP = FakeGraph(
+    {("track.GenreId", "album.AlbumId"): [hop("track.AlbumId", "album.AlbumId")]},
+    fk_columns={"album.AlbumId"},
+)
+_TWO_HOPS = FakeGraph(
+    {
+        ("track.GenreId", "album.AlbumId"): [
+            hop("track.GenreId", "genre.GenreId"),
+            hop("genre.GenreId", "album.GenreId"),
+        ]
+    },
+    fk_columns={"album.AlbumId"},
+)
+
+
+@pytest.mark.parametrize(
+    "executor",
+    [lambda: ProbeExecutor(None), _spent, lambda: ProbeExecutor(_FailingProber())],
+    ids=["no source", "budget spent", "probe fails"],
+)
+@pytest.mark.parametrize("graph", [_ONE_HOP, _TWO_HOPS], ids=["one hop", "two hops"])
+def test_a_join_off_the_graphs_path_whose_overlap_cant_be_measured_is_left_alone(
+    executor: Callable[[], ProbeExecutor], graph: FakeGraph
+) -> None:
+    """`find_join_path` returns one shortest route, so a second real FK between the same
+    tables is off it; only the overlap probe tells the two apart. A probe that didn't run
+    can't call the written join wrong."""
+    mismatches = find_join_path_mismatches(
+        executor(),
+        "duckdb",
+        "SELECT t.TrackId FROM album a JOIN track t ON t.GenreId = a.AlbumId",
+        graph,
+    )
+
+    assert mismatches == []
+
+
+@pytest.mark.parametrize(
+    ("graph", "verdict"), [(_ONE_HOP, "wrong_column"), (_TWO_HOPS, "missing_bridge")]
+)
+def test_a_join_off_the_graphs_path_whose_values_dont_overlap_is_flagged(
+    graph: FakeGraph, verdict: str
+) -> None:
+    mismatches = find_join_path_mismatches(
+        ProbeExecutor(DuckProber(*_TRACKS)),
+        "duckdb",
+        "SELECT t.TrackId FROM album a JOIN track t ON t.GenreId = a.AlbumId",
+        graph,
+    )
+
+    assert [m["verdict"] for m in mismatches] == [verdict]

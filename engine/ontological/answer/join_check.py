@@ -6,9 +6,9 @@
 # answer gate (ARCHITECTURE.md §8.2). The semantic-FK graph is read through a `JoinGraph` bound to
 # the question's database, in place of the DAL functions upstream calls with `database_name`
 # (`ontological.answer.ontology` implements it with those functions). Probes go through
-# `ontological.answer.probe`, and name a table with the schema the SQL gave it. A join with no
-# graph path whose overlap couldn't be measured is left alone, where upstream flags it
-# "unverified": check 4 is a hard check here, and upstream's is soft. The self-apply
+# `ontological.answer.probe`, and name a table with the schema the SQL gave it. A join whose
+# overlap probe couldn't run is left alone, where upstream flags it: check 4 is a hard check
+# here, and upstream's is soft (see `_overlap`). The self-apply
 # rewrites (`try_self_apply_wrong_column_fixes`, `try_self_apply_missing_bridge_fixes`) aren't
 # ported: the gate reports issues, and the model rewrites its own SQL.
 
@@ -251,7 +251,14 @@ def _overlap(
     b: tuple[exp.Table, str],
 ) -> float | None:
     """``_value_overlap`` of *a*'s values in *b*, or else of *b*'s in *a*; ``None`` when neither
-    probe could run."""
+    probe could run (the budget spent, no source, or both directions failed).
+
+    Every caller leaves the join alone on ``None``, where upstream flags it anyway. Upstream's
+    check is opt-in and soft; check 4 is hard, and the probe budget is shared by the question's
+    validations, so a spent budget would reject correct SQL on every attempt left. That holds
+    when the graph knows a path too: ``find_join_path`` returns one shortest route, so a second
+    real FK between the same tables (a prescribing and a reviewing clinician) is off it, and only
+    the overlap tells it apart from a fabricated join."""
     if not executor.budget_left:
         return None
     overlap = _value_overlap(executor, dialect, a[0], a[1], b[0], b[1])
@@ -351,7 +358,9 @@ def find_join_path_mismatches(
             # missing_bridge case above, so the same live check applies
             # before concluding it's fabricated.
             overlap = _overlap(executor, dialect, (node_a, left.name), (node_b, right.name))
-            if overlap is not None and overlap >= _OVERLAP_KEEP_THRESHOLD:
+            if overlap is None:
+                continue  # nothing measured; see _overlap
+            if overlap >= _OVERLAP_KEEP_THRESHOLD:
                 logger.info(
                     "join_path_check: graph knows a different column pair for "
                     "%s <-> %s, but live overlap %.2f >= threshold on the "
@@ -393,7 +402,9 @@ def find_join_path_mismatches(
             # join isn't torn out in favor of a technically-known but wrong
             # indirect route.
             overlap = _overlap(executor, dialect, (node_a, left.name), (node_b, right.name))
-            if overlap is not None and overlap >= _OVERLAP_KEEP_THRESHOLD:
+            if overlap is None:
+                continue  # nothing measured; see _overlap
+            if overlap >= _OVERLAP_KEEP_THRESHOLD:
                 logger.info(
                     "join_path_check: graph only knows an indirect path for "
                     "%s.%s = %s.%s, but live overlap %.2f >= threshold — "
@@ -483,11 +494,7 @@ def find_join_path_mismatches(
         # real relationship the graph never happened to model at all.
         overlap = _overlap(executor, dialect, (node_a, left.name), (node_b, right.name))
         if overlap is None:
-            # No probe ran (budget spent, no source, or both directions failed), so
-            # nothing was measured. Upstream flags the join anyway; here check 4 is hard and
-            # the probe budget is shared across the question's validations, so a probe that
-            # couldn't run must not become a rejection.
-            continue
+            continue  # nothing measured; see _overlap
         if overlap >= _OVERLAP_KEEP_THRESHOLD:
             logger.info(
                 "join_path_check: no graph edge for %s.%s = %s.%s, but live "
