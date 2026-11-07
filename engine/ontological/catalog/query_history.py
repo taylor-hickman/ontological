@@ -146,7 +146,8 @@ def ingest_query_history(
 
 
 def read_catalog_index(database_name: str) -> CatalogIndex:
-    """`database_name`'s schemas, tables and columns, names lower-cased, for the parse pool."""
+    """`database_name`'s schemas, tables and columns, names lower-cased, for the parse pool and
+    the answer gate, with each column's data type."""
     d, sc, t, c = s.catalog_database, s.catalog_schema, s.catalog_table, s.catalog_column
     found = store().query_read(select(d.c.id).where(d.c.name == database_name))
     if not found:
@@ -158,6 +159,7 @@ def read_catalog_index(database_name: str) -> CatalogIndex:
             t.c.name.label("table"),
             c.c.id.label("column_id"),
             c.c.name.label("column"),
+            c.c.data_type,
         )
         .select_from(sc.join(t, t.c.schema_id == sc.c.id).outerjoin(c, c.c.table_id == t.c.id))
         .where(sc.c.database_id == found[0]["id"])
@@ -172,6 +174,8 @@ def read_catalog_index(database_name: str) -> CatalogIndex:
         if r["column_id"] is not None:
             table.columns.setdefault(str(r["column"]).lower(), r["column_id"])
             table.spellings.setdefault(str(r["column"]).lower(), str(r["column"]))
+            if r["data_type"]:
+                table.types.setdefault(str(r["column"]).lower(), str(r["data_type"]))
     return CatalogIndex(schemas)
 
 

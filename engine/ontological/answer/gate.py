@@ -8,10 +8,11 @@
 # Ontological's: upstream runs only what its graph generated, and resolves names with
 # `parse_query_single`, which drops a table or column it can't find instead of naming it.
 # Upstream's vacuous GROUP BY check isn't ported: upstream ships it off
-# (`DETECT_VACUOUS_GROUP_BY`), because it misfires on incomplete key metadata.
+# (`DETECT_VACUOUS_GROUP_BY`), because it misfires on incomplete key metadata. Checks 4 to 6 are
+# upstream's probe checks, in `join_check.py`, `literal_check.py` and `json_check.py`.
 
-"""`validate_sql`'s gate, checks 1 to 3 (ARCHITECTURE.md §8.2). All deterministic; none probes
-the source.
+"""`validate_sql`'s gate (ARCHITECTURE.md §8.2). All deterministic. Checks 1 to 3 read only the
+SQL and the catalog; checks 4 to 6 probe the source, read-only.
 
 1. The SQL parses in the source's dialect (DuckDB for every v1 source, §5.5) as exactly one
    SELECT, UNION or WITH query. Anything else, DML, DDL, ATTACH, COPY, PRAGMA, INSTALL and LOAD
@@ -19,8 +20,20 @@ the source.
 2. Every table and column resolves against the database's catalog.
 3. No degenerate SQL (`SELECT NULL`, `WHERE 1=0`, `LIMIT 0`), and no many-side column selected
    raw under a GROUP BY.
+4. Every join between two tables is one the semantic-FK graph knows, or else one whose columns'
+   values overlap (`find_join_path_mismatches`). And no extra join condition rejects rows the
+   graph's join matches only because their casing or whitespace differs (the case-dirty join
+   check, `find_case_dirty_join_mismatches`).
+5. Every filter literal is a value the column holds, with no case variants it misses, and no
+   numeric threshold is off by a factor of 100 from the column's range (the literal check).
+6. Every JSON key a `->>` reads is one the column's objects hold, on a column that can hold JSON.
+7. Upstream's Postgres-only rules aren't applied to DuckDB SQL: no quoting of mixed-case
+   identifiers, which DuckDB matches in any case, and no rejection of `DISTINCT ON`, which DuckDB
+   runs. So check 7 is the absence of those rules.
 
-Checks 4 to 7 (join paths, literals, JSON paths, dialect rewrites) are M4.1's.
+The case-dirty join check and the literal check are soft: once the model has had five tries
+(`soft_as_warnings`), what they find is a warning and the SQL passes, as upstream lets its soft
+checks through after five failed attempts.
 """
 
 # sqlglot's expression tree is loosely typed.
@@ -31,7 +44,7 @@ Checks 4 to 7 (join paths, literals, JSON paths, dialect rewrites) are M4.1's.
 from __future__ import annotations
 
 import difflib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 import sqlglot
@@ -40,6 +53,8 @@ from sqlglot.errors import OptimizeError, ParseError, TokenError
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import Scope, traverse_scope
 
+from ontological.answer import join_check, json_check, literal_check
+from ontological.answer.probe import ProbeExecutor
 from ontological.catalog.parsers.catalog_index import CatalogIndex, TableEntry
 
 DIALECT = "duckdb"
@@ -63,16 +78,32 @@ class GateResult:
     issues: list[str]
     tables: list[str] = field(default_factory=list[str])  # schema.Table, as the catalog spells it
     columns: list[str] = field(default_factory=list[str])  # Table.Column
+    warnings: list[str] = field(default_factory=list[str])  # soft checks' findings, when passed
 
     @property
     def ok(self) -> bool:
         return not self.issues
 
 
+@dataclass(frozen=True)
+class Probing:
+    """What checks 4 to 6 need: the question's probes and its database's semantic-FK graph."""
+
+    probes: ProbeExecutor
+    graph: join_check.JoinGraph
+
+
 def check_sql(
-    sql: str, catalog: CatalogIndex, *, key_columns: KeyLookup, dialect: str = DIALECT
+    sql: str,
+    catalog: CatalogIndex,
+    *,
+    key_columns: KeyLookup,
+    dialect: str = DIALECT,
+    probing: Probing | None = None,
+    soft_as_warnings: bool = False,
 ) -> GateResult:
-    """Checks 1 to 3, in order. The first check that fails gives the issues."""
+    """The checks, in order. The first check that fails gives the issues; a soft check's findings
+    are warnings instead when `soft_as_warnings`. Without `probing`, checks 4 to 6 don't run."""
     statement = _one_query(sql, dialect)
     if isinstance(statement, str):
         return GateResult([statement])
@@ -85,7 +116,50 @@ def check_sql(
     ):
         if reason:
             return GateResult([reason], resolved.tables, resolved.columns)
-    return resolved
+    if probing is None:
+        return resolved
+
+    warnings: list[str] = []
+    for hard, soft in _probed(sql, catalog, dialect, probing):
+        if soft and soft_as_warnings:
+            warnings.append(soft)
+            soft = ""
+        if hard or soft:
+            return GateResult([i for i in (hard, soft) if i], resolved.tables, resolved.columns)
+    return GateResult([], resolved.tables, resolved.columns, warnings)
+
+
+def _probed(sql: str, catalog: CatalogIndex, dialect: str, probing: Probing) -> Iterator[Issues]:
+    """Checks 4 to 6, each as (hard issue, soft issue), either one empty, run one at a time so a
+    check that fails leaves the later ones' probes unspent."""
+    probes, graph = probing.probes, probing.graph
+
+    joins = join_check.find_join_path_mismatches(probes, dialect, sql, graph)
+    dirty = join_check.find_case_dirty_join_mismatches(probes, dialect, sql, graph)
+    yield (
+        join_check.build_join_path_repair_error(joins) if joins else "",
+        join_check.build_case_dirty_join_repair_error(dirty) if dirty else "",
+    )
+
+    literals = literal_check.find_literal_mismatches(probes, dialect, sql)
+    literals += literal_check.find_numeric_scale_mismatches(probes, dialect, sql)
+    yield "", literal_check.build_value_repair_error(literals) if literals else ""
+
+    paths = json_check.find_json_path_mismatches(probes, dialect, sql, _known_types(catalog))
+    yield json_check.build_json_path_repair_error(paths) if paths else "", ""
+
+
+Issues = tuple[str, str]
+
+
+def _known_types(catalog: CatalogIndex) -> dict[tuple[str, str], str]:
+    """`{(table, column): data type}`, lower-cased, over every schema."""
+    return {
+        (name, column): data_type
+        for schema in catalog.schemas.values()
+        for name, table in schema.tables.items()
+        for column, data_type in table.types.items()
+    }
 
 
 # --- check 1 ---------------------------------------------------------------------------------
