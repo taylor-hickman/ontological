@@ -1,4 +1,4 @@
-import type { RefObject } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import type { ScreenId } from '@shared/shell'
 import { shortcut } from '../shortcut'
 import { PlusIcon, SearchIcon } from './icons'
@@ -8,17 +8,20 @@ interface HeaderProps {
   screen: ScreenId
   searchRef: RefObject<HTMLInputElement | null>
   onAddSource(): void
+  /** The screen's own controls after the title, such as Ontology's layer switch and path picker. */
+  tools?: ReactNode
 }
 
 /** DESIGN.md §3.3: breadcrumb and title on the left, search and the screen's one primary action on the right. */
-export function Header({ title, screen, searchRef, onAddSource }: HeaderProps) {
+export function Header({ title, screen, searchRef, onAddSource, tools }: HeaderProps) {
   return (
     <header
       className="drag flex min-h-[52px] shrink-0 flex-wrap items-center gap-3 border-b border-border bg-bg px-5 py-2"
       data-testid="header"
     >
-      <div className="flex min-w-0 flex-[1_1_240px] items-baseline gap-2">
+      <div className={`flex min-w-0 items-center gap-3 ${tools ? 'flex-[1_1_auto] flex-wrap' : 'flex-[1_1_240px]'}`}>
         <h1 className="m-0 text-sm font-semibold">{title}</h1>
+        {tools}
       </div>
       {screen !== 'settings' && (
         <label className="no-drag flex min-h-8 min-w-[280px] items-center gap-2 rounded-lg border border-border bg-surface px-2.5 text-text-muted focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
