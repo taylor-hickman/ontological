@@ -11,8 +11,9 @@ its bulk batch cap (§7.1; with no model directory it runs without one), serves 
 127.0.0.1 at a random port with a new bearer token, writes engine.json and releases the lock. It
 prints one JSON line when it serves or attaches, `{"pid", "port", "version", "started"}`, or
 `{"error"}` and exits 1. Once it serves, it re-ingests the metadata of every source last ingested
-over a day ago, in the background (§9.1, `jobs/staleness.py`), and resumes the compiles an earlier
-engine left running or paused (`jobs/service.py`), through its one Claude gateway.
+over a day ago, in the background (§9.1, `jobs/staleness.py`), resumes the compiles an earlier
+engine left running or paused (`jobs/service.py`), through its one Claude gateway, and starts a
+`reembed` job for each database with vectors from a model other than its embedder's (§7.1).
 
 It exits 0 after `--idle-timeout` seconds (600) with no live lease, no request in flight and no
 running job, or on SIGTERM or SIGINT. Either way it removes engine.json, writes the quit dump
@@ -61,7 +62,7 @@ from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
 from ontological.interchange.store import InterchangeService, StoreInterchange
 from ontological.jobs import store as job_store
 from ontological.jobs.active import ActiveJobs
-from ontological.jobs.service import Jobs, JobsService, auto_compile_from
+from ontological.jobs.service import Jobs, JobsService, NoEmbedder, auto_compile_from
 from ontological.jobs.staleness import StalenessCheck
 from ontological.llm.calls import PgCallLog
 from ontological.llm.env import sanitize_environ
@@ -418,6 +419,12 @@ async def _serve(
     staleness.start()
     try:
         await service.resume_unfinished()
+        try:
+            await service.reembed_stale()
+        except NoEmbedder:
+            pass  # start_embedder said so
+        except Exception:
+            log.exception("looking for vectors from another model failed")
         tick = min(1.0, config.idle_timeout_s / 4, config.renew_every_s)
         while not task.done():
             if lifetime.should_exit():

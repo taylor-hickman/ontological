@@ -37,7 +37,7 @@ export function ScreenBody({ screen, frame, theme, jobs, onThemeChange, catalog,
         <EngineBanner />
       )}
       {screen === 'settings' ? (
-        <Settings theme={theme} onThemeChange={onThemeChange} />
+        <Settings theme={theme} onThemeChange={onThemeChange} onOpenJobs={onOpenJobs} />
       ) : screen === 'catalog' ? (
         <Catalog {...catalog} />
       ) : screen === 'ontology' ? (
