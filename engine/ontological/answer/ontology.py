@@ -44,10 +44,9 @@ SEARCH_K = 8  # hits per kind
 _LABELS = {"attribute": LABEL_COLUMN_ATTRIBUTE, "term": LABEL_TERM}
 
 
-class StoreOntology:
-    def __init__(self, vdb: PostgresVDB, search: Search = dense_search) -> None:
-        self.vdb = vdb
-        self._search = search
+class StoreCatalog:
+    """What the gate reads (`ontological.answer.sql_checks.GateReads`): a database's catalog, its
+    tables' key columns and its semantic-FK graph. No search, so no VDB."""
 
     def catalog(self, database: str) -> CatalogIndex:
         return read_catalog_index(database)
@@ -57,6 +56,12 @@ class StoreOntology:
 
     def join_graph(self, database: str) -> StoreJoinGraph:
         return StoreJoinGraph(database)
+
+
+class StoreOntology(StoreCatalog):
+    def __init__(self, vdb: PostgresVDB, search: Search = dense_search) -> None:
+        self.vdb = vdb
+        self._search = search
 
     def search(self, database: str, query: str, kinds: Sequence[str]) -> list[dict[str, Any]]:
         """The nearest attributes and Terms, nearest first across kinds."""

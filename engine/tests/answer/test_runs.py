@@ -20,8 +20,11 @@ from ontological.answer.service import (
     NoEmbedder,
     NoSource,
     NothingFound,
+    RanSql,
     SaidStep,
     SqlPassed,
+    TermHit,
+    Validated,
 )
 
 SQL = "SELECT COUNT(*) FROM Album"
@@ -66,6 +69,19 @@ class Scripted:
         raise AssertionError("runs stream")
 
     async def check(self, question: str, database: str | None = None) -> Answerability:
+        raise AssertionError("runs stream")
+
+    async def search_terms(
+        self, query: str, database: str | None = None, limit: int = 10
+    ) -> list[TermHit]:
+        raise AssertionError("runs stream")
+
+    async def validate_sql(
+        self, sql: str, database: str, *, soft_as_warnings: bool = False
+    ) -> Validated:
+        raise AssertionError("runs stream")
+
+    async def run_sql(self, validation_id: str) -> RanSql:
         raise AssertionError("runs stream")
 
 

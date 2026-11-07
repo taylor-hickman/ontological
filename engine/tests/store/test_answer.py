@@ -35,7 +35,14 @@ from auto_ontology.vdb.postgres import PostgresVDB
 from ontological.answer.gate import Probing, check_sql
 from ontological.answer.ontology import StoreOntology
 from ontological.answer.probe import ProbeExecutor
-from ontological.answer.service import Asked, StoreAnswers
+from ontological.answer.service import (
+    Asked,
+    NoSource,
+    RanSql,
+    StoreAnswers,
+    TermHit,
+    Validated,
+)
 from ontological.compile.split import Compiled
 from ontological.embed.embedder import LocalEmbedder
 from ontological.embed.search import semantic_vdb
@@ -296,3 +303,36 @@ def test_without_a_database_the_question_is_answered_from_the_one_that_covers_it
     assert plan.data["database"] == "chinook" and plan.data["attribute_ids"]
     assert "Candidates for the plan's entities" in plan.text
     assert "## The counting template" in plan.text
+
+
+def test_the_shims_gate_and_term_search_read_chinook(
+    ontology: StoreOntology, embedder: LocalEmbedder, tmp_path: Path
+) -> None:
+    # M6.2: validate_sql and run_validated_sql with no session, and search_terms; no Claude
+    _, gateway = scripted(tmp_path)
+    answers = StoreAnswers(gateway=gateway, embedder=embedder)
+
+    async def go() -> tuple[Validated, Validated, RanSql, RanSql, list[TermHit]]:
+        bad = await answers.validate_sql("SELECT COUNT(*) FROM Albums", "chinook")
+        good = await answers.validate_sql(SQL, "chinook")
+        assert good.validation_id is not None
+        ran = await answers.run_sql(good.validation_id)
+        # 275 names: more than the gate judges, so 'ac/dc' passes and comes back empty
+        near_miss = await answers.validate_sql(SQL.replace("'AC/DC'", "'ac/dc'"), "chinook")
+        assert near_miss.validation_id is not None, near_miss.issues
+        empty = await answers.run_sql(near_miss.validation_id)
+        return bad, good, ran, empty, await answers.search_terms("artist", "chinook")
+
+    try:
+        bad, good, ran, empty, terms = asyncio.run(go())
+        with pytest.raises(NoSource):
+            asyncio.run(answers.validate_sql(SQL, "garden"))
+    finally:
+        answers.close()
+
+    assert not bad.ok and bad.validation_id is None and "Albums" in bad.issues[0]
+    assert good.ok and {"main.Artist", "main.Album"} <= set(good.tables)
+    assert (ran.outcome, ran.columns, ran.rows) == ("rows", ["Name", "albums"], [["AC/DC", 2]])
+    assert empty.outcome == "empty" and "AC/DC" in empty.repairs
+    assert empty.note is not None and "no rows" in empty.note
+    assert terms and terms[0].name == "Artist" and {t.database for t in terms} == {"chinook"}

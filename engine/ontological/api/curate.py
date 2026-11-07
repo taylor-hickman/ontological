@@ -7,6 +7,9 @@
     GET   /terms/{id}                         one Term with its attributes and history
     PATCH /terms/{id}                         edit, rename or certify it; re-embeds what changed
     POST  /edits/{id}/undo                    put back what an edit changed, as a new edit
+    GET   /sql-attributes/{id}                one SQL attribute: its SQL, Term and tables
+    GET   /tables/{id}/semantics              the Terms that represent a table, and the SQL
+                                              attributes whose SQL reads it
 
 None of them use Claude. An engine with no store answers 503.
 """
@@ -18,7 +21,16 @@ from typing import Annotated
 from fastapi import FastAPI, HTTPException, Query
 
 from ontological.curate import edits
-from ontological.curate.ontology import Glossary, Graph, JoinPath, Layer, NotFound, TermDetail
+from ontological.curate.ontology import (
+    Glossary,
+    Graph,
+    JoinPath,
+    Layer,
+    NotFound,
+    SqlAttributeDetail,
+    TableSemantics,
+    TermDetail,
+)
 from ontological.curate.service import OntologyService, Saved, TermChanges
 
 
@@ -55,6 +67,20 @@ def add_curate_routes(app: FastAPI, *, ontology: OntologyService | None) -> None
     async def term(term_id: str) -> TermDetail:  # pyright: ignore[reportUnusedFunction]
         try:
             return await need().term(term_id)
+        except NotFound as e:
+            raise HTTPException(404, str(e)) from None
+
+    @app.get("/sql-attributes/{attr_id}")
+    async def sql_attribute(attr_id: str) -> SqlAttributeDetail:  # pyright: ignore[reportUnusedFunction]
+        try:
+            return await need().sql_attribute(attr_id)
+        except NotFound as e:
+            raise HTTPException(404, str(e)) from None
+
+    @app.get("/tables/{table_id}/semantics")
+    async def table_semantics(table_id: str) -> TableSemantics:  # pyright: ignore[reportUnusedFunction]
+        try:
+            return await need().table_semantics(table_id)
         except NotFound as e:
             raise HTTPException(404, str(e)) from None
 

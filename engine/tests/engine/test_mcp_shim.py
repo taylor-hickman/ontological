@@ -225,6 +225,29 @@ def test_a_closing_engine_is_outlasted_and_the_shim_starts_another(app_data: Pat
     assert alive(new.pid)
 
 
+def test_tools_are_listed_and_called_over_stdio(app_data: Path) -> None:
+    # The stub engine answers from fake_answers.py: Artist and Album in Chinook
+    shim = Shim(app_data, *FAST)
+    shim.initialize()
+    shim.send({"id": 2, "method": "tools/list"})
+    listed = shim.receive(30)["result"]["tools"]
+    assert len(listed) == 11
+    assert {"ask_question", "validate_sql", "run_validated_sql"} <= {t["name"] for t in listed}
+
+    shim.send(
+        {
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "search_terms", "arguments": {"query": "musicians"}},
+        }
+    )
+    reply = shim.receive(60)["result"]  # waits for the engine to start and serve
+    assert reply["isError"] is False
+    assert [t["name"] for t in reply["structuredContent"]["terms"]] == ["Artist", "Album"]
+    assert shim.close() == 0
+    assert leases_released(app_data) == 1
+
+
 # --- the link itself, which tool calls wait on --------------------------------------------------
 
 
