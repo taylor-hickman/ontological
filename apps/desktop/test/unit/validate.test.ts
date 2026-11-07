@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { parseContextMenuItems, parseFileFilters, parseFileName, parseNotification } from '../../src/main/validate'
+import {
+  MAX_SAVE_BYTES,
+  parseContextMenuItems,
+  parseFileData,
+  parseFileFilters,
+  parseFileName,
+  parseNotification
+} from '../../src/main/validate'
 
 describe('parseFileFilters', () => {
   it('accepts well-formed filters and copies them', () => {
@@ -28,6 +35,26 @@ describe('parseFileName', () => {
 
   it.each(['../answer.csv', 'dir/answer.csv', 'C:\\answer.csv', '..', '', 42])('rejects %j', (name) => {
     expect(() => parseFileName(name)).toThrow(TypeError)
+  })
+})
+
+describe('parseFileData', () => {
+  it('accepts bytes', () => {
+    const bytes = new TextEncoder().encode('databases: []\n')
+    expect(parseFileData(bytes)).toBe(bytes)
+  })
+
+  it.each([
+    ['a string', 'databases: []'],
+    ['an array of numbers', [100, 98]],
+    ['an ArrayBuffer', new ArrayBuffer(4)],
+    ['nothing', undefined]
+  ])('rejects %s', (_label, data) => {
+    expect(() => parseFileData(data)).toThrow('data must be bytes')
+  })
+
+  it('rejects more than the limit', () => {
+    expect(() => parseFileData(new Uint8Array(MAX_SAVE_BYTES + 1))).toThrow('at most')
   })
 })
 

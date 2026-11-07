@@ -239,3 +239,34 @@ export interface JoinPath {
   hops: PathHop[]
   tables: string[]
 }
+
+// Model import and export (engine/ontological/api/interchange.py, interchange/store.py).
+
+/** `auto_ontology` is the native YAML; `ossie` is Apache Ossie. */
+export type ModelFormat = 'auto_ontology' | 'ossie'
+
+export interface ExportRequest {
+  /** Database names, a source's `name`; empty exports every one. */
+  databases: string[]
+  format: ModelFormat
+  /** Ossie only: a zip of the semantic model, the ontology and the mapping. */
+  include_ontology: boolean
+}
+
+/** What an import wrote, by kind: databases, schemas, tables, columns, terms, column_attributes, sql_attributes, custom_analyses. */
+export interface ImportSummary {
+  created: Record<string, number>
+  /** Already in the store, so adopted as they are. */
+  skipped: Record<string, number>
+  replace: boolean
+  /** The format the file was read as. */
+  format: ModelFormat
+}
+
+export interface Imported {
+  summary: ImportSummary
+  /** The databases whose re-embed job started. */
+  reembedding: string[]
+  /** Why none started, such as an engine with no embedding model. */
+  reembed_error: string | null
+}

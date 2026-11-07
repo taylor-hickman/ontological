@@ -73,10 +73,14 @@ describe('buildMenuTemplate', () => {
     expect(actions.setTheme).toHaveBeenCalledWith('light')
   })
 
-  it('lists Import and Export disabled until they exist', () => {
-    const { byId } = build()
-    for (const id of ['import', 'export']) expect(byId(id).enabled, id).toBe(false)
-    expect(byId('add-source').enabled).not.toBe(false)
+  it('sends Import and Export to Settings → Import/Export', () => {
+    const { actions, byId } = build()
+    for (const id of ['import', 'export']) {
+      expect(byId(id).enabled, id).not.toBe(false)
+      ;(byId(id).click as () => void)()
+    }
+    expect(actions.send).toHaveBeenCalledWith({ type: 'interchange', action: 'import' })
+    expect(actions.send).toHaveBeenCalledWith({ type: 'interchange', action: 'export' })
   })
 
   it('keeps macOS-only roles off other platforms', () => {

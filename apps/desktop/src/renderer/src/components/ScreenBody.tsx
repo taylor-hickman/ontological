@@ -1,5 +1,6 @@
 import type { ScreenId, ThemeSource } from '@shared/shell'
 import type { ComponentProps } from 'react'
+import type { InterchangeRequest } from '../interchange/ImportExport'
 import { JobsMain, type JobsScreenState } from '../jobs/JobsScreen'
 import type { ScreenFrame } from '../screens'
 import { OntologyMain } from '../ontology/OntologyScreen'
@@ -19,10 +20,24 @@ interface ScreenBodyProps {
   ontology: OntologyState
   onAddSource(): void
   onOpenJobs(): void
+  interchange: InterchangeRequest | null
+  onInterchangeHandled(): void
 }
 
 /** The main column. Until a screen is built, it is an empty frame that says what will go here. */
-export function ScreenBody({ screen, frame, theme, jobs, onThemeChange, catalog, ontology, onAddSource, onOpenJobs }: ScreenBodyProps) {
+export function ScreenBody({
+  screen,
+  frame,
+  theme,
+  jobs,
+  onThemeChange,
+  catalog,
+  ontology,
+  onAddSource,
+  onOpenJobs,
+  interchange,
+  onInterchangeHandled
+}: ScreenBodyProps) {
   return (
     <section
       aria-label={frame.main}
@@ -37,7 +52,15 @@ export function ScreenBody({ screen, frame, theme, jobs, onThemeChange, catalog,
         <EngineBanner />
       )}
       {screen === 'settings' ? (
-        <Settings theme={theme} onThemeChange={onThemeChange} onOpenJobs={onOpenJobs} />
+        <Settings
+          theme={theme}
+          onThemeChange={onThemeChange}
+          onOpenJobs={onOpenJobs}
+          sources={catalog.sources}
+          jobs={jobs.jobs}
+          interchange={interchange}
+          onInterchangeHandled={onInterchangeHandled}
+        />
       ) : screen === 'catalog' ? (
         <Catalog {...catalog} />
       ) : screen === 'ontology' ? (
