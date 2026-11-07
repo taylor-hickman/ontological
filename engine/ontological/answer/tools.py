@@ -16,6 +16,11 @@ missing step, when a step it needs hasn't happened:
 `ProbeExecutor` for the session, so the question's probes share upstream's cap. After
 `SOFT_CHECKS_UNTIL` calls, the gate's soft checks warn instead of failing the SQL.
 
+`run_sql`'s result has an `outcome`: `rows`, or `empty` when the SQL returned none. An empty
+result isn't an error, since it can be the answer, but the model is told to recheck its filters
+and literals first, with the fixes the literal check finds once the query has come back empty.
+Those probes count against the same cap as the gate's.
+
 A result's `data` is the tool's record of what it did, for the post-run check
 (`ontological.answer.postcheck`); the gateway keeps it from the model, which reads the text.
 
@@ -36,7 +41,8 @@ from typing import Any, Protocol
 
 from claude_agent_sdk import SdkMcpTool
 
-from ontological.answer.gate import GateResult, KeyColumns, Probing, check_sql
+from ontological.answer import literal_check
+from ontological.answer.gate import DIALECT, GateResult, KeyColumns, Probing, check_sql
 from ontological.answer.join_check import JoinGraph
 from ontological.answer.models import CALC_SUBTYPES, Review
 from ontological.answer.probe import ProbeExecutor
@@ -249,8 +255,9 @@ class AnswerTools:
                 f"The source couldn't run the SQL: {e}. Fix the SQL, then validate it again.",
                 {"ok": False, "validation_id": validation_id, "error": str(e)},
             )
-        ran = {
+        ran: dict[str, Any] = {
             "validation_id": validation_id,
+            "outcome": "rows" if rows.rows else "empty",
             "columns": rows.columns,
             "types": rows.types,
             "rows": [[_cell(v) for v in row] for row in rows.rows],
@@ -258,7 +265,10 @@ class AnswerTools:
             "truncated": rows.truncated,
         }
         self._state.runs[validation_id] = ran
-        return _ok(ran)
+        if rows.rows:
+            return _ok(ran)
+        ran["repairs"] = await asyncio.to_thread(self._repairs, validation.sql)
+        return {"content": [_text(_empty_message(ran))], "data": ran}
 
     async def review_answer(self, args: dict[str, Any]) -> ToolResult:
         if refused := self._needs_plan():
@@ -318,17 +328,31 @@ class AnswerTools:
     def _gate(self, sql: str, soft_as_warnings: bool) -> GateResult:
         if self._catalog is None:
             self._catalog = self.ontology.catalog(self.database)
-        if self._probing is None:
-            self._probing = Probing(
-                ProbeExecutor(self.runner), self.ontology.join_graph(self.database)
-            )
         return check_sql(
             sql,
             self._catalog,
             key_columns=lambda table: self.ontology.key_columns(self.database, table),
-            probing=self._probing,
+            probing=self._session_probing(),
             soft_as_warnings=soft_as_warnings,
         )
+
+    def _session_probing(self) -> Probing:
+        """The question's probes, shared by the gate and empty-result handling, so all of them
+        count against one `MAX_PROBES`."""
+        if self._probing is None:
+            self._probing = Probing(
+                ProbeExecutor(self.runner), self.ontology.join_graph(self.database)
+            )
+        return self._probing
+
+    def _repairs(self, sql: str) -> str:
+        """Fixes the literal check finds for SQL that returned no rows. The query is empty, so
+        literals on columns with more than `LOW_CARD_THRESHOLD` values, which the gate leaves
+        alone, are probed for case and whitespace variants too."""
+        probes = self._session_probing().probes
+        found = literal_check.find_literal_mismatches(probes, DIALECT, sql, result_was_empty=True)
+        found += literal_check.find_numeric_scale_mismatches(probes, DIALECT, sql)
+        return literal_check.build_value_repair_error(found) if found else ""
 
 
 def _ok(data: dict[str, Any]) -> ToolResult:
@@ -343,6 +367,26 @@ def _failed(message: str, data: dict[str, Any]) -> ToolResult:
 def _refuse(message: str) -> ToolResult:
     """A step this one needs hasn't happened."""
     return {"content": [_text(f"Refused: {message}")], "is_error": True, "data": {}}
+
+
+def _empty_message(ran: dict[str, Any]) -> str:
+    validation_id = ran["validation_id"]
+    head = (
+        f"run_sql ran {validation_id} and it returned no rows (columns: "
+        f"{', '.join(ran['columns'])}). An empty result can be the answer, but more often a "
+        "filter or a literal is wrong. Before you answer, recheck each filter and literal "
+        "against the question and the values the source holds."
+    )
+    if ran["repairs"]:
+        return (
+            f"{head}\n\n{ran['repairs']}\n\nIf a fix above matches the question, make it, call "
+            "validate_sql with the new SQL and run that. If none does, the empty result can be "
+            f"the answer: answer with {validation_id}."
+        )
+    return (
+        f"{head} Probing the filters' literals found no near-miss. If the filters are right, "
+        f"the empty result can be the answer: answer with {validation_id}."
+    )
 
 
 def _text(text: str) -> dict[str, str]:
@@ -417,7 +461,10 @@ VALIDATE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-RUN_DOC = "Run SQL that passed validate_sql, by its validation_id. Returns the columns and rows."
+RUN_DOC = (
+    "Run SQL that passed validate_sql, by its validation_id. Returns the columns and rows, or, "
+    "when the SQL returns no rows, says so with any fixes its filters' literals need."
+)
 RUN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"validation_id": {"type": "string"}},
