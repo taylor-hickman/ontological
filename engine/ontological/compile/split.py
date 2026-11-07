@@ -9,7 +9,8 @@
 # stored their samples, where upstream reads them before, so its prompt has samples on a first
 # compile. The Terms and attributes are embedded once the compile ends or stops, not as each
 # table commits (ontological/embed/semantic.py), and before the semantic FKs, whose candidates
-# are searched from those vectors; again after the post-stages, for their SQL attributes. The
+# are searched from those vectors; again after the post-stages, for their SQL attributes. Each time
+# the data layer, which upstream embeds only at ingest, is embedded again if its texts changed. The
 # post-stages that make Claude calls (semantic FKs, SQL attributes, bridges, PII) pause and retry
 # on a rate limit as the packs do.
 
@@ -35,7 +36,8 @@ instead (`compile.merged`), cleaned up as each stage cleans up its own; a table 
 suit, or whose answer is invalid, takes the split stages.
 
 Then, given an embedder, the Terms' and attributes' vectors in the semantic layer
-(`ontological.embed.semantic`), for retrieval, and the post-stages, for the whole database:
+(`ontological.embed.semantic`), for retrieval, and the data layer's again, whose texts now carry
+the descriptions (`ontological.catalog.data_layer`); then the post-stages, for the whole database:
 
 7. semantic FKs (`compile.semantic_fk`): the declared foreign keys, and, given the embedder and
    a job that planned tables, the rest inferred from those vectors 25 columns to a call and
@@ -86,6 +88,7 @@ from auto_ontology.dal.datasources import (
 )
 from auto_ontology.dal.session import store, write_transaction
 from auto_ontology.dal.terms import upsert_table_term
+from ontological.catalog.data_layer import refresh_data_layer
 from ontological.catalog.parse_pool import ParsePool
 from ontological.compile.bridges import Bridges, build_bridge_sql_attributes
 from ontological.compile.descriptions import DescriptionsRequest, column_attribute_specs_pack
@@ -446,17 +449,21 @@ async def _stopped(
 async def _embed(
     database_name: str, embedder: LocalEmbedder | None, synced: Synced | None = None
 ) -> Synced | None:
-    """Sync the database's vectors. Given the compile's earlier sync, `synced`, returns the two
-    as one, so a compile reports one sync whichever stage it ended at."""
+    """Sync the database's vectors in the semantic layer, and embed its data layer again if the
+    compile changed its texts, such as with the descriptions it wrote. Given the compile's earlier
+    sync, `synced`, returns the two as one, so a compile reports one sync whichever stage it ended
+    at."""
     if embedder is None:
         return None
 
     def sync() -> Synced:
         vdb = semantic_vdb(embedder)
         try:
-            return sync_database(vdb, database_name)
+            synced = sync_database(vdb, database_name)
         finally:
             vdb.close()
+        refresh_data_layer(database_name, embedder)
+        return synced
 
     later = await asyncio.to_thread(sync)
     return later if synced is None else synced.then(later)

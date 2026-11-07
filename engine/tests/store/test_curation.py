@@ -21,6 +21,7 @@ from fakes import HashEmbeddings, ScriptedGateway
 from test_compile import claude
 
 from auto_ontology.vdb.postgres import PostgresVDB
+from ontological.catalog.data_layer import data_layer_rows
 from ontological.catalog.ingest import ingest
 from ontological.compile.split import compile_database
 from ontological.curate import edits
@@ -382,6 +383,23 @@ def test_undoing_an_undo_makes_the_edit_again(curated: Curated) -> None:
 def jobs(lay: pg.Layout) -> list[str]:
     out = one(lay, "SELECT kind || ' ' || database_name || ' ' || state FROM ops.job ORDER BY id")
     return out.splitlines() if out else []
+
+
+def test_a_compile_leaves_the_data_layer_current(curated: Curated) -> None:
+    # Ingest embedded the data layer before compile wrote its descriptions
+    lay = curated.store
+    stored = one(
+        lay,
+        "SELECT string_agg(content, E'\\n' ORDER BY content) FROM vdb.data_objects_layer "
+        "WHERE database_name = 'chinook'",
+    )
+    assert stored.splitlines() == sorted(row["text"] for row in data_layer_rows("chinook"))
+    assert (
+        "database_name: chinook, schema_name: main, table_name: Invoice, column_name: "
+        "BillingCountry, data_type: VARCHAR, column_description: About BillingCountry., "
+        "sample_values: USA, Canada, France, Brazil, Germany"
+    ) in stored.splitlines()
+    assert reembed.reembed_database("chinook", curated.embedder).data_layer == 0
 
 
 def test_a_model_change_re_embeds_both_layers_as_a_tracked_job(curated: Curated) -> None:
