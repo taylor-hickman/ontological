@@ -288,10 +288,31 @@ def forge_pid(lay: pg.Layout, pid: int) -> None:
         f.write_text("\n".join(lines) + "\n")
 
 
+@pytest.fixture(scope="session")
+def migrated_pgdata(bin17: Path) -> Iterator[Path]:
+    """A stopped pgdata/ after first launch (initdb, extensions, both Alembic chains), made once
+    per session. First launch costs about 1.5 s; copying its result costs a few milliseconds."""
+    root = Path(tempfile.mkdtemp(prefix="pg-", dir="/tmp"))
+    lay = pg.Layout(root / "template" / "App Support" / "Ontological", bin17)
+    try:
+        pg.ensure_running(lay)
+        pg.stop(lay, quit_dump=False)
+        yield lay.pgdata
+    finally:
+        stop_servers(lay.app_data)
+        shutil.rmtree(root, ignore_errors=True)
+
+
 @pytest.fixture
-def store(apps: Apps, monkeypatch: pytest.MonkeyPatch) -> Iterator[pg.Layout]:
-    """A migrated store with the DAL connected to it. The variables are restored afterwards."""
+def store(
+    apps: Apps, migrated_pgdata: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[pg.Layout]:
+    """A migrated store with the DAL connected to it. The variables are restored afterwards.
+    pgdata/ is a copy of `migrated_pgdata`, so ensure_running starts it instead of running
+    first launch."""
     lay = apps.layout("dal")
+    lay.app_data.mkdir(parents=True)
+    shutil.copytree(migrated_pgdata, lay.pgdata, symlinks=True)
     pg.ensure_running(lay)
     monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
     for name, value in dal.environ(lay).items():
