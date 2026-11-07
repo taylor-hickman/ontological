@@ -2,7 +2,7 @@
 
 This file turns [ARCHITECTURE.md §12](ARCHITECTURE.md#12-build-plan-and-verification) into ordered work. §12 owns the milestone list, each milestone's scope and its "done when" criteria. This file owns the order: spikes, tasks, dependencies, and what each milestone hands to the next. If the two disagree, fix whichever is wrong in the same commit.
 
-Task IDs (`S3`, `E2`, `M1.4`) are stable, so commits and issues can refer to them. `after:` lists the tasks that must finish first. **TDD** marks work that is written test-first (see [Test-first work](#test-first-work)).
+Task IDs (`S3`, `M1.4`, `M3.10`) are stable, so commits and issues can refer to them. `after:` lists the tasks that must finish first. **TDD** marks work that is written test-first (see [Test-first work](#test-first-work)).
 
 ## How the order was chosen
 
@@ -42,7 +42,7 @@ Spikes run in M0, mostly in parallel. Each one leaves behind code that stays (a 
 |---|---|---|---|---|
 | **S1** | Does the Agent SDK do what the gated agent needs? | With `claude-agent-sdk` (≥ 0.2.178) and the installed Claude Code (2.1.318): an SDK MCP `@tool` that returns an error the model must read and recover from; `output_format` with a JSON schema in the same session as tools; the `init` message's `model`; `ResultMessage.model_usage`; `RateLimitEvent` parsing; `permission_mode` deny-by-default with `allowed_tools`; `setting_sources=[]`; `tools=[]`; `fallback_model`. Run once from a normal shell and once from an environment copied from inside a Claude Code session (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, …), as the MCP shim's engine would inherit | Everything works: keep §8.1 as written. `output_format` can't be combined with tools: the final answer becomes a `submit_answer` tool whose arguments are `AnswerModel`, and the post-run check reads it from the tool log. A nested run misbehaves: extend the §6.2 strip list until it doesn't | M0.6, M1.7 |
 | **S2** | How long does a spawn take? | Time `query()` for a one-line structured call, 20 times each on `haiku`, `sonnet` and `opus`, cold and back to back | p50 above 1.5 s: add a warm pool of single-use pre-spawned clients to the gateway (§6.4) in M1. Either way, the measured number replaces the guess in §6.5's compile-time estimate | M0.6, M3.10 |
-| **S3** | What does one question cost? | After the M1 slice works: 10 smoke questions on the real routes and 10 with the agent on Sonnet. Record the change in `RateLimitEvent.utilization` and the per-model tokens from `model_usage` | Replaces the estimates in [Usage](#usage). If a full dev run on the real routes would use more than about a fifth of a usage window, shrink the dev set before M4 | M1.10, E5 |
+| **S3** | What does one question cost? | After the M1 slice works: 10 smoke questions on the real routes and 10 with the agent on Sonnet. Record the change in `RateLimitEvent.utilization` and the per-model tokens from `model_usage` | Replaces the estimates in [Usage](#usage). If a full dev run on the real routes would use more than about a fifth of a usage window, shrink the dev set before M4 | M1.10, [Usage](#usage) |
 | **S4** | How big are trimmed Postgres 17 + pgvector binaries, and can CI build and sign them? | A CI job that builds PostgreSQL 17 from source with a minimal `configure` (no ICU, which locale `C` doesn't need), builds pgvector against it, keeps the §10 file list and measures it. Compare with `@embedded-postgres/darwin-arm64` (337 MB unpacked). Sign with the hardened runtime and confirm that `postgres` can still fork its backends and load `vector.dylib` | A size number goes into §10. If the hardened runtime blocks forking or library loading, find the entitlements that fix it now, not in M7. Notarization needs the user's Apple Developer account; until it exists, test with ad-hoc signing and the same entitlements | M0.3, M7 |
 | **S5** | Does the lifecycle in §5.3 work? | A prototype `store/pg.py` against the S4 binaries: first launch, normal stop, `kill -9` of the engine then adopt through `postmaster.pid`, a stale `postmaster.pid` whose pid now belongs to another process, a second engine, a failed migration then restore. For the major-version path, dump a PostgreSQL 16 cluster and restore it into 17 | Each case either passes or names the §5.3 change. The prototype becomes M0.3 | M0.3 |
 | **S6** | Do upstream's golden fixtures and DAL tests run against a bare Postgres outside Docker? | A test cluster on the S4 binaries with Pagila loaded as a Postgres database and Chinook as a SQLite file. Run `dev_tools/fixtures/seed_graph_fixture.py --reset` through upstream's own connectors, then `test_golden.py` and the rest of `dal/tests/` with `POSTGRES_*` set. Watch for tests that skip quietly: the golden test skips when `POSTGRES_USER` is unset or the fixture is unseeded | A pass/fail list and the list of vendored files that need edits. Any skip counts as a failure | M2.1 |
@@ -76,7 +76,7 @@ Rules:
 ### Scoring and runs
 
 - **Execution accuracy** uses BIRD's rule (compare result sets), ported from the verifier in ontology-sql-eval (Apache-2.0). Gold SQL runs on the source natively: `sqlite3` for BIRD and the eval Postgres cluster for WWI. Ontological's SQL runs through its own source executor.
-- **Dialect artifacts.** BIRD's gold SQL runs on SQLite, while Ontological's SQL runs on DuckDB, and the two differ on some semantics (integer division is the common one). The verifier logs every mismatch where the rows agree after numeric normalization; these get one hand review in E4 and a fixed tolerance rule after that.
+- **Dialect artifacts.** BIRD's gold SQL runs on SQLite, while Ontological's SQL runs on DuckDB, and the two differ on some semantics (integer division is the common one). The verifier flags every mismatch whose rows agree after normalization. M1.10 reviewed the first ones by hand and fixed the tolerance rule: dates and times compare as ISO text, whole numbers exactly, and other numbers to 6 significant digits. Rows that agree under it score as a match, and the report lists them as dialect artifacts. Integer division isn't covered: SQLite's `3/2` is 1, and an answer of 1.5 is a different answer.
 - **Control arm.** A schema-only baseline: one structured call per question with the question and a schema dump, no tools, on the same model as the agent. It runs once per model per set, not once per configuration.
 - **Recorded per run:** execution accuracy, share of answers the gate verified, spawns and turns per question, per-model tokens, the `utilization` change, and the resolved model IDs. Eval configs pin full model IDs (§6.3), so a model release can't land in the middle of a comparison.
 - **Variance.** LLM output isn't repeatable, so "reproducible" means one command, pinned data, pinned model IDs and stored results. With about 80 questions only differences of about 10 points stand out from noise. When two configurations land within that range, the cheaper one wins.
@@ -89,14 +89,16 @@ Compile settings (`compile.table_calls`, the compile routes, the embedding model
 
 ### Usage
 
-Estimates at API prices, as a way to compare runs. They are not a statement about subscription quota, which Anthropic doesn't publish. S3 replaces them with measured numbers.
+Measured by S3 (2026-11-07) at API prices, as a way to compare runs. They are not a statement about subscription quota, which Anthropic doesn't publish; S3's utilization reading is the only quota figure. A question costs about $0.13 with the agent on Sonnet and $0.23 on the real routes, the critic included, and a control answer $0.08 on Sonnet and $0.15 on Opus.
 
-| Run | Question-runs | API-equivalent |
-|---|---|---|
-| Smoke, agent on Sonnet | 20 | ~$5 |
-| Dev, real routes | ~80 | ~$40–50 |
-| Tuning round (3 dev runs + held-out) | ~280 | ~$170 |
-| Control arm, per model | ~120 | ~$10 |
+| Run | Question-runs | API-equivalent | Control, the first time on a model |
+|---|---|---|---|
+| Smoke, agent on Sonnet | 20 | ~$2.70 | ~$1.50 |
+| Dev, real routes | 76 | ~$17.50 | ~$11.50 |
+| Tuning round (3 dev runs + held-out) | 268 | ~$53 | ~$26 (Opus and Sonnet, dev and held-out) |
+| Control arm, per model (dev + held-out) | 116 | | ~$17.50 on Opus, ~$8.70 on Sonnet |
+
+The estimates before S3 were two to three times these: ~$5 for smoke, ~$40–50 for a dev run, ~$170 for a round.
 
 ## Milestones
 
@@ -159,7 +161,7 @@ Upstream's fallbacks only cover an answer that fails validation. When Claude doe
 **M1.9 decided (2026-11-07): the eval runner.** `uv run python -m ontological_eval run <set>` in `eval/`; the `ontological` CLI can't import the eval package, which depends on it. Each config in `eval/configs/` pins full model IDs for `answer_agent` and `answer_review`, and the runner refuses an alias.
 - **The agent arm goes through the engine.** The engine takes `--routes FILE`, and the runner starts one on the eval store with the config's routes, holds one lease, and asks each question with `POST /ask`, the question's database as the scope. A BIRD question's evidence goes in the question text. The runner refuses while another engine serves the store, since its routes may differ, and stops the engine it started.
 - **Scoring** ports ontology-sql-eval's `exec_match.py` at `ec41b2c`: `set(gold) == set(pred)`, with its failure codes and its 5% `no_model_output` guard on reporting a score. Gold runs natively. The agent's SQL runs through the source executor's new `fetch`, up to 100,000 rows. Each query gets its own 60 s limit rather than BIRD's shared one, and a gold failure scores zero and stays in the denominator, as BIRD scores it.
-- **Dialect artifacts.** The tolerance check rounds numbers to 6 significant digits and writes dates and times as ISO text. A miss that matches after that is flagged and still scores zero until E4. The first live run found one already: DuckDB reads `CAST(x AS REAL)` as float32 (0.5714285969734192 against SQLite's 0.5714285714285714).
+- **Dialect artifacts.** The tolerance check rounds numbers to 6 significant digits and writes dates and times as ISO text. A miss that matches after that was flagged and scored zero until M1.10's review fixed the tolerance rule (see S3). The first live run found one already: DuckDB reads `CAST(x AS REAL)` as float32 (0.5714285969734192 against SQLite's 0.5714285714285714).
 - **The control arm runs natively**, as ontology-sql-eval's schema-only arm does: the database's own DDL (`sqlite_master`, WWI's `ddl/*.sql`), their user turn, a structured `{sql}` answer in place of their fenced block, on the agent's route through the runner's own gateway, which never serves from the cache. So it writes the dialect its schema shows, and needs no engine. Its answers are stored per model and effort, and a run asks only about questions without one, which keeps it to once per model per set.
 - **Usage.** A question's calls are the engine's `ops.llm_call` rows logged while it ran; rows for other tasks are counted apart and flagged. Tokens split each call's `model_usage` into the model that answered and Claude Code's side calls. Utilization is the change in `raw["unifiedWindows"]` between the runner's pings before the run and after each arm. The first runs reported only `seven_day`, in steps of 0.01, so S3 needs more than a few questions to see a change.
 - **Stored** in `<eval home>/results/runs/<run id>/`: `run.json` (written after every question), `routes.json` and `report.md`.
@@ -420,6 +422,52 @@ The first call on each model was not much slower. Spawn took 0.35 s on the first
 **Decision: no warm pool.** The rule asks whether a spawn takes more than 1.5 s at p50. It takes 0.53 s, spawn and close together. The whole `query()` is above 1.5 s at p50 (2.09 s), but that is the model's time, and a warm pool can't remove it. A pre-spawned client would save the 0.17 s spawn. The 0.34 s close could also be saved without a pool, by not waiting for the process to exit. Neither is worth the pool's complexity in M1.
 
 **ARCHITECTURE.md changed.** §6.5's estimate said each call costs "a few seconds of process startup" and that split might add 20–30 minutes. It now gives 0.53 s of overhead per call, about 1.5–2 minutes of overhead for split's extra calls on a 200-table database. §3's per-call cost note now says the same.
+
+### S3: What does one question cost? (2026-11-07)
+
+**What ran.** `uv run python -m ontological_eval run smoke` on the M3.9-compiled eval store, twice, with the 20 smoke questions split so each half has 5 WWI and 5 BIRD questions and all four BIRD databases:
+
+- `--config sonnet` (the agent and critic on `claude-sonnet-5-5`) on wwi:2, 21, 23, 27, 35 and bird:3, 16, 149, 212, 276: run `20261107T165822Z-smoke-sonnet`.
+- `--config default` (the real routes: the agent on `claude-opus-5-5`, the critic on Sonnet) on wwi:18, 22, 25, 31, 39 and bird:25, 154, 217, 219, 278: run `20261107T170317Z-smoke-default`.
+
+Both at `medium` effort with the critic on, and each with its control arm on the agent's model. The runs are in `<eval home>/results/runs/`.
+
+**Usage.** Every call resolved to and was answered by its pinned model, with no fallback.
+
+| Arm | Per question | Spawns, turns | Tokens per question (answering model) | API-equivalent per question |
+|---|---|---|---|---|
+| Agent on Sonnet | 22 s | 2.0, 9.3 | Sonnet, the critic included: 2.0k output, 104k cache read, 26k cache write | $0.134 ($0.115 agent, $0.019 critic) |
+| Agent on Opus, critic on Sonnet | 22 s | 2.0, 8.8 | Opus: 1.6k output, 91k cache read, 20k cache write; Sonnet critic: 0.4k output, 3.2k cache write | $0.230 ($0.213 agent, $0.017 critic) |
+| Control on Sonnet | - | 1, 2 | 0.4k output, 18k cache write | $0.075 |
+| Control on Opus | - | 1, 2 | 0.5k output, 18k cache write | $0.151 |
+
+Claude Code's own side calls on Haiku, which `model_usage` reports beside the answering model, came to about 4k input tokens per agent question and 18k per control question, about $0.02 a run.
+
+The only window the pings reported was `seven_day`, in steps of 0.01. It read 0.84 before the first run and 0.85 after the last, across about $5.80 of new API-equivalent usage for both runs and both control arms. Other sessions on the same account were running meanwhile (the window read 0.81 two hours earlier), so the change is an upper bound for the runs' own share, and a step of 0.01 can hide up to nearly 0.02. At that rate a dev run on the real routes (~$17.50) uses about 0.03 of the seven-day window, ~0.05 with its first control arm, and at most about twice that.
+
+**Decision: keep the dev set at 76.** A dev run on the real routes uses well under a fifth of a usage window, so nothing shrinks before M4. The [Usage](#usage) table now holds the measured numbers.
+
+**The first smoke score.** With the tolerance rule below:
+
+| Half | Agent | Control on the agent's model |
+|---|---|---|
+| Sonnet: 10 questions | 40% (4/10): WWI 0/5, BIRD 4/5 | 30% (3/10) |
+| Real routes: 10 questions | 50% (5/10): WWI 2/5, BIRD 3/5 | 70% (7/10) |
+| All 20 | 45% (9/20): WWI 2/10, BIRD 7/10 | 50% (10/20) |
+
+The two halves ran on different agent models, so the 20-question figure is a starting point, not a comparison with later Sonnet smoke runs. The post-run check verified all 20 answers, the 11 wrong ones included, so for now `verified` doesn't separate right answers from wrong. Of the 11 misses:
+
+- **Seven return a different set of columns**, which BIRD's rule can't credit whatever the rows. WWI's gold SQL returns the column it ranks or filters by beside the answer, and the agent returns only the answer: wwi:2 (the opening date beside the account), wwi:22 (the supplier count), wwi:25 (the quantity), wwi:27 (ids and totals, where the agent gave names), wwi:39 (the transaction date). On bird:278 the agent split the driver's name into forename and surname, and on bird:219 it added a column. BIRD's rule stays, and M4's prompt work on the answer agent decides how many columns it returns.
+- wwi:21 answered that the data can't answer it, since nothing records what users search for. The gold SQL counts the stock items that share each `stockitems.searchdetails` text.
+- wwi:35 returned every order line, more than the verifier's 100,000 rows, where gold returns one row per order (73,595).
+- wwi:23 and bird:276 computed something else.
+
+**The dialect-artifact review.** The verifier flagged two, both in the Sonnet half, and both were the right answer:
+
+- bird:3: `CAST(... AS REAL)` is float32 in DuckDB and double in SQLite: 0.5714285969734192 against 0.5714285714285714. This is the one M1.9 found.
+- bird:212: all 14 rows are the same, but `account.date` is text in SQLite and a DATE when DuckDB reads the file.
+
+**Decision: the tolerance rule.** A mismatch whose rows agree after normalization scores as a match and stays flagged, so each run's report lists it. Normalization writes dates and times as ISO text, keeps whole numbers (ints, and integral floats and decimals) exact, and rounds other numbers to 6 significant digits. Before, it rounded whole numbers too, so a count of 1234567 agreed with 1234568. Two fractional values that agree to 6 significant digits match even when they come from different queries, a risk the review judged small for answers of this size. Rounding can also split a float32 value from its double across a boundary, which leaves a real artifact a miss. Integer division stays a miss. M1.10 rescored its two runs under the rule; the M1.9 runs before them keep their old scores.
 
 ### S4: How big are trimmed Postgres 17 + pgvector binaries, and can CI build and sign them? (2026-11-04)
 

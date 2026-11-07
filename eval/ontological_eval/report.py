@@ -4,7 +4,8 @@ It shows what that section records per run: execution accuracy, the share of ans
 verified, spawns and turns per question, per-model tokens (the answering model's and Claude
 Code's own side calls apart), the change in utilization, and the resolved model IDs. Beside
 them: the control arm on the same questions with the questions each arm alone got right, why
-each miss missed, and the dialect artifacts left for E4's hand review.
+each miss missed, and the dialect artifacts: answers that match only under the verifier's
+tolerance rule.
 
 As in ontology-sql-eval's `compare.py`, a run in which more than `HEALTH_THRESHOLD` of an arm's
 questions got no answer at all (a rate limit, an error) isn't reported as a score: it would read
@@ -149,12 +150,13 @@ def markdown(run: Mapping[str, Any]) -> str:
     artifacts = [r for r in agent if r["score"].get("dialect_artifact")]
     out += ["", f"## Dialect artifacts ({len(artifacts)})", ""]
     out.append(
-        "Misses whose rows agree with gold after numeric and date normalization; they score "
-        "zero until E4's hand review sets a tolerance rule."
+        "Answers whose rows differ from gold only in type or float precision: they match under "
+        "the verifier's tolerance rule (M1.10). A run scored before the rule kept them as misses."
     )
     for r in artifacts:
-        out.append(f"- {r['key']} ({r['db']}): gold {r['score']['gold_sample'][:2]}, "
-                   f"agent {r['score']['pred_sample'][:2]}")  # fmt: skip
+        sc = r["score"]
+        out.append(f"- {r['key']} ({r['db']}): {_verdict(r)}, gold {sc['gold_sample'][:2]}, "
+                   f"agent {sc['pred_sample'][:2]}")  # fmt: skip
 
     out += ["", "## Usage", ""]
     out += _usage(agent, control, s)
