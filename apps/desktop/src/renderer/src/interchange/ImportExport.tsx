@@ -15,11 +15,8 @@ const HEADING = 'm-0 text-[13px] font-semibold text-text-2'
 
 const YAML_FILTERS = [{ name: 'Model YAML', extensions: ['yaml', 'yml'] }]
 
-/** What File → Import… and Export… ask of the section; `n` tells one ask from the next. */
-export interface InterchangeRequest {
-  action: 'import' | 'export'
-  n: number
-}
+/** What File → Import… or Export… asks of the section, until it acts on it. */
+export type InterchangeRequest = 'import' | 'export'
 
 interface Done {
   file: string
@@ -38,11 +35,14 @@ export function ImportExport({
   sources,
   jobs,
   request,
+  onRequestHandled,
   onOpenJobs
 }: {
   sources: Source[] | undefined
   jobs: JobSummary[]
   request: InterchangeRequest | null
+  /** Clears `request`, so the section acts on it once, not again each time Settings opens. */
+  onRequestHandled(): void
   onOpenJobs(): void
 }) {
   const engine = useEngine()
@@ -90,7 +90,10 @@ export function ImportExport({
   }
 
   async function importModel(): Promise<void> {
-    if (running === null) return
+    if (running === null) {
+      setImportError("The engine isn't running, so nothing can be imported.")
+      return
+    }
     setImportError(null)
     let file
     try {
@@ -116,22 +119,22 @@ export function ImportExport({
     }
   }
 
-  // File → Import… and Export… land here; Import opens its dialog at once.
-  const importRef = useRef(importModel)
-  importRef.current = importModel
-  const ready = running !== null
-  const handled = useRef<number | null>(null)
+  // File → Import… and Export… land here, and Import opens its dialog at once. The request waits
+  // while the engine is starting, as it is on the section's first render, then is used up as it's
+  // acted on; App drops one left when the user leaves Settings. The action waits a tick, and a
+  // cleanup cancels it, so StrictMode's second mount in development doesn't open a second dialog.
+  const settling = engine.status === 'starting' || engine.status === 'restarting'
   useEffect(() => {
-    if (request === null || handled.current === request.n) return
-    sectionRef.current?.scrollIntoView({ block: 'nearest' })
-    if (request.action === 'export') {
-      handled.current = request.n
-      sectionRef.current?.querySelector<HTMLElement>('select')?.focus()
-    } else if (ready) {
-      handled.current = request.n
-      void importRef.current()
-    }
-  }, [request, ready])
+    if (request === null || settling) return
+    const timer = setTimeout(() => {
+      onRequestHandled()
+      sectionRef.current?.scrollIntoView({ block: 'nearest' })
+      if (request === 'export') sectionRef.current?.querySelector<HTMLElement>('select')?.focus()
+      else void importModel()
+    }, 0)
+    return () => clearTimeout(timer)
+    // Only a new request, or the engine settling, acts: the callbacks are the latest render's.
+  }, [request, settling])
 
   const noSources = sources !== undefined && sources.length === 0
   return (

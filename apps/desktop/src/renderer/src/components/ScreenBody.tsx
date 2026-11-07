@@ -21,6 +21,7 @@ interface ScreenBodyProps {
   onAddSource(): void
   onOpenJobs(): void
   interchange: InterchangeRequest | null
+  onInterchangeHandled(): void
 }
 
 /** The main column. Until a screen is built, it is an empty frame that says what will go here. */
@@ -34,7 +35,8 @@ export function ScreenBody({
   ontology,
   onAddSource,
   onOpenJobs,
-  interchange
+  interchange,
+  onInterchangeHandled
 }: ScreenBodyProps) {
   return (
     <section
@@ -57,6 +59,7 @@ export function ScreenBody({
           sources={catalog.sources}
           jobs={jobs.jobs}
           interchange={interchange}
+          onInterchangeHandled={onInterchangeHandled}
         />
       ) : screen === 'catalog' ? (
         <Catalog {...catalog} />

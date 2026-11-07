@@ -57,6 +57,8 @@ export function App(): React.JSX.Element {
 
   const navigate = (next: ScreenId): void => {
     setScreen(next)
+    // File → Import… or Export… is for the Settings it opened, not a later visit.
+    if (next !== 'settings') setInterchange(null)
     setSheetOpen(false)
     api.setScreen(next)
   }
@@ -86,7 +88,7 @@ export function App(): React.JSX.Element {
             break
           case 'interchange':
             navigate('settings')
-            setInterchange((last) => ({ action: command.action, n: (last?.n ?? 0) + 1 }))
+            setInterchange(command.action)
             break
         }
       }),
@@ -188,6 +190,7 @@ export function App(): React.JSX.Element {
               onAddSource={() => setOnboarding('source')}
               onOpenJobs={() => navigate('jobs')}
               interchange={interchange}
+              onInterchangeHandled={() => setInterchange(null)}
             />
             {showRail && frame.rail !== null && (
               <Rail label={frame.rail} sheet={narrow} onClose={() => setSheetOpen(false)}>

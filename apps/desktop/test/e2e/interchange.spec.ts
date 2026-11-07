@@ -41,12 +41,19 @@ async function saveTo(app: ElectronApplication, path: string): Promise<void> {
   }, path)
 }
 
-/** The native open dialog answers with `path`, as if the user picked it. */
+/** The native open dialog answers with `path`, as if the user picked it, and counts in `globalThis.opened`. */
 async function pickFile(app: ElectronApplication, path: string): Promise<void> {
   await app.evaluate(({ dialog }, picked) => {
-    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [picked] })) as typeof dialog.showOpenDialog
+    const counted = globalThis as { opened?: number }
+    counted.opened = 0
+    dialog.showOpenDialog = (async () => {
+      counted.opened = (counted.opened ?? 0) + 1
+      return { canceled: false, filePaths: [picked] }
+    }) as typeof dialog.showOpenDialog
   }, path)
 }
+
+const timesOpened = (app: ElectronApplication) => app.evaluate(() => (globalThis as { opened?: number }).opened)
 
 async function openSection(app: ElectronApplication, page: Page) {
   await clickMenuItem(app, 'settings')
@@ -128,6 +135,18 @@ test('File → Import… reads a file, shows what it created and the re-embed jo
     const earlierRuns = page.getByTestId('rail').getByRole('region', { name: 'Earlier' })
     await earlierRuns.getByRole('button', { name: /Re-embed · chinook · running/ }).click()
     await expect(page.getByTestId('job-card').getByRole('heading')).toHaveText('Re-embed · chinook')
+
+    // Coming back to Settings doesn't ask again: File → Import… was used up by the one import.
+    await clickMenuItem(app, 'settings')
+    await expect(page.getByRole('group', { name: 'Import/Export' })).toBeVisible()
+    await page.waitForTimeout(500)
+    expect(await timesOpened(app)).toBe(1)
+    expect(logged(userData, 'interchange.log')).toEqual(['import replace=True'])
+
+    // Asking again does.
+    await clickMenuItem(app, 'import')
+    await expect.poll(() => logged(userData, 'interchange.log')).toEqual(['import replace=True', 'import replace=True'])
+    expect(await timesOpened(app)).toBe(2)
   } finally {
     await app.close()
   }

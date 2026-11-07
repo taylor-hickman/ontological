@@ -23,7 +23,8 @@ export function Settings({
   onOpenJobs,
   sources,
   jobs,
-  interchange
+  interchange,
+  onInterchangeHandled
 }: {
   theme: ThemeSource
   onThemeChange(theme: ThemeSource): void
@@ -32,6 +33,7 @@ export function Settings({
   jobs: JobSummary[]
   /** File → Import… or Export…, last asked. */
   interchange: InterchangeRequest | null
+  onInterchangeHandled(): void
 }) {
   return (
     <div className="flex max-w-[640px] flex-col gap-6">
@@ -60,7 +62,13 @@ export function Settings({
         </div>
       </fieldset>
       <Embeddings onOpenJobs={onOpenJobs} />
-      <ImportExport sources={sources} jobs={jobs} request={interchange} onOpenJobs={onOpenJobs} />
+      <ImportExport
+        sources={sources}
+        jobs={jobs}
+        request={interchange}
+        onRequestHandled={onInterchangeHandled}
+        onOpenJobs={onOpenJobs}
+      />
     </div>
   )
 }
