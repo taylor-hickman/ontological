@@ -135,12 +135,18 @@ const SCENARIO = {
   }
 }
 
-function actions(userData: string): string[] {
+/** Everything jobs.log holds, the engine's own re-embed at start included. */
+function logged(userData: string): string[] {
   try {
     return readFileSync(join(userData, 'jobs.log'), 'utf8').trim().split('\n').filter(Boolean)
   } catch {
     return []
   }
+}
+
+/** What the app asked for: the log without the re-embed the engine starts itself. */
+function actions(userData: string): string[] {
+  return logged(userData).filter((line) => line !== 'reembed stale')
 }
 
 test('shows a paused compile, its tables and calls, and holds and resumes it', async () => {
@@ -263,6 +269,42 @@ test('an engine with no jobs says so', async () => {
     await expect(page.getByTestId('jobs-empty')).toContainText('No compile has run yet.')
     await expect(page.getByTestId('nav-badge')).toHaveCount(0)
     await expect(page.getByTestId('status-job')).toHaveCount(0)
+  } finally {
+    await app.close()
+  }
+})
+
+test('the engine re-embeds at start, Settings → Embeddings re-embeds again, and the job shows on Jobs', async () => {
+  const userData = freshUserData()
+  const scenario = {
+    jobs: [
+      { ...summary, id: 5, kind: 'reembed', database_name: 'wwi', state: 'running', created_at: earlier(1) },
+      { ...summary, id: 4, kind: 'compile', database_name: 'chinook', state: 'done', created_at: earlier(90), tables: 11, tables_done: 11 }
+    ],
+    embeddings: { model: 'snowflake-arctic-embed-m-v1.5', stale: ['chinook', 'wwi'] }
+  }
+  writeFileSync(join(userData, 'jobs.json'), JSON.stringify(scenario))
+  const { app, page } = await launch(userData)
+  try {
+    await expect.poll(() => logged(userData)).toEqual(['reembed stale'])
+
+    await clickMenuItem(app, 'settings')
+    const section = page.getByRole('group', { name: 'Embeddings' })
+    await expect(section.getByTestId('embedding-model')).toHaveText('snowflake-arctic-embed-m-v1.5')
+    await expect(section.getByTestId('stale-databases')).toHaveText('chinook and wwi')
+    await section.getByRole('button', { name: 'Re-embed' }).click()
+    await expect(section.getByRole('status')).toHaveText('Re-embedding chinook and wwi.')
+    expect(logged(userData)).toEqual(['reembed stale', 'reembed stale'])
+
+    // The running re-embed is listed on Jobs, under the compile the screen opens on
+    await section.getByRole('button', { name: 'Open Jobs' }).click()
+    await expect(page.locator('h1')).toHaveText('Jobs')
+    const earlierRuns = page.getByTestId('rail').getByRole('region', { name: 'Earlier' })
+    await expect(earlierRuns).toContainText('Re-embed · wwi · running')
+    await earlierRuns.getByRole('button', { name: /Re-embed · wwi/ }).click()
+    const card = page.getByTestId('job-card')
+    await expect(card.getByRole('heading')).toHaveText('Re-embed · wwi')
+    await expect(card).toContainText('No Claude usage')
   } finally {
     await app.close()
   }

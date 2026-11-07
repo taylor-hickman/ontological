@@ -81,3 +81,10 @@ export interface Estimate {
   merged: OptionEstimate
   spawn_overhead_s: number
 }
+
+/** Settings → Embeddings (`GET /embeddings`): the engine's model, and the databases with vectors from another. */
+export interface Embeddings {
+  /** null: the engine runs without an embedding model. */
+  model: string | null
+  stale: string[]
+}
