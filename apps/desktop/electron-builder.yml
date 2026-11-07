@@ -1,0 +1,32 @@
+# Packages the app (ARCHITECTURE.md §10). `pnpm package` builds with electron-vite, then writes
+# dist/mac-arm64/Ontological.app. Run ../../packaging/resources.sh first: extraResources copies
+# what it assembles in resources/ into Contents/Resources, where the main process points the
+# engine at it (src/main/engine/command.ts).
+appId: app.ontological.desktop
+productName: Ontological
+directories:
+  output: dist
+files:
+  - out/**
+  - package.json
+asar: true
+extraResources:
+  - from: resources/postgres
+    to: postgres
+  - from: resources/model
+    to: model
+  - from: resources/duckdb-extensions
+    to: duckdb-extensions
+mac:
+  target:
+    - target: dir
+      arch: arm64
+  # Signing and notarization are M7.3. Until then nothing is re-signed, so the Postgres tree
+  # keeps sign.sh's hardened runtime and entitlements. When M7.3 signs the app, signIgnore keeps
+  # it that way: sign the tree with sign.sh and CODESIGN_IDENTITY instead. A DuckDB extension
+  # can't be re-signed at all (DuckDB's own signature trails the Mach-O, so codesign's strict
+  # validation refuses it).
+  identity: null
+  signIgnore:
+    - Contents/Resources/postgres/
+    - Contents/Resources/duckdb-extensions/

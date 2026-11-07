@@ -13,7 +13,7 @@ from fake_answers import SQL, FakeAnswers
 from fake_jobs import FakeJobs
 from fastapi.testclient import TestClient
 
-from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder
+from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder, NothingFound
 from ontological.api.app import create_app
 from ontological.compile.estimate import EstimatedTable, estimate
 from ontological.engine.lifetime import Lifetime
@@ -375,6 +375,26 @@ def test_ask_passes_the_critic_setting(lifetime: Lifetime) -> None:
     assert answers.asked == [("q", "chinook", False)]
 
 
+def test_ask_without_a_database_leaves_the_choice_to_the_engine(lifetime: Lifetime) -> None:
+    answers = FakeAnswers()
+    with ask_client(lifetime, answers) as c:
+        r = c.post("/ask", json={"question": "q"})
+    assert r.status_code == 200
+    assert r.json()["database"] == "chinook"
+    assert answers.asked == [("q", None, True)]
+
+
+def test_ask_answers_404_when_no_ontology_matches_the_question(lifetime: Lifetime) -> None:
+    class Unmatched(FakeAnswers):
+        async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked:
+            raise NothingFound(question)
+
+    with ask_client(lifetime, Unmatched()) as c:
+        r = c.post("/ask", json={"question": "q"})
+    assert r.status_code == 404
+    assert "name a database" in r.json()["detail"]
+
+
 def test_ask_answers_404_for_a_database_with_no_source(lifetime: Lifetime) -> None:
     with ask_client(lifetime, FakeAnswers()) as c:
         r = c.post("/ask", json={"question": "q", "database": "nope"})
@@ -386,7 +406,7 @@ def test_ask_needs_a_store_and_an_embedder(client: TestClient, lifetime: Lifetim
     assert client.post("/ask", json={"question": "q", "database": "chinook"}).status_code == 503
 
     class NoModel(FakeAnswers):
-        async def ask(self, question: str, database: str, *, critic: bool = True) -> Asked:
+        async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked:
             raise NoEmbedder
 
     with ask_client(lifetime, NoModel()) as c:
@@ -397,7 +417,7 @@ def test_ask_needs_a_store_and_an_embedder(client: TestClient, lifetime: Lifetim
 
 def test_ask_counts_as_activity_while_it_runs(lifetime: Lifetime, clock: Clock) -> None:
     class Slow(FakeAnswers):
-        async def ask(self, question: str, database: str, *, critic: bool = True) -> Asked:
+        async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked:
             assert lifetime.should_exit() is False
             clock.now += 10_000  # a long session: no lease, but a request in flight
             assert lifetime.should_exit() is False

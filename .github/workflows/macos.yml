@@ -5,7 +5,8 @@
 # Run it when a change can behave differently on macOS:
 #   - engine dependencies and Python version, which pick the native wheels (uv.lock is universal,
 #     but a macOS wheel can still break where the Linux one works)
-#   - packaging and signing: the engine runtime build and the Electron packaging config (M7)
+#   - packaging and signing: the engine runtime build and the Electron packaging config (M7);
+#     the package job assembles the bundled resources and checks them in the packaged app
 # The bundled Postgres + pgvector build has its own workflow (postgres.yml, spike S4).
 name: macOS
 
@@ -34,7 +35,42 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - uses: ./.github/actions/embedding-model
+      - uses: ./.github/actions/duckdb-extensions
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pyright
       - run: uv run pytest
+
+  # The app as it ships (ARCHITECTURE.md §10, M7.2): packaging/resources.sh builds S4's Postgres
+  # tree and fetches the model and DuckDB extensions, electron-builder copies them into
+  # Contents/Resources, and packaging/check.sh checks them there. control.sh skips on the
+  # runner (SIP off): run `packaging/check.sh <Resources> --smoke` on a Mac with SIP on as well.
+  package:
+    name: package (macOS arm64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          working-directory: engine
+          enable-cache: true
+      - run: uv sync --locked
+        working-directory: engine
+      - uses: ./.github/actions/embedding-model
+      - uses: ./.github/actions/duckdb-extensions
+      - name: Assemble the app's resources (Postgres built, trimmed and signed; model; extensions)
+        run: packaging/resources.sh
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: apps/desktop/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: apps/desktop
+      - run: pnpm package
+        working-directory: apps/desktop
+      - name: Check the packaged Resources (signatures, entitlements, pins, extensions, smoke test)
+        run: packaging/check.sh apps/desktop/dist/mac-arm64/Ontological.app/Contents/Resources --smoke

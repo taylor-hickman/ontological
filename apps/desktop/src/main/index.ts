@@ -122,7 +122,12 @@ async function documentPolicy(): Promise<string> {
 async function startEngineSupervisor(): Promise<void> {
   let command: string[]
   try {
-    command = engineCommand({ env: process.env, isPackaged: app.isPackaged, appPath: app.getAppPath() })
+    command = engineCommand({
+      env: process.env,
+      isPackaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+    })
   } catch (err) {
     onEngineState({ status: 'failed', error: (err as Error).message })
     return

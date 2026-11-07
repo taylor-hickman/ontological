@@ -92,6 +92,7 @@ _PG_RELKINDS = {"r": BASE_TABLE, "p": BASE_TABLE, "f": BASE_TABLE, "v": VIEW,
 
 class PostgresSession(_ScannerSession):
     kind = "postgres"
+    extension = "postgres_scanner"
 
     def attach(self, options: str) -> None:
         """Every connection names this session in `application_name`, which is how
@@ -223,6 +224,7 @@ class MySQLSession(_ScannerSession):
     DuckDB shows it as the schema of that name."""
 
     kind = "mysql"
+    extension = "mysql_scanner"
 
     def remote(self, sql: str) -> list[tuple[Any, ...]]:
         """The scanner hands MySQL's `information_schema` names over as BLOBs."""

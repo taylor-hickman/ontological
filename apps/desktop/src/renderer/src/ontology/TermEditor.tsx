@@ -3,7 +3,17 @@ import type { Saved, TermChanges, TermDetail } from '@shared/api'
 import { useEngineGet, useEngineRequest } from '../api/engine'
 import { CheckIcon, CloseIcon, NoteIcon } from '../components/icons'
 import { plural } from '../format'
-import { addSynonym, changesOf, descriptionAuthor, type Draft, draftOf, historyLine, saveNote, whenLabel } from './format'
+import {
+  addSynonym,
+  changesOf,
+  descriptionAuthor,
+  type Draft,
+  draftOf,
+  historyLine,
+  isCreation,
+  saveNote,
+  whenLabel
+} from './format'
 
 interface TermEditorProps {
   termId: string | null
@@ -281,7 +291,7 @@ export function TermEditor({ termId, onOpenTerm, onChanged }: TermEditorProps) {
                 <span className="shrink-0 text-text-muted">{whenLabel(c.ts, Date.now())}</span>
               </li>
             ))}
-            {term.created && (
+            {term.created && !term.history.some(isCreation) && (
               <li className="flex justify-between gap-2">
                 <span>Compiled</span>
                 <span className="shrink-0 text-text-muted">{whenLabel(term.created, Date.now())}</span>
