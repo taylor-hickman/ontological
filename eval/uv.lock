@@ -48,6 +48,15 @@ wheels = [
 ]
 
 [[package]]
+name = "apache-ossie-nvidia-auto-ontology"
+version = "0.1.0.dev0"
+source = { git = "https://github.com/apache/ossie-converters.git?subdirectory=nvidia&rev=cb4b46b97bcdb9f2685ef2f7023b9134a4426da2#cb4b46b97bcdb9f2685ef2f7023b9134a4426da2" }
+dependencies = [
+    { name = "pyyaml" },
+    { name = "sqlglot" },
+]
+
+[[package]]
 name = "asyncpg"
 version = "0.32.0"
 source = { registry = "https://pypi.org/simple" }
@@ -794,6 +803,7 @@ version = "0.0.0"
 source = { editable = "../engine" }
 dependencies = [
     { name = "alembic" },
+    { name = "apache-ossie-nvidia-auto-ontology" },
     { name = "bm25s" },
     { name = "claude-agent-sdk" },
     { name = "duckdb" },
@@ -808,6 +818,7 @@ dependencies = [
     { name = "pandas" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "sqlalchemy" },
     { name = "sqlglot" },
     { name = "tokenizers" },
@@ -817,6 +828,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.19.1" },
+    { name = "apache-ossie-nvidia-auto-ontology", git = "https://github.com/apache/ossie-converters.git?subdirectory=nvidia&rev=cb4b46b97bcdb9f2685ef2f7023b9134a4426da2" },
     { name = "bm25s", specifier = ">=0.3.16" },
     { name = "claude-agent-sdk", specifier = ">=0.2.178" },
     { name = "duckdb", specifier = ">=2.0.0" },
@@ -831,6 +843,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.3.3,<3" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
     { name = "pydantic", specifier = ">=2.14.2" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sqlalchemy", specifier = ">=2.0.52,<2.1" },
     { name = "sqlglot", specifier = "==30.17.0" },
     { name = "tokenizers", specifier = ">=0.23.3" },
