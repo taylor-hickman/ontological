@@ -1,13 +1,19 @@
-"""`validate_sql`'s gate, checks 1 to 3 (ARCHITECTURE.md §8.2, BUILD_PLAN.md M1.7), on a catalog
-written by hand: one read-only statement, every table and column in the catalog, and no
-degenerate SQL or raw many-side column under a GROUP BY. Checks 4 to 7 are M4.1's."""
+"""`validate_sql`'s gate (ARCHITECTURE.md §8.2, BUILD_PLAN.md M1.7 and M4.1), on catalogs written
+by hand. Checks 1 to 3: one read-only statement, every table and column in the catalog, and no
+degenerate SQL or raw many-side column under a GROUP BY. Checks 4 to 7, probed against an
+in-memory DuckDB source: joins the semantic-FK graph bears out, literals the source holds, JSON
+keys it holds, and no Postgres-only rules for DuckDB SQL. The checks themselves are tested in
+`test_case_dirty_join_check.py`, `test_literal_check.py` and `test_jsonb_path_check.py`."""
 
 from __future__ import annotations
 
 import pytest
+from fakes import DuckProber, FakeGraph, hop
 
-from ontological.answer.gate import KeyColumns, check_sql
+from ontological.answer.gate import GateResult, KeyColumns, Probing, check_sql
+from ontological.answer.probe import ProbeExecutor
 from ontological.catalog.parsers.catalog_index import CatalogIndex, SchemaEntry, TableEntry
+from ontological.sources.executor import Rows, SourceQueryError
 
 
 def table(id: str, name: str, columns: list[str]) -> TableEntry:
@@ -171,3 +177,188 @@ def test_an_aggregated_many_side_column_under_a_group_by_passes() -> None:
         )
         == []
     )
+
+
+# --- checks 4 to 7: probed against the source --------------------------------------------------
+
+SOURCE = (
+    "CREATE TABLE Artist (ArtistId INTEGER, Name VARCHAR)",
+    "CREATE TABLE Album (AlbumId INTEGER, Title VARCHAR, ArtistId INTEGER, ArtistName VARCHAR)",
+    "CREATE TABLE TrackInfo (TrackId INTEGER, Info JSON)",
+    "INSERT INTO Artist VALUES (1, 'AC/DC'), (2, 'Accept')",
+    "INSERT INTO Album VALUES (10, 'For Those About To Rock', 1, 'AC/DC'), "
+    "(11, 'Balls to the Wall', 2, 'accept'), (12, 'Restless and Wild', 2, 'Accept')",
+    """INSERT INTO TrackInfo VALUES (1, '{"bpm": 120, "mood": "loud"}')""",
+)
+PROBED = CatalogIndex(
+    {
+        "main": SchemaEntry(
+            {
+                "artist": table("t-artist", "Artist", ["ArtistId", "Name"]),
+                "album": table("t-album", "Album", ["AlbumId", "Title", "ArtistId", "ArtistName"]),
+                "trackinfo": TableEntry(
+                    "t-info",
+                    "TrackInfo",
+                    {"trackid": "t-info.TrackId", "info": "t-info.Info"},
+                    {"trackid": "TrackId", "info": "Info"},
+                    {"trackid": "INTEGER", "info": "JSON"},
+                ),
+            }
+        )
+    }
+)
+
+
+def graph() -> FakeGraph:
+    return FakeGraph(
+        {("Album.ArtistId", "Artist.ArtistId"): [hop("Album.ArtistId", "Artist.ArtistId")]},
+        fk_columns={"Album.ArtistId", "Artist.ArtistId"},
+    )
+
+
+def probed(sql: str, *, soft_as_warnings: bool = False) -> tuple[GateResult, DuckProber]:
+    source = DuckProber(*SOURCE)
+    gate = check_sql(
+        sql,
+        PROBED,
+        key_columns=keys,
+        probing=Probing(ProbeExecutor(source), graph()),
+        soft_as_warnings=soft_as_warnings,
+    )
+    return gate, source
+
+
+def test_a_query_the_source_bears_out_passes_every_check() -> None:
+    gate, source = probed(
+        "SELECT ar.Name, COUNT(*) AS albums FROM Album al "
+        "JOIN Artist ar ON al.ArtistId = ar.ArtistId WHERE ar.Name = 'Accept' GROUP BY ar.Name"
+    )
+
+    assert gate.ok and gate.warnings == []
+    assert gate.tables == ["main.Album", "main.Artist"]
+    assert source.seen  # the literal was probed
+
+
+def test_probes_wait_for_checks_1_to_3() -> None:
+    gate, source = probed("SELECT Nmae FROM Artist WHERE Name = 'acdc'")
+
+    assert not gate.ok and source.seen == []
+
+
+def test_without_a_source_checks_4_to_6_dont_run() -> None:
+    assert check("SELECT Name FROM Artist WHERE Name = 'ac/dc'") == []
+
+
+def test_check_4_rejects_a_join_the_graph_and_the_values_dont_bear_out() -> None:
+    gate, _ = probed("SELECT al.Title FROM Album al JOIN Artist ar ON ar.ArtistId = al.AlbumId")
+
+    [issue] = gate.issues  # the graph has no path between these columns, and no value overlaps
+    assert "Artist.ArtistId = Album.AlbumId" in issue and "very likely wrong" in issue
+
+
+def test_check_4_case_dirty_join_is_an_issue_until_soft_checks_turn_to_warnings() -> None:
+    sql = (
+        "SELECT al.Title FROM Album al "
+        "JOIN Artist ar ON al.ArtistId = ar.ArtistId AND al.ArtistName = ar.Name"
+    )
+
+    gate, _ = probed(sql)
+    [issue] = gate.issues
+    assert "LOWER(TRIM(" in issue and "1 row(s)" in issue
+
+    gate, _ = probed(sql, soft_as_warnings=True)
+    assert gate.ok and gate.issues == []
+    [warning] = gate.warnings
+    assert "LOWER(TRIM(" in warning
+
+
+def test_check_5_rejects_a_near_miss_literal_until_soft_checks_turn_to_warnings() -> None:
+    sql = (
+        "SELECT Title FROM Album al JOIN Artist ar ON al.ArtistId = ar.ArtistId "
+        "WHERE ar.Name = 'ac/dc'"
+    )
+
+    gate, _ = probed(sql)
+    [issue] = gate.issues
+    assert "'ac/dc'" in issue and "Closest real value(s): AC/DC." in issue
+
+    gate, _ = probed(sql, soft_as_warnings=True)
+    assert gate.ok and len(gate.warnings) == 1
+
+
+def test_check_4s_wrong_join_stays_an_issue_when_soft_checks_are_warnings() -> None:
+    gate, _ = probed(
+        "SELECT al.Title FROM Album al JOIN Artist ar ON ar.ArtistId = al.AlbumId",
+        soft_as_warnings=True,
+    )
+
+    assert not gate.ok and gate.warnings == []
+
+
+def test_check_6_rejects_a_json_key_the_source_doesnt_hold() -> None:
+    gate, source = probed("SELECT Info->>'tempo' AS tempo FROM TrackInfo")
+
+    [issue] = gate.issues
+    assert "TrackInfo.Info->>'tempo'" in issue and "bpm, mood" in issue
+    assert any("json_keys" in probe for probe in source.seen)
+
+
+def test_check_6_passes_a_json_key_the_source_holds() -> None:
+    gate, _ = probed("SELECT Info->>'bpm' AS bpm FROM TrackInfo")
+
+    assert gate.ok
+
+
+def test_check_6_stays_an_issue_when_soft_checks_are_warnings() -> None:
+    gate, _ = probed("SELECT Info->>'tempo' AS tempo FROM TrackInfo", soft_as_warnings=True)
+
+    assert not gate.ok
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT DISTINCT ON (ArtistId) ArtistId, Title FROM Album ORDER BY ArtistId, Title",
+        "SELECT artist.name FROM ARTIST",
+        'SELECT "Name" FROM "Artist"',
+    ],
+)
+def test_check_7_duckdb_sql_isnt_held_to_postgres_rules(sql: str) -> None:
+    """No `DISTINCT ON` rejection and no mixed-case quoting: DuckDB runs both as written."""
+    gate, source = probed(sql)
+
+    assert gate.ok, gate.issues
+    assert source.probe(sql, max_rows=5).rows
+
+
+def test_a_probe_the_source_fails_doesnt_fail_the_gate() -> None:
+    class Broken:
+        def probe(self, sql: str, *, max_rows: int) -> Rows:
+            raise SourceQueryError("the source is gone")
+
+    gate = check_sql(
+        "SELECT Name FROM Artist WHERE Name = 'ac/dc'",
+        PROBED,
+        key_columns=keys,
+        probing=Probing(ProbeExecutor(Broken()), graph()),
+    )
+
+    assert gate.ok
+
+
+def test_a_join_check_whose_probes_cant_run_doesnt_fail_the_gate() -> None:
+    """An FK-shaped join with no graph path, on a source whose probes fail: check 4 is hard,
+    so a probe that can't run must never become a rejection."""
+
+    class Broken:
+        def probe(self, sql: str, *, max_rows: int) -> Rows:
+            raise SourceQueryError("the source is gone")
+
+    gate = check_sql(
+        "SELECT al.Title FROM Album al JOIN Artist ar ON ar.ArtistId = al.AlbumId",
+        PROBED,
+        key_columns=keys,
+        probing=Probing(ProbeExecutor(Broken()), graph()),
+    )
+
+    assert gate.ok, gate.issues

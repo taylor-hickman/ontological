@@ -11,12 +11,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from fakes import FakeGraph, frame
 
 from ontological.answer.gate import KeyColumns
 from ontological.answer.models import Review
 from ontological.answer.tools import (
     MAX_REVIEWS,
     MAX_VALIDATIONS,
+    SOFT_CHECKS_UNTIL,
     AnswerTools,
     ReviewInput,
     ToolResult,
@@ -64,6 +66,10 @@ class FakeOntology:
     def key_columns(self, database: str, table: str) -> KeyColumns:
         return KeyColumns(pk=[f"{table.lower()}id"], unique=[])
 
+    def join_graph(self, database: str) -> FakeGraph:
+        self.calls.append(("join_graph", database))
+        return FakeGraph()
+
     def search(self, database: str, query: str, kinds: Sequence[str]) -> list[dict[str, Any]]:
         self.calls.append(("search", database, query, *kinds))
         return [{"id": "a-1", "label": "ColumnAttribute", "name": "Artist Name", "score": 0.2}]
@@ -84,12 +90,18 @@ class FakeRunner:
     )
     error: str | None = None
     ran: list[str] = field(default_factory=list[str])
+    probed: list[str] = field(default_factory=list[str])
 
     def run_sql(self, sql: str) -> Rows:
         self.ran.append(sql)
         if self.error:
             raise SourceQueryError(self.error)
         return self.rows
+
+    def probe(self, sql: str, *, max_rows: int) -> Rows:
+        """Every probe reads the artists' names."""
+        self.probed.append(sql)
+        return frame(value=["AC/DC", "Accept"])
 
 
 @dataclass
@@ -268,6 +280,39 @@ def test_validate_sql_refuses_after_its_limit() -> None:
         h.call("validate_sql", sql="SELECT Titel FROM Album")
     refused(h.call("validate_sql", sql=GOOD_SQL), str(MAX_VALIDATIONS), "answerable")
     assert MAX_VALIDATIONS == 7  # upstream's cap on attempts
+
+
+NEAR_MISS_SQL = "SELECT Name FROM Artist WHERE Name = 'ac/dc'"
+
+
+def test_validate_sql_probes_the_source_for_its_literals() -> None:
+    h = Harness()
+    h.planned()
+    result = h.call("validate_sql", sql=NEAR_MISS_SQL)
+    assert result.get("is_error") is True
+    assert "Closest real value(s): AC/DC." in text(result)
+    assert h.runner.probed and h.runner.ran == []
+
+
+def test_after_five_calls_the_soft_checks_are_warnings() -> None:
+    """As upstream: once 5 attempts have failed, the literal and case-dirty join checks stop
+    blocking the SQL, and the model is told what they found instead."""
+    h = Harness()
+    h.planned()
+    for _ in range(SOFT_CHECKS_UNTIL):
+        assert h.call("validate_sql", sql=NEAR_MISS_SQL).get("is_error") is True
+    result = h.call("validate_sql", sql=NEAR_MISS_SQL)
+    v = data(result)
+    assert v["ok"] is True and v["validation_id"] == "val-1"
+    [warning] = v["warnings"]
+    assert "AC/DC" in warning and "Warnings" in text(result)
+    assert SOFT_CHECKS_UNTIL == 5  # upstream's INTENT_VALIDATION_SKIPPED_AFTER
+
+
+def test_a_passing_validation_has_no_warnings() -> None:
+    h = Harness()
+    h.planned()
+    assert data(h.call("validate_sql", sql=GOOD_SQL))["warnings"] == []
 
 
 # --- run_sql ---------------------------------------------------------------------------------

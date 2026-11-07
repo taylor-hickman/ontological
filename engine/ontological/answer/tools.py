@@ -12,6 +12,10 @@ missing step, when a step it needs hasn't happened:
 | `run_sql` | a `validation_id` that passed `validate_sql` |
 | `review_answer` | the critic on, a `validation_id` that ran; at most `MAX_REVIEWS` calls |
 
+`validate_sql` runs the whole gate (`ontological.answer.gate`), probing the source through one
+`ProbeExecutor` for the session, so the question's probes share upstream's cap. After
+`SOFT_CHECKS_UNTIL` calls, the gate's soft checks warn instead of failing the SQL.
+
 A result's `data` is the tool's record of what it did, for the post-run check
 (`ontological.answer.postcheck`); the gateway keeps it from the model, which reads the text.
 
@@ -32,12 +36,15 @@ from typing import Any, Protocol
 
 from claude_agent_sdk import SdkMcpTool
 
-from ontological.answer.gate import GateResult, KeyColumns, check_sql
+from ontological.answer.gate import GateResult, KeyColumns, Probing, check_sql
+from ontological.answer.join_check import JoinGraph
 from ontological.answer.models import CALC_SUBTYPES, Review
+from ontological.answer.probe import ProbeExecutor
 from ontological.catalog.parsers.catalog_index import CatalogIndex
 from ontological.sources.executor import Rows, SourceError
 
 MAX_VALIDATIONS = 7  # upstream's cap on SQL attempts per question
+SOFT_CHECKS_UNTIL = 5  # upstream's INTENT_VALIDATION_SKIPPED_AFTER: then soft checks warn
 MAX_REVIEWS = 2  # §8.1: at most 2 critic rounds
 REVIEW_ROWS = 20  # the first rows the critic sees
 SEARCH_KINDS = ("attribute", "term")
@@ -52,15 +59,20 @@ class Ontology(Protocol):
 
     def key_columns(self, database: str, table: str) -> KeyColumns: ...
 
+    def join_graph(self, database: str) -> JoinGraph: ...
+
     def search(self, database: str, query: str, kinds: Sequence[str]) -> list[dict[str, Any]]: ...
 
     def describe_table(self, database: str, table: str) -> dict[str, Any] | None: ...
 
 
 class SqlRunner(Protocol):
-    """The source's executor: one SELECT, its rows capped (`SourceExecutor.run_sql`)."""
+    """The source's executor: one SELECT, its rows capped (`SourceExecutor.run_sql`), and the
+    gate's read-only probes (`SourceExecutor.probe`)."""
 
     def run_sql(self, sql: str) -> Rows: ...
+
+    def probe(self, sql: str, *, max_rows: int) -> Rows: ...
 
 
 @dataclass(frozen=True)
@@ -120,6 +132,7 @@ class AnswerTools:
         self.review = review
         self._state = _State()
         self._catalog: CatalogIndex | None = None
+        self._probing: Probing | None = None
 
     def sdk_tools(self) -> list[SdkMcpTool[Any]]:
         tools = [
@@ -187,7 +200,8 @@ class AnswerTools:
             )
         state.validate_calls += 1
         sql = str(args["sql"])
-        gate = await asyncio.to_thread(self._gate, sql)
+        soft_as_warnings = state.validate_calls > SOFT_CHECKS_UNTIL
+        gate = await asyncio.to_thread(self._gate, sql, soft_as_warnings)
         if not gate.ok:
             return _failed(
                 "validate_sql found issues. Fix the SQL and call validate_sql again:\n"
@@ -197,7 +211,7 @@ class AnswerTools:
         assert state.plan_id is not None
         validation_id = f"val-{len(state.validations) + 1}"
         state.validations[validation_id] = _Validation(validation_id, state.plan_id, sql, gate)
-        return _ok(
+        passed = _ok(
             {
                 "ok": True,
                 "validation_id": validation_id,
@@ -205,8 +219,18 @@ class AnswerTools:
                 "sql": sql,
                 "tables": gate.tables,
                 "columns": gate.columns,
+                "warnings": gate.warnings,
             }
         )
+        if gate.warnings:
+            passed["content"].append(
+                _text(
+                    "Warnings: the SQL passed, since the soft checks no longer block it after "
+                    f"{SOFT_CHECKS_UNTIL} tries, but they still found:\n"
+                    + "\n".join(f"- {warning}" for warning in gate.warnings)
+                )
+            )
+        return passed
 
     async def run_sql(self, args: dict[str, Any]) -> ToolResult:
         if refused := self._needs_plan():
@@ -291,13 +315,19 @@ class AnswerTools:
             )
         return None
 
-    def _gate(self, sql: str) -> GateResult:
+    def _gate(self, sql: str, soft_as_warnings: bool) -> GateResult:
         if self._catalog is None:
             self._catalog = self.ontology.catalog(self.database)
+        if self._probing is None:
+            self._probing = Probing(
+                ProbeExecutor(self.runner), self.ontology.join_graph(self.database)
+            )
         return check_sql(
             sql,
             self._catalog,
             key_columns=lambda table: self.ontology.key_columns(self.database, table),
+            probing=self._probing,
+            soft_as_warnings=soft_as_warnings,
         )
 
 
@@ -377,7 +407,8 @@ DESCRIBE_SCHEMA: dict[str, Any] = {
 
 VALIDATE_DOC = (
     "Check SQL before it runs: one read-only query, every table and column in the catalog, "
-    "nothing degenerate. Returns a validation_id, or the issues to fix."
+    "nothing degenerate, joins the ontology bears out, and filter values and JSON keys the "
+    "source holds. Returns a validation_id, or the issues to fix."
 )
 VALIDATE_SCHEMA: dict[str, Any] = {
     "type": "object",
