@@ -135,6 +135,15 @@ describe('the banner', () => {
     expect(jobBanner(job({ kind: 'ingest', state: 'stopped' }), NOW)).toBeNull()
   })
 
+  it('offers Retry for a re-embed that stopped, which uses no Claude usage', () => {
+    const stopped = jobBanner(job({ kind: 'reembed', state: 'stopped', error: 'RuntimeError: the embedder failed' }), NOW)
+    expect(stopped?.action).toBe('resume')
+    expect(stopped?.actionLabel).toBe('Retry')
+    expect(stopped?.detail).toContain('RuntimeError: the embedder failed')
+    expect(stopped?.detail).toContain('no Claude usage')
+    expect(jobBanner(job({ kind: 'reembed', state: 'running' }), NOW)).toBeNull()
+  })
+
   it('counts down in minutes, then hours', () => {
     expect(countdown('2026-11-06T15:32:20Z', NOW)).toBe('in 1 min')
     expect(countdown('2026-11-06T15:31:00Z', NOW)).toBe('in under a minute')
@@ -227,6 +236,8 @@ describe('earlier runs', () => {
     expect(earlierLine(job({ state: 'held' }))).toBe('Compile · wwi · 31 of 48 tables')
     expect(earlierLine(job({ kind: 'ingest', state: 'done', new_tables: ['a.b', 'a.c'] }))).toBe('Ingest metadata · wwi · 2 new tables')
     expect(earlierLine(job({ kind: 'ingest', state: 'stopped' }))).toBe('Ingest metadata · wwi · failed')
+    expect(earlierLine(job({ kind: 'reembed', state: 'done' }))).toBe('Re-embed · wwi')
+    expect(earlierLine(job({ kind: 'reembed', state: 'stopped' }))).toBe('Re-embed · wwi · failed')
   })
 })
 

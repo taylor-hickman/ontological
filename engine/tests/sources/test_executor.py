@@ -252,6 +252,16 @@ def test_probe_takes_up_to_1000_profiling_rows(tmp_path: Path) -> None:
             ex.probe("SELECT 1", max_rows=0)
 
 
+def test_fetch_takes_the_caller_s_row_cap(tmp_path: Path) -> None:
+    with SourceExecutor(SqliteSource(make_sqlite(tmp_path / "big.db", rows=1500))) as ex:
+        everything = ex.fetch("SELECT artist_id FROM artist", max_rows=10_000)
+        assert len(everything.rows) == 1500
+        assert not everything.truncated
+        assert ex.fetch("SELECT artist_id FROM artist", max_rows=1499).truncated
+        with pytest.raises(ValueError):
+            ex.fetch("SELECT 1", max_rows=0)
+
+
 def test_an_empty_result_keeps_its_columns(executor: SourceExecutor) -> None:
     rows = executor.probe("SELECT name FROM artist WHERE false")
     assert rows.columns == ["name"]

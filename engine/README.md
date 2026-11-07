@@ -53,6 +53,8 @@ uv run ontological ask "Which artists have the most albums?" --source chinook --
 
 It exits 0 for a verified answer, 2 for an unverified one, and 1 if it couldn't ask. `--no-critic` skips the critic's review; options it doesn't know go to the engine it starts.
 
+The engine's `--routes FILE` lays routes from a JSON file (`{"<task>": {"model", "effort"}}`) over the defaults. The eval runner starts its engine with one, to pin full model IDs.
+
 ## The MCP server
 
 `ontological-mcp` is the stdio MCP server for Claude Code, Claude Desktop and Cursor ([ARCHITECTURE.md §9.2](../docs/ARCHITECTURE.md#92-mcp-for-external-agents)). It answers `initialize` at once, then attaches to the running engine, or starts one with `--headless`, and holds a lease on it until the client disconnects. It passes its options to the engine it starts, and logs to stderr.

@@ -7,10 +7,15 @@ option for the tables it has left, hold one (pause it until they resume it), and
 refresh's new-tables prompt. With the auto-compile setting on, a refresh that finds new tables
 starts their compile itself (`auto_compile`), as the person's Compile on that prompt would.
 
+`Jobs` also runs re-embeds (`ontological.embed.reembed`), one task per database: an import starts
+one for each database it wrote (M6.4), and Resume on a stopped one runs it again. A re-embed asked
+for while one of that database runs follows it, so it sees what was committed meanwhile.
+
 When the engine starts, it resumes every compile an earlier engine left `running` (it crashed or
-was stopped mid-table) or `paused` (it was waiting out a usage limit, and picks up by itself). A
-held or stopped compile waits for the person. When the engine stops, it cancels its compiles
-without changing their rows, so the next engine resumes them the same way.
+was stopped mid-table) or `paused` (it was waiting out a usage limit, and picks up by itself), and
+every re-embed left `running`. A held or stopped compile, and a stopped re-embed, wait for the
+person. When the engine stops, it cancels its jobs without changing their rows, so the next engine
+resumes them the same way.
 
 The API holds a `JobsService`, so the engine process tests can serve the routes from a fake.
 """
@@ -33,6 +38,7 @@ from ontological.compile.gateway import Structured
 from ontological.compile.packing import TableCalls
 from ontological.compile.split import Clock, compile_database
 from ontological.embed.embedder import LocalEmbedder
+from ontological.embed.reembed import reembed_database
 from ontological.jobs import store as job_store
 from ontological.jobs import view
 from ontological.jobs.active import ActiveJobs, JobBusy
@@ -57,12 +63,17 @@ class NotNow(Exception):
     """The job's state doesn't allow that, such as holding a finished job."""
 
 
+class NoEmbedder(Exception):
+    """This engine has no embedding model, so it can't re-embed."""
+
+
 class JobsService(Protocol):
     async def summaries(self) -> list[view.JobSummary]: ...
     async def detail(self, job_id: int) -> view.JobDetail: ...
     async def calls(self, job_id: int) -> list[view.CallRow]: ...
     async def estimate(self, database_name: str) -> Estimate: ...
     async def compile(self, database_name: str, table_calls: TableCalls | None = None) -> None: ...
+    async def reembed(self, database_name: str) -> None: ...
     async def choose(self, job_id: int, table_calls: TableCalls) -> None: ...
     async def hold(self, job_id: int) -> None: ...
     async def resume(self, job_id: int) -> None: ...
@@ -112,6 +123,8 @@ class Jobs:
         self._find_source = find_source
         self._open = open_executor
         self._running: dict[str, _Running] = {}  # by database
+        self._reembeds: dict[str, asyncio.Task[None]] = {}  # by database
+        self._reembed_again: set[str] = set()
         self._stopping = False
 
     # --- reads ----------------------------------------------------------------------------------
@@ -152,6 +165,20 @@ class Jobs:
         self._running[database_name] = _Running(task, hold)
         task.add_done_callback(lambda _: self._forget(database_name, task))
 
+    async def reembed(self, database_name: str) -> None:
+        """Re-embed the database's vectors as a tracked `reembed` job, or resume its unfinished
+        one. With one of that database running, another follows it."""
+        if self._embedder is None:
+            raise NoEmbedder(database_name)
+        if database_name in self._reembeds:
+            self._reembed_again.add(database_name)
+            return
+        task = asyncio.create_task(
+            self._run_reembed(database_name, self._embedder), name=f"reembed {database_name}"
+        )
+        self._reembeds[database_name] = task
+        task.add_done_callback(lambda _: self._forget_reembed(database_name, task))
+
     async def choose(self, job_id: int, table_calls: TableCalls) -> None:
         """Switch an unfinished compile's option: a running one takes it from its next pack."""
         job = await self._job(job_id)
@@ -173,8 +200,14 @@ class Jobs:
 
     async def resume(self, job_id: int) -> None:
         job = await self._job(job_id)
-        if job.kind != "compile" or job.state == "done":
+        if job.kind == "ingest" or job.state == "done":
             raise NotNow(f"a {job.state} {job.kind} can't be resumed")
+        if job.kind == "reembed":
+            try:
+                await self.reembed(job.database_name)
+            except NoEmbedder:
+                raise NotNow("this engine has no embedding model to re-embed with") from None
+            return
         await self.compile(job.database_name)
 
     async def dismiss(self, job_id: int) -> None:
@@ -220,12 +253,20 @@ class Jobs:
                 await self.compile(job.database_name)
             except (NoSource, JobBusy) as e:
                 log.warning("can't resume compile job %d: %s", job.id, e)
+        for job in await asyncio.to_thread(job_store.unfinished, "reembed"):
+            if job.state != "running":
+                continue
+            log.info("resuming re-embed job %d of %s", job.id, job.database_name)
+            try:
+                await self.reembed(job.database_name)
+            except NoEmbedder:
+                log.warning("can't resume re-embed job %d: this engine has no embedder", job.id)
 
     async def stop(self) -> None:
-        """Cancel the running compiles, leaving their rows for the next engine to resume. A refresh
-        that ends after this starts none."""
+        """Cancel the running compiles and re-embeds, leaving their rows for the next engine to
+        resume. A refresh that ends after this starts none."""
         self._stopping = True
-        tasks = [r.task for r in self._running.values()]
+        tasks = [r.task for r in self._running.values()] + list(self._reembeds.values())
         for task in tasks:
             task.cancel()
         if tasks:
@@ -262,6 +303,25 @@ class Jobs:
             # gone, mustn't look as if it is still running.
             log.exception("compile of %s failed", name)
             await asyncio.to_thread(_stop_open, name, f"{type(e).__name__}: {e}")
+
+    async def _run_reembed(self, database_name: str, embedder: LocalEmbedder) -> None:
+        while True:
+            self._reembed_again.discard(database_name)
+            try:
+                await asyncio.to_thread(
+                    reembed_database, database_name, embedder, jobs=self._active
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # The job row is stopped with the error, for the person to retry.
+                log.exception("re-embed of %s failed", database_name)
+            if database_name not in self._reembed_again or self._stopping:
+                return
+
+    def _forget_reembed(self, database_name: str, task: asyncio.Task[None]) -> None:
+        if self._reembeds.get(database_name) is task:
+            del self._reembeds[database_name]
 
     def _forget(self, database_name: str, task: asyncio.Task[None]) -> None:
         running = self._running.get(database_name)

@@ -2,13 +2,17 @@
 
 A route's model is a CLI alias, which follows new releases, or a full model ID, which pins one
 (eval configs pin). Every route is a setting; `merge_routes` lays the user's over the defaults.
+`load_routes` reads routes from a JSON file, as the engine's `--routes` does for the eval.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, cast
 
 ALIASES = frozenset({"haiku", "sonnet", "opus", "fable"})
 EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
@@ -59,3 +63,27 @@ def fallback_for(model: str) -> str | None:
     if model == "opus" or model.startswith("claude-opus-"):
         return "sonnet"
     return None
+
+
+def load_routes(path: Path) -> dict[str, Route]:
+    """`parse_routes` on a JSON file."""
+    try:
+        raw: Any = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise ValueError(f"can't read routes from {path}: {e}") from e
+    return parse_routes(raw, where=str(path))
+
+
+def parse_routes(raw: Any, *, where: str = "routes") -> dict[str, Route]:
+    """`{"<task>": {"model": ..., "effort": ...}, ...}` as routes. Raises ValueError on anything
+    else, a bad model or effort, or a task that doesn't exist; `where` names the source."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where}: routes must be an object of task -> {{model, effort}}")
+    routes: dict[str, Route] = {}
+    for task, route in cast(dict[str, Any], raw).items():
+        if not isinstance(route, dict) or set(cast(dict[str, Any], route)) != {"model", "effort"}:
+            raise ValueError(f"{where}: the route for {task} must be {{model, effort}}")
+        r = cast(dict[str, Any], route)
+        routes[task] = Route(str(r["model"]), str(r["effort"]))
+    merge_routes(routes)  # refuses tasks that don't exist
+    return routes

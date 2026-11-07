@@ -245,11 +245,11 @@ function JobCard({ state, job }: { state: JobsScreenState; job: JobSummary }) {
             <Count label="Claude calls" value={String(job.calls)} />
             <Count label="Cache hits" value={String(job.cache_hits)} />
           </dl>
-        ) : (
+        ) : job.kind === 'ingest' ? (
           <dl className="m-0 flex flex-wrap gap-6">
             <Count label="New tables" value={String(job.new_tables.length)} />
           </dl>
-        )}
+        ) : null}
         {job.kind === 'compile' && job.state === 'running' && (
           <button
             type="button"

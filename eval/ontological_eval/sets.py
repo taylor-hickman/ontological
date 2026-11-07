@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import random
 import sqlite3
+import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
@@ -41,6 +42,7 @@ DEV_PER_DATABASE = 10
 HELDOUT_BIRD = 40
 SMOKE_WWI = 10
 SMOKE_BIRD = 10
+QUERY_TIMEOUT_S = 60.0  # one query, gold or the control arm's
 
 Key = tuple[Source, int]
 Sets = dict[str, list[Key]]
@@ -217,26 +219,47 @@ def gold_problem(q: Question, run: Callable[[Question], Rows]) -> str | None:
 
 
 class GoldRunner:
-    """Runs gold SQL where it lives: BIRD on its .sqlite file through sqlite3, opened read-only,
-    and WWI on the eval cluster in read-only transactions."""
+    """Runs SQL where a question's data lives: BIRD on its .sqlite file through sqlite3, opened
+    read-only, and WWI on the eval cluster in read-only transactions. Calling it runs the
+    question's gold SQL; `query` runs any SQL there, as the control arm's (`control.py`)."""
 
-    def __init__(self, home: Path) -> None:
+    def __init__(self, home: Path, *, timeout_s: float = QUERY_TIMEOUT_S) -> None:
         self.home = home
+        self.timeout_s = timeout_s
         self._sqlite: dict[str, sqlite3.Connection] = {}
         self._pg: psycopg.Connection[tuple[Any, ...]] | None = None
 
     def __call__(self, q: Question) -> Rows:
-        return self._run_wwi(q.sql) if q.source == "wwi" else self._run_bird(q.db, q.sql)
+        return self.query(q, q.sql)[0]
 
-    def _run_bird(self, db: str, sql: str) -> Rows:
+    def query(self, q: Question, sql: str, *, max_rows: int | None = None) -> tuple[Rows, bool]:
+        """`sql`'s rows on q's database, at most `max_rows` of them, and whether there were
+        more. Raises on an error, or when it runs past `timeout_s`."""
+        cur = self._bird_cursor(q.db, sql) if q.source == "bird" else self._wwi_cursor(sql)
+        if cur is None:
+            return [], False
+        if max_rows is None:
+            return cur.fetchall(), False
+        rows = cur.fetchmany(max_rows + 1)
+        return rows[:max_rows], len(rows) > max_rows
+
+    def _bird_cursor(self, db: str, sql: str) -> sqlite3.Cursor:
         if db not in self._sqlite:
             path = bird_dir(self.home) / f"{db}.sqlite"
             if not path.exists():
                 raise SetsError(f"{path} is missing: run `fetch bird-databases`")
-            self._sqlite[db] = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
-        return self._sqlite[db].execute(sql).fetchall()
+            # The eval runner scores on a worker thread and closes on its own; it uses a
+            # connection from one thread at a time.
+            self._sqlite[db] = sqlite3.connect(
+                f"{path.as_uri()}?mode=ro", uri=True, check_same_thread=False
+            )
+        conn = self._sqlite[db]
+        deadline = time.monotonic() + self.timeout_s
+        # sqlite3 has no statement timeout: a progress handler that returns true interrupts.
+        conn.set_progress_handler(lambda: time.monotonic() > deadline, 10_000)
+        return conn.execute(sql)
 
-    def _run_wwi(self, sql: str) -> Rows:
+    def _wwi_cursor(self, sql: str) -> psycopg.Cursor[tuple[Any, ...]] | None:
         if self._pg is None:
             socket = cluster_dir(self.home) / "pgsocket"
             try:
@@ -246,11 +269,12 @@ class GoldRunner:
                 )  # fmt: skip
             except psycopg.OperationalError as e:
                 raise SetsError(f"can't reach the eval cluster: run `cluster up` ({e})") from e
-            self._pg.execute("SET statement_timeout = '60s'")
+            timeout_ms = str(int(self.timeout_s * 1000))
+            self._pg.execute("SELECT set_config('statement_timeout', %s, false)", (timeout_ms,))
             self._pg.execute("SET default_transaction_read_only = on")
-        with self._pg.cursor() as cur:
-            cur.execute(sql.encode())
-            return cur.fetchall() if cur.description else []
+        cur = self._pg.cursor()
+        cur.execute(sql.encode())
+        return cur if cur.description else None
 
     def close(self) -> None:
         for conn in self._sqlite.values():

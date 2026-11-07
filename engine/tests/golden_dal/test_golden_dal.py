@@ -42,10 +42,10 @@ PAGILA = "pagila"
 # build_sqlite_fixtures writes it beside its SQL, as upstream's does; .gitignore'd.
 CHINOOK = FIXTURES / "dev_tools/fixtures/sql/chinook.sqlite"
 
-# Every test file in the suite and how many tests it runs. S6 counted upstream's 781 DAL tests;
-# from those, test_model_interchange.py (21) waits for M6.4's port of dal/model_interchange.py, so
-# test_dal_surface.py also has one module fewer to snapshot, and test_migration_revision.py loses
-# its Helm-chart test. A file that runs fewer tests than this fails the gate.
+# Every test file in the suite and how many tests it runs: S6's 781 upstream DAL tests, less
+# test_migration_revision.py's Helm-chart test, and the 23 catalog-store tests, 803 in all.
+# test_model_interchange.py runs against M6.4's port of dal/model_interchange.py. A file that runs
+# fewer tests than this fails the gate.
 EXPECTED = {
     "auto_ontology/catalog/store/tests/test_primary_keys.py": 3,
     "auto_ontology/catalog/store/tests/test_review_regressions.py": 6,
@@ -55,13 +55,14 @@ EXPECTED = {
     "auto_ontology/dal/tests/test_candidates.py": 16,
     "auto_ontology/dal/tests/test_close_store.py": 2,
     "auto_ontology/dal/tests/test_column_properties.py": 9,
-    "auto_ontology/dal/tests/test_dal_surface.py": 24,
+    "auto_ontology/dal/tests/test_dal_surface.py": 25,
     "auto_ontology/dal/tests/test_datasources_semantic.py": 37,
     "auto_ontology/dal/tests/test_exploration.py": 33,
     "auto_ontology/dal/tests/test_golden.py": 128,
     "auto_ontology/dal/tests/test_groups.py": 7,
     "auto_ontology/dal/tests/test_metadata_batch.py": 8,
     "auto_ontology/dal/tests/test_migration_revision.py": 1,
+    "auto_ontology/dal/tests/test_model_interchange.py": 21,
     "auto_ontology/dal/tests/test_reset.py": 14,
     "auto_ontology/dal/tests/test_rules.py": 35,
     "auto_ontology/dal/tests/test_schema_version.py": 9,
