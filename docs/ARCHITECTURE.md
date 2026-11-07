@@ -736,7 +736,7 @@ Dropped: login, invitations, users, groups, SSO, API tokens, owners, zones (or k
 `ontological-mcp` is a stdio server. It is configured in Claude Code with `claude mcp add ontological -- ontological-mcp`, and similarly in Claude Desktop and Cursor. It proxies to the engine API, starting a headless engine (and with it Postgres) if none is running, and holds a lease while the MCP client is connected (§4.4). It answers MCP `initialize` at once and starts the engine in the background, because Postgres start-up and model loading take longer than MCP clients wait for a handshake. Tool calls made before the engine is ready wait for it.
 
 It exposes upstream's curated set (`check_readiness`, `search_terms`, `get_term`, `get_term_columns`, `get_term_sql_attributes`, `get_sql_attribute`, `describe_table`, `check_answerable`, `ask_question`) plus two tools that matter when the caller is itself Claude:
-- **`validate_sql(sql)`** and **`run_validated_sql(validation_id)`**. These let a calling Claude Code session do the reasoning itself against Ontological's gate, without spending a second nested agent session through `ask_question`.
+- **`validate_sql(sql, database?)`** and **`run_validated_sql(validation_id)`**. These let a calling Claude Code session do the reasoning itself against Ontological's gate, without spending a second nested agent session through `ask_question`.
 
 Port upstream's three skills as one Claude Code plugin (`plugins/claude-code/`): query, manage and setup. Rebrand them and point them at the stdio tools and engine API.
 
