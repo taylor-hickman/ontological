@@ -46,9 +46,12 @@ from ontological.embed.search import dense_search
 
 logger = logging.getLogger(__name__)
 
-# Before the agent extracts entities, the raw question is the one entity, with upstream's
-# per-label default (`PER_LABEL_LIMIT`) in place of its per-entity 2. M4.7 tunes it (§7.3).
-QUESTION_K = 10
+# Before the agent extracts entities, the raw question is the one entity. Upstream took its
+# per-label default, 10. The retrieval benchmark (M3.9, BUILD_PLAN.md) put it at 30, where recall
+# levels off: on dev, hybrid search with the default model finds 0.94 of the gold tables and 0.81
+# of the gold columns at 30, against 0.80 and 0.56 at 10, for a pack of about 9 tables rather
+# than 6. M4.7 checks it against answer accuracy.
+QUESTION_K = 30
 
 # The context fields an attribute and its join-path entry carry (upstream's
 # `primary_attribute` and `attribute_join_paths`).

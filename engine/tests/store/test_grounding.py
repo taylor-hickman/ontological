@@ -17,7 +17,7 @@ from fakes import NoAnswer, ScriptedGateway
 from test_compile import claude, table_of
 
 from auto_ontology.vdb.postgres import PostgresVDB, on_change
-from ontological.answer.pack import build_pack
+from ontological.answer.pack import QUESTION_K, build_pack
 from ontological.catalog.ingest import ingest
 from ontological.compile.split import Compiled, compile_database
 from ontological.embed import model
@@ -172,7 +172,7 @@ def test_the_pack_for_a_question_within_a_scope(
     pack = build_pack(vdb, "which country is each invoice billed to", database="chinook")
 
     assert pack.database == "chinook" and pack.coverage == []
-    assert len(pack.attributes) == 10
+    assert len(pack.attributes) == QUESTION_K
     assert place(pack.attributes[0]) == "Invoice.BillingCountry"
     assert [a["score"] for a in pack.attributes] == sorted(a["score"] for a in pack.attributes)
     assert {a["query_entities"][0] for a in pack.attributes} == {

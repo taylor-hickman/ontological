@@ -8,6 +8,7 @@
     ingest [wwi | <bird db> ...]   ingest the eval databases into the eval store (default: all)
     sets freeze [--force]   choose eval/sets/{dev,heldout,smoke}.json with the fixed seed
     sets check        run every set's gold SQL: each must run and return rows (needs `cluster up`)
+    compile [wwi | <bird db> ...]   compile them in the eval store: spends Claude quota
     retrieval [--layer semantic|data] [--set dev] [--models <key> ...]
                       the retrieval benchmark: recall@k per model and configuration, no Claude
 
@@ -27,7 +28,7 @@ from pathlib import Path
 from ontological.embed import model as models
 from ontological.store import pg
 
-from . import cluster, fetch, ingest, questions, retrieval, sets
+from . import cluster, compile_store, fetch, ingest, questions, retrieval, sets
 from .home import eval_home, wwi_dir
 
 
@@ -56,6 +57,11 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("sets", help="the frozen question sets in eval/sets/")
     s.add_argument("action", choices=["freeze", "check"])
     s.add_argument("--force", action="store_true", help="freeze: rewrite existing set files")
+    k = sub.add_parser("compile", help="compile the eval databases (spends Claude quota)")
+    k.add_argument(
+        "databases", nargs="*", help=f"any of {', '.join(ingest.DATABASES)} (default: all)"
+    )
+    k.add_argument("--pg-bin", help="the bundled Postgres's bin/ (default: $ONTOLOGICAL_PG_BIN)")
     r = sub.add_parser("retrieval", help="the retrieval benchmark (no Claude calls)")
     r.add_argument("--layer", choices=retrieval.LAYERS, default="semantic")
     r.add_argument("--set", default="dev", choices=sets.NAMES, dest="set_name")
@@ -78,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         pg_bin = _pg_bin(args.pg_bin)
         if args.command == "ingest":
             return _ingest(home, pg_bin, args.databases or list(ingest.DATABASES))
+        if args.command == "compile":
+            return _compile(home, pg_bin, args.databases or list(ingest.DATABASES))
         if args.command == "retrieval":
             report, out = retrieval.bench(
                 home,
@@ -114,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         sets.SetsError,
         ingest.IngestError,
         retrieval.BenchmarkError,
+        compile_store.CompileError,
         models.ModelError,
         OSError,
     ) as e:
@@ -129,6 +138,26 @@ def _ingest(home: Path, pg_bin: Path, names: list[str]) -> int:
             print(f"  skipped {s['table_schema']}.{s['table_name']}: {s['error']}")
     print(f"the eval store is {ingest.layout(home, pg_bin).app_data}")
     return 0
+
+
+def _compile(home: Path, pg_bin: Path, names: list[str]) -> int:
+    lay = ingest.layout(home, pg_bin)
+    results = compile_store.run(home, pg_bin, names, progress=lambda m: print(m, file=sys.stderr))
+    for r in results:
+        c = r.compiled
+        written = sum(1 for t in c.tables if t.terms)
+        vectors = f", {c.vectors.embedded} vectors embedded" if c.vectors else ""
+        print(f"{r.name}: {len(c.tables)} table(s) this run, {written} with Terms{vectors}")
+        if c.stopped is not None:
+            print(f"  stopped: {c.stopped}; run compile again to resume")
+    server = pg.ensure_running(lay)
+    try:
+        calls, cost = compile_store.usage(lay)
+    finally:
+        if server.action != "adopt":
+            pg.stop(lay)
+    print(f"the store's call log: {calls} Claude call(s), ${cost:.2f} at API prices")
+    return 0 if all(r.compiled.complete for r in results) else 1
 
 
 def _sets(action: str, home: Path, *, force: bool) -> int:

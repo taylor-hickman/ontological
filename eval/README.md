@@ -12,6 +12,7 @@ uv run python -m ontological_eval cluster check   # each WWI table's row count a
 uv run python -m ontological_eval cluster status  # running or not, and the psql line to connect
 uv run python -m ontological_eval cluster down
 uv run python -m ontological_eval ingest          # WWI and the four BIRD databases into the eval store
+uv run python -m ontological_eval compile         # compile them there: spends Claude quota (~$1.50 at API prices)
 uv run python -m ontological_eval sets check      # every set's gold SQL runs and returns rows
 uv run python -m ontological_eval retrieval       # the retrieval benchmark: recall@k, no Claude
 ```
@@ -74,6 +75,10 @@ Each BIRD draw follows Mini-Dev's own difficulty mix over all 500 questions (8 s
 `sets check` runs each set's gold SQL natively, BIRD's with `sqlite3` on the read-only `.sqlite` file and WWI's on the eval cluster, and fails if any query errors, returns no rows, or returns only NULLs. It needs the data and `cluster up`.
 
 The sets are frozen: `sets freeze` won't overwrite them without `--force`, and after M0 nothing in `sets/` changes unless a question turns out to be broken, and then as a commit of its own that says why.
+
+## The eval compile
+
+`compile` runs the engine's compile on the eval databases in the eval store, through the real gateway on your Claude subscription, and syncs their Terms and attributes into the semantic layer with the default embedding model. [`ontological_eval/compile_store.py`](ontological_eval/compile_store.py) holds it. Every call is logged in the store's `ops.llm_call` with its API-equivalent cost, and its answer is cached there. A database whose tables all have Terms makes no call, and a compile that Claude stopped picks up where it left off on the next run. With M3.1's compile, the five databases took 256 calls, $1.49 at API prices and 14 minutes (BUILD_PLAN.md M3.9). It refuses while an engine serves the store, as `ingest` does.
 
 ## The retrieval benchmark
 

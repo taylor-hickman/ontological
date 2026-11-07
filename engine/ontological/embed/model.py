@@ -8,8 +8,8 @@ the engine loads them from there with no network, as it will from the app bundle
 graph and the tokenizer are needed.
 
 `CANDIDATES` holds §7.2's four candidates, which the retrieval benchmark (§7.4) compares;
-`DEFAULT` is the one the engine runs. The module-level names (`MODEL_ID`, `DIM`, `FILES`, ...)
-are the default's.
+`DEFAULT` is the one the engine runs, the benchmark's winner (BUILD_PLAN.md, M3.9). The
+module-level names (`MODEL_ID`, `DIM`, `FILES`, ...) are the default's.
 """
 
 from __future__ import annotations
@@ -41,6 +41,10 @@ class ModelSpec:
     query_prefix: str  # the model card's prefixes
     passage_prefix: str
     token_type_ids: bool  # whether the graph takes them (all zeros, one segment)
+    # The cosine distance at or under which an attribute hit covers an entity in
+    # `check_answerable` (§7.3), calibrated by the retrieval benchmark (M3.9): each model spreads
+    # its distances differently, so upstream's 0.75 doesn't transfer.
+    coverage_distance: float
     max_length: int = 512
 
     @property
@@ -74,6 +78,7 @@ BGE_SMALL = ModelSpec(
     query_prefix=_BGE_QUERY,
     passage_prefix="",
     token_type_ids=True,
+    coverage_distance=0.346,
 )
 
 ARCTIC_M = ModelSpec(
@@ -92,6 +97,7 @@ ARCTIC_M = ModelSpec(
     query_prefix=_BGE_QUERY,
     passage_prefix="",
     token_type_ids=False,
+    coverage_distance=0.636,
 )
 
 NOMIC = ModelSpec(
@@ -110,6 +116,7 @@ NOMIC = ModelSpec(
     query_prefix="search_query: ",
     passage_prefix="search_document: ",
     token_type_ids=True,
+    coverage_distance=0.356,
 )
 
 BGE_BASE = ModelSpec(
@@ -128,6 +135,7 @@ BGE_BASE = ModelSpec(
     query_prefix=_BGE_QUERY,
     passage_prefix="",
     token_type_ids=True,
+    coverage_distance=0.415,
 )
 
 CANDIDATES: Mapping[str, ModelSpec] = {m.key: m for m in (BGE_SMALL, ARCTIC_M, NOMIC, BGE_BASE)}
@@ -144,6 +152,7 @@ DIM = DEFAULT.dim
 MAX_LENGTH = DEFAULT.max_length
 QUERY_PREFIX = DEFAULT.query_prefix
 PASSAGE_PREFIX = DEFAULT.passage_prefix
+COVERAGE_DISTANCE = DEFAULT.coverage_distance
 
 
 class ModelError(Exception):

@@ -50,6 +50,7 @@ def test_the_candidates_are_distinct_and_the_default_is_one_of_them() -> None:
     for m in model.CANDIDATES.values():
         assert m.model_file in m.files and m.tokenizer_file in m.files
         assert all(len(sha) == 64 for sha in m.files.values())
+        assert 0.0 < m.coverage_distance < 1.0
 
 
 def test_fetch_and_verify_take_any_candidate(tmp_path: Path) -> None:
