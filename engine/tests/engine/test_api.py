@@ -13,7 +13,7 @@ from fake_answers import SQL, FakeAnswers
 from fake_jobs import FakeJobs
 from fastapi.testclient import TestClient
 
-from ontological.answer.service import Answers, Asked, NoEmbedder, NothingFound
+from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder, NothingFound
 from ontological.api.app import create_app
 from ontological.compile.estimate import EstimatedTable, estimate
 from ontological.engine.lifetime import Lifetime
@@ -66,6 +66,7 @@ def client(lifetime: Lifetime) -> Iterator[TestClient]:
         ("GET", "/sources/x/catalog"),
         ("GET", "/tables/x"),
         ("POST", "/ask"),
+        ("POST", "/answerable"),
         ("GET", "/docs"),
         ("GET", "/openapi.json"),
         ("GET", "/no-such-route"),
@@ -351,7 +352,7 @@ def test_ask_without_a_database_leaves_the_choice_to_the_engine(lifetime: Lifeti
 
 
 def test_ask_answers_404_when_no_ontology_matches_the_question(lifetime: Lifetime) -> None:
-    class Unmatched:
+    class Unmatched(FakeAnswers):
         async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked:
             raise NothingFound(question)
 
@@ -371,7 +372,7 @@ def test_ask_answers_404_for_a_database_with_no_source(lifetime: Lifetime) -> No
 def test_ask_needs_a_store_and_an_embedder(client: TestClient, lifetime: Lifetime) -> None:
     assert client.post("/ask", json={"question": "q", "database": "chinook"}).status_code == 503
 
-    class NoModel:
+    class NoModel(FakeAnswers):
         async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked:
             raise NoEmbedder
 
@@ -382,7 +383,7 @@ def test_ask_needs_a_store_and_an_embedder(client: TestClient, lifetime: Lifetim
 
 
 def test_ask_counts_as_activity_while_it_runs(lifetime: Lifetime, clock: Clock) -> None:
-    class Slow:
+    class Slow(FakeAnswers):
         async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked:
             assert lifetime.should_exit() is False
             clock.now += 10_000  # a long session: no lease, but a request in flight
@@ -391,3 +392,31 @@ def test_ask_counts_as_activity_while_it_runs(lifetime: Lifetime, clock: Clock) 
 
     with ask_client(lifetime, Slow()) as c:
         assert c.post("/ask", json={"question": "q", "database": "chinook"}).status_code == 200
+
+
+# --- answerable ------------------------------------------------------------------------------
+
+
+def test_answerable_returns_the_coverage_and_what_is_missing(lifetime: Lifetime) -> None:
+    answers = FakeAnswers()
+    with ask_client(lifetime, answers) as c:
+        r = c.post("/answerable", json={"question": "Artists by release year?"})
+        scoped = c.post("/answerable", json={"question": "q", "database": "chinook"})
+    assert r.status_code == 200 and scoped.status_code == 200
+    got = Answerability.model_validate(r.json())
+    assert (got.database, got.coverage, got.missing) == ("chinook", 0.5, ["release year"])
+    assert got.entities[0].attributes[0].column == "Name"
+    assert answers.checked == [("Artists by release year?", None), ("q", "chinook")]
+
+
+def test_answerable_needs_a_store_and_an_embedder(client: TestClient, lifetime: Lifetime) -> None:
+    assert client.post("/answerable", json={"question": "q"}).status_code == 503
+
+    class NoModel(FakeAnswers):
+        async def check(self, question: str, database: str | None = None) -> Answerability:
+            raise NoEmbedder
+
+    with ask_client(lifetime, NoModel()) as c:
+        r = c.post("/answerable", json={"question": "q"})
+    assert r.status_code == 503
+    assert "embedding" in r.json()["detail"]

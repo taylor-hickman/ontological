@@ -42,8 +42,9 @@ class ModelSpec:
     passage_prefix: str
     token_type_ids: bool  # whether the graph takes them (all zeros, one segment)
     # The cosine distance at or under which an attribute hit covers an entity in
-    # `check_answerable` (§7.3), calibrated by the retrieval benchmark (M3.9): each model spreads
-    # its distances differently, so upstream's 0.75 doesn't transfer.
+    # `check_answerable` (§7.3): each model spreads its distances differently, so upstream's 0.75
+    # doesn't transfer. Calibrated on the dev questions' extracted entities (`ontological_eval
+    # answerable`, M4.4), which sit further from their attributes than whole questions (M3.9).
     coverage_distance: float
     max_length: int = 512
 
@@ -78,7 +79,7 @@ BGE_SMALL = ModelSpec(
     query_prefix=_BGE_QUERY,
     passage_prefix="",
     token_type_ids=True,
-    coverage_distance=0.346,
+    coverage_distance=0.345,
 )
 
 ARCTIC_M = ModelSpec(
@@ -97,7 +98,7 @@ ARCTIC_M = ModelSpec(
     query_prefix=_BGE_QUERY,
     passage_prefix="",
     token_type_ids=False,
-    coverage_distance=0.636,
+    coverage_distance=0.671,
 )
 
 NOMIC = ModelSpec(
@@ -116,7 +117,7 @@ NOMIC = ModelSpec(
     query_prefix="search_query: ",
     passage_prefix="search_document: ",
     token_type_ids=True,
-    coverage_distance=0.356,
+    coverage_distance=0.376,
 )
 
 BGE_BASE = ModelSpec(
@@ -135,7 +136,7 @@ BGE_BASE = ModelSpec(
     query_prefix=_BGE_QUERY,
     passage_prefix="",
     token_type_ids=True,
-    coverage_distance=0.415,
+    coverage_distance=0.412,
 )
 
 CANDIDATES: Mapping[str, ModelSpec] = {m.key: m for m in (BGE_SMALL, ARCTIC_M, NOMIC, BGE_BASE)}

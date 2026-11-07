@@ -15,6 +15,7 @@ uv run python -m ontological_eval ingest          # WWI and the four BIRD databa
 uv run python -m ontological_eval compile         # compile them there: spends Claude quota (~$1.50 at API prices)
 uv run python -m ontological_eval sets check      # every set's gold SQL runs and returns rows
 uv run python -m ontological_eval retrieval       # the retrieval benchmark: recall@k, no Claude
+uv run python -m ontological_eval answerable      # check_answerable's distance on entities: 76 Haiku calls
 ```
 
 ## The data
@@ -97,6 +98,17 @@ uv run python -m ontological_eval retrieval --models arctic-m bge-small --set sm
 - **Coverage threshold.** It is recalibrated per model from dense distances. A question's nearest row in its own database counts as a positive, and its nearest row in each other eval database as a negative. The threshold is the distance that best separates the two (Youden's J), shown beside upstream's 0.75.
 
 The report prints as Markdown and is written to `<home>/results/retrieval-<layer>-<set>.json`, with every distance the threshold came from. The data layer on dev takes about a minute a model on an M-series Mac.
+
+## The coverage distance on entities
+
+`answerable` calibrates `check_answerable`'s coverage distance (`ModelSpec.coverage_distance`) on the entities it scores rather than on whole questions. It runs the engine's own `answerable_extract` call on each question of a set (one Haiku call a question, about $0.03 for dev at API prices, cached in the store's `ops.llm_call`, so a rerun makes none), then, for each model, takes each entity's nearest attribute in its own database as a positive and in each other database as a negative, and picks the Youden's-J cut as `retrieval` does. [`ontological_eval/answerable.py`](ontological_eval/answerable.py) holds it.
+
+```sh
+uv run python -m ontological_eval answerable                  # dev, all four models
+uv run python -m ontological_eval answerable --models arctic-m
+```
+
+The report sets each spec's value beside the cut and says what `check_answerable` would return at the spec's value, at the cut, and at upstream's 0.75: entity TPR and FPR, mean coverage in a question's own database and in the others, and how often a question is fully covered. It is written to `<home>/results/answerable-<set>.json` with every entity and distance. It needs a compiled eval store, and refuses while an engine serves it.
 
 ## Tests
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from fakes import ScriptedGateway
 
 from auto_ontology.vdb.postgres import PostgresVDB
 from ontological.answer import service
@@ -23,6 +24,7 @@ from ontological.answer.service import (
 )
 from ontological.embed.embedder import LocalEmbedder
 from ontological.embed.hybrid import HybridSearch
+from ontological.embed.model import BGE_SMALL
 from ontological.llm.gateway import ClaudeGateway
 from ontological.sources.executor import SourceExecutor
 from ontological.sources.spec import Source, SqliteSource
@@ -173,3 +175,44 @@ def test_nothing_is_opened_without_a_source_or_an_embedder() -> None:
     with pytest.raises(NoEmbedder):
         asyncio.run(answers(opened, source=None, embedder=None).ask("q", "chinook"))
     assert opened.vdbs == [] and opened.executors == []
+
+
+class SmallModel:
+    spec = BGE_SMALL
+
+
+def test_a_check_is_scored_at_the_engines_models_distance(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def check_answerable(question: str, **kw: Any) -> str:
+        seen.update(kw, question=question)
+        return "checked"
+
+    monkeypatch.setattr(service, "check_answerable", check_answerable)
+    opened = Opened()
+    store = answers(opened, source=None, embedder=cast(LocalEmbedder, SmallModel()))
+    assert asyncio.run(store.check("q", "chinook")) == "checked"
+    assert seen["max_distance"] == BGE_SMALL.coverage_distance == 0.345
+    assert (seen["question"], seen["database"]) == ("q", "chinook")
+    assert [v.closed for v in opened.vdbs] == [1]
+
+
+def test_a_check_that_fails_still_closes_its_vdb() -> None:
+    opened = Opened()
+    store = StoreAnswers(
+        gateway=cast(ClaudeGateway, ScriptedGateway(lambda task, user: None)),
+        embedder=cast(LocalEmbedder, SmallModel()),
+        find_source=lambda database: None,
+        open_executor=opened.executor,
+        open_vdb=opened.vdb,
+    )
+    with pytest.raises(RuntimeError, match="the store is down"):
+        asyncio.run(store.check("q"))
+    assert [v.closed for v in opened.vdbs] == [1]
+
+
+def test_a_check_needs_an_embedder_and_no_source() -> None:
+    opened = Opened()
+    with pytest.raises(NoEmbedder):
+        asyncio.run(answers(opened, source=None, embedder=None).check("q"))
+    assert opened.vdbs == []

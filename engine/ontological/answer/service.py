@@ -1,4 +1,5 @@
-"""One question through the engine (BUILD_PLAN.md M1.8, M4.3): what `POST /ask` runs.
+"""One question through the engine (BUILD_PLAN.md M1.8, M4.3, M4.4): what `POST /ask` and
+`POST /answerable` run.
 
 `StoreAnswers.ask()` builds the grounding pack from the store's semantic layer (`build_pack`)
 with hybrid search, and runs `ontological.answer.agent.ask()` to the end with the store's
@@ -14,6 +15,9 @@ a BM25 index of the semantic layer current, which a question shouldn't wait to r
 It returns an `Asked`: the answer, the verified flag, the SQL the answer carries as
 `validate_sql` passed it, the rows `run_sql` returned for it, and every session's tool log.
 
+`StoreAnswers.check()` is `check_answerable` (M4.4) on the same semantic layer, scored at the
+engine's embedding model's coverage distance: one Haiku call, and no source or executor.
+
 The API holds an `Answers`, so the API and CLI tests can answer from a fake.
 """
 
@@ -28,6 +32,7 @@ from pydantic import BaseModel
 
 from auto_ontology.vdb.postgres import PostgresVDB
 from ontological.answer.agent import Answered, ask
+from ontological.answer.answerable import Answerability, check_answerable
 from ontological.answer.models import AnswerModel
 from ontological.answer.ontology import StoreOntology
 from ontological.answer.pack import build_pack
@@ -42,6 +47,7 @@ from ontological.sources.executor import SourceExecutor
 from ontological.sources.spec import Source
 
 __all__ = [
+    "Answerability",
     "Answers",
     "Asked",
     "NoEmbedder",
@@ -106,6 +112,8 @@ class Asked(BaseModel):
 
 class Answers(Protocol):
     async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked: ...
+
+    async def check(self, question: str, database: str | None = None) -> Answerability: ...
 
 
 def asked(answered: Answered) -> Asked:
@@ -251,3 +259,20 @@ class StoreAnswers:
             self._searching = None
             hybrid.close()
             vdb.close()
+
+    async def check(self, question: str, database: str | None = None) -> Answerability:
+        """`check_answerable` within `database`, or in the database that covers the question
+        best, at the embedder's coverage distance. Uses one `answerable_extract` call."""
+        if self._embedder is None:
+            raise NoEmbedder
+        vdb = await asyncio.to_thread(self._open_vdb, self._embedder)
+        try:
+            return await check_answerable(
+                question,
+                gateway=self._gateway,
+                vdb=vdb,
+                database=database,
+                max_distance=self._embedder.spec.coverage_distance,
+            )
+        finally:
+            await asyncio.to_thread(vdb.close)
