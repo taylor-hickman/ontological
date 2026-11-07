@@ -3,8 +3,11 @@
 `StoreAnswers.ask()` finds the source the database was ingested from, builds the grounding pack
 from the store's semantic layer (`build_pack`), opens a source executor for the agent's
 `run_sql`, and runs `ontological.answer.agent.ask()` to the end with the store's ontology and the
-engine's one Claude gateway. It returns an `Asked`: the answer, the verified flag, the SQL the
-answer carries as `validate_sql` passed it, the rows `run_sql` returned for it, and the tool log.
+engine's one Claude gateway. The semantic VDB and the executor are the question's own, and are
+closed when it is answered or fails: a VDB holds a connection pool and a loop thread until then.
+
+It returns an `Asked`: the answer, the verified flag, the SQL the answer carries as
+`validate_sql` passed it, the rows `run_sql` returned for it, and the tool log.
 
 The API holds an `Answers`, so the API and CLI tests can answer from a fake.
 """
@@ -118,11 +121,13 @@ class StoreAnswers:
         embedder: LocalEmbedder | None,
         find_source: Callable[[str], Source | None] = source_of,
         open_executor: Callable[[Source], SourceExecutor] = SourceExecutor,
+        open_vdb: Callable[[LocalEmbedder], PostgresVDB] = semantic_vdb,
     ) -> None:
         self._gateway = gateway
         self._embedder = embedder
         self._find_source = find_source
         self._open = open_executor
+        self._open_vdb = open_vdb
 
     async def ask(self, question: str, database: str, *, critic: bool = True) -> Asked:
         """Answer `question` from `database`. Uses Claude quota: one agent session, and a
@@ -132,18 +137,21 @@ class StoreAnswers:
         source = await asyncio.to_thread(self._find_source, database)
         if source is None:
             raise NoSource(database)
-        vdb: PostgresVDB = await asyncio.to_thread(semantic_vdb, self._embedder)
-        pack = await asyncio.to_thread(build_pack, vdb, question, database=database)
-        executor = await asyncio.to_thread(self._open, source)
+        vdb = await asyncio.to_thread(self._open_vdb, self._embedder)
         try:
-            session = ask(
-                question,
-                pack,
-                gateway=self._gateway,
-                ontology=StoreOntology(vdb),
-                runner=executor,
-                critic=critic,
-            )
-            return asked(await session.answered())
+            pack = await asyncio.to_thread(build_pack, vdb, question, database=database)
+            executor = await asyncio.to_thread(self._open, source)
+            try:
+                session = ask(
+                    question,
+                    pack,
+                    gateway=self._gateway,
+                    ontology=StoreOntology(vdb),
+                    runner=executor,
+                    critic=critic,
+                )
+                return asked(await session.answered())
+            finally:
+                await asyncio.to_thread(executor.close)
         finally:
-            await asyncio.to_thread(executor.close)
+            await asyncio.to_thread(vdb.close)

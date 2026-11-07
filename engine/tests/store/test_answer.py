@@ -147,7 +147,10 @@ def test_search_and_describe_read_the_semantic_layer_and_the_catalog(
 
 
 def test_a_scripted_session_answers_from_chinook_and_is_verified(
-    ontology: StoreOntology, embedder: LocalEmbedder, tmp_path: Path
+    ontology: StoreOntology,
+    embedder: LocalEmbedder,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     answer = {
         "answer": "AC/DC has two albums.",
@@ -180,10 +183,19 @@ def test_a_scripted_session_answers_from_chinook_and_is_verified(
         query=query,
     )
 
-    answers = StoreAnswers(gateway=gateway, embedder=embedder)
+    closed: list[bool] = []
+
+    def open_vdb(e: LocalEmbedder) -> PostgresVDB:
+        vdb = semantic_vdb(e)
+        close = vdb.close
+        monkeypatch.setattr(vdb, "close", lambda: (closed.append(True), close())[1])
+        return vdb
+
+    answers = StoreAnswers(gateway=gateway, embedder=embedder, open_vdb=open_vdb)
     got: Asked = asyncio.run(answers.ask(QUESTION, "chinook"))
 
     assert got.verified, got.reason
+    assert closed == [True], "the question's VDB is closed, its pool disposed"
     assert "Artist" in str(query.spawns[0].options.system_prompt)  # the pack, from the store
     assert got.sql == SQL
     assert got.result is not None
