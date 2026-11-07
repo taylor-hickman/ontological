@@ -18,8 +18,8 @@ What differs from the port:
   what the first smoke runs flagged (BUILD_PLAN.md, Scoring and runs): dates and times compare
   as ISO text (SQLite keeps them as text, DuckDB reads them as DATE), whole numbers compare
   exactly, and other numbers to 6 significant digits (DuckDB's `CAST(x AS REAL)` is float32;
-  Postgres's numeric against DuckDB's double). Rounding can split two values on either side of
-  a 6-digit boundary, which leaves a true artifact a miss, never a wrong answer a match.
+  Postgres's numeric against DuckDB's double). Two fractional values that agree to 6 digits
+  match whatever query they came from, and a float32 value can round apart from its double.
 """
 
 from __future__ import annotations
