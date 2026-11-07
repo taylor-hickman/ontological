@@ -54,8 +54,10 @@ jobs:
         working-directory: engine
 
       - run: pnpm install --frozen-lockfile
-      # Electron needs the system libraries Playwright's browser builds use.
+      # Electron needs the system libraries Playwright's browser builds use. It takes 25–60 s;
+      # its own timeout makes a stuck apt mirror fail here, by name, not eat the job's 15 minutes.
       - run: pnpm exec playwright install-deps
+        timeout-minutes: 4
       - run: pnpm typecheck
       - run: pnpm test:unit
       - run: pnpm build
