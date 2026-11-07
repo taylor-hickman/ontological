@@ -7,9 +7,10 @@ Postgres the store appends what it was asked to do to <appData>/store.log: `star
 engine starts it, `quit-dump` and `stop` when the engine stops it. If <appData>/slow-start exists,
 the store takes that many seconds to start; if <appData>/slow-stop exists, it takes that many
 between `quit-dump` and `stop`. Jobs come from <appData>/jobs.json (`fake_jobs.py`), the ontology
-from <appData>/ontology.json (`fake_ontology.py`) and answers from `fake_answers.py`. Its sources
-live in memory, starting with those in <appData>/sources.json if it exists (`fake_sources.py`), and
-the test call answers without spawning `claude`.
+from <appData>/ontology.json (`fake_ontology.py`), settings from <appData>/settings.json
+(`fake_settings.py`) and answers from `fake_answers.py`. Its sources live in memory, starting with
+those in <appData>/sources.json if it exists (`fake_sources.py`), and the test call answers
+without spawning `claude`.
 `--headless` relaunches this file, so the detached engine has the fake store too.
 """
 
@@ -23,6 +24,7 @@ from pathlib import Path
 from fake_answers import FakeAnswers
 from fake_jobs import FakeJobs
 from fake_ontology import FakeOntology
+from fake_settings import FakeSettings
 from fake_sources import FakeClaude, FakeSources
 
 from ontological.embed.embedder import LocalEmbedder
@@ -76,6 +78,9 @@ class FakeStore:
 
     def interchange(self, jobs: JobsService) -> None:
         return None  # no store to import into or export from
+
+    def settings(self) -> FakeSettings:
+        return FakeSettings(self.app_data)
 
 
 if __name__ == "__main__":

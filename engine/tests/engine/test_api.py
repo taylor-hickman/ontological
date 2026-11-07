@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Iterator
+import threading
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +13,12 @@ import httpx2
 import pytest
 from fake_answers import SQL, FakeAnswers
 from fake_jobs import FakeJobs
+from fake_settings import FakeSettings
 from fastapi.testclient import TestClient
 
 from ontological.answer.service import (
     Answerability,
+    AnswerEvent,
     Answers,
     Asked,
     NoEmbedder,
@@ -75,7 +79,12 @@ def client(lifetime: Lifetime) -> Iterator[TestClient]:
         ("GET", "/sources/x/catalog"),
         ("GET", "/tables/x"),
         ("POST", "/ask"),
+        ("POST", "/ask/stream"),
+        ("GET", "/ask/watch"),
+        ("POST", "/ask/cancel"),
         ("POST", "/answerable"),
+        ("GET", "/settings"),
+        ("PUT", "/settings/compile.auto_compile"),
         ("GET", "/docs"),
         ("GET", "/openapi.json"),
         ("GET", "/no-such-route"),
@@ -307,6 +316,36 @@ def test_re_embedding_needs_an_embedder(lifetime: Lifetime, tmp_path: Path) -> N
         assert c.post("/jobs/reembed").status_code == 503
 
 
+def test_settings_routes_need_a_store(client: TestClient) -> None:
+    assert client.get("/settings").status_code == 503
+    assert client.put("/settings/compile.auto_compile", json={"value": True}).status_code == 503
+
+
+def test_settings_reads_the_defaults_and_writes_auto_compile(
+    lifetime: Lifetime, tmp_path: Path
+) -> None:
+    app = create_app(
+        token=TOKEN, lifetime=lifetime, pid=1, version="9.9.9", settings=FakeSettings(tmp_path)
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.headers["Authorization"] = f"Bearer {TOKEN}"
+        assert c.get("/settings").json() == {"compile.auto_compile": False}, "off by default"
+
+        r = c.put("/settings/compile.auto_compile", json={"value": True})
+        assert (r.status_code, r.json()) == (200, {"compile.auto_compile": True})
+        assert c.get("/settings").json() == {"compile.auto_compile": True}
+        assert json.loads((tmp_path / "settings.json").read_text()) == {
+            "compile.auto_compile": True
+        }
+
+        assert c.put("/settings/compile.nope", json={"value": True}).status_code == 404
+        for wrong in (1, "true", None):
+            r = c.put("/settings/compile.auto_compile", json={"value": wrong})
+            assert r.status_code == 422, wrong
+        assert c.put("/settings/compile.auto_compile", json={}).status_code == 422
+        assert c.get("/settings").json() == {"compile.auto_compile": True}, "left as it was"
+
+
 def test_jobs_lists_reads_and_acts_on_jobs(jobs_client: TestClient) -> None:
     [job] = jobs_client.get("/jobs").json()["jobs"]
     assert (job["id"], job["state"], job["cache_hits"]) == (3, "paused", 37)
@@ -433,6 +472,155 @@ def test_ask_counts_as_activity_while_it_runs(lifetime: Lifetime, clock: Clock) 
 
     with ask_client(lifetime, Slow()) as c:
         assert c.post("/ask", json={"question": "q", "database": "chinook"}).status_code == 200
+
+
+# --- the stream, re-attach and cancel (M4.5) -------------------------------------------------
+
+
+def frames(lines: Iterator[str], count: int | None = None) -> list[Any]:
+    """The next `count` SSE frames' JSON, or all of them, "[DONE]" as itself."""
+    got: list[Any] = []
+    for line in lines:
+        if not line:
+            continue
+        assert line.startswith("data: "), line
+        data = line.removeprefix("data: ")
+        got.append(data if data == "[DONE]" else json.loads(data))
+        if count is not None and len(got) == count:
+            break
+    return got
+
+
+class Held(FakeAnswers):
+    """Streams the plan step, then waits for `go` before the rest. `stopped` is set when the
+    stream was cancelled while it waited."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.go = threading.Event()
+        self.stopped = threading.Event()
+
+    async def stream(
+        self, question: str, database: str | None, *, critic: bool = True
+    ) -> AsyncIterator[AnswerEvent]:
+        events = super().stream(question, database, critic=critic)
+        yield await anext(events)
+        try:
+            while not self.go.is_set():
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            self.stopped.set()
+            raise
+        async for event in events:
+            yield event
+
+
+def test_ask_stream_sends_each_event_as_an_sse_frame_and_ends_with_done(
+    lifetime: Lifetime,
+) -> None:
+    answers = FakeAnswers()
+    with ask_client(lifetime, answers) as c:
+        r = c.post(
+            "/ask/stream",
+            json={
+                "question": "Who has the most albums?",
+                "database": "chinook",
+                "conversation": "c-1",
+            },
+        )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    assert r.headers["cache-control"] == "no-store"
+    got = frames(iter(r.text.splitlines()))
+    assert got[-1] == "[DONE]"
+    events = got[:-1]
+    assert [e["type"] for e in events] == ["run", *["step"] * 3, "sql", "step", "step", "result"]
+    assert events[0] == {
+        "type": "run",
+        "conversation": "c-1",
+        "question": "Who has the most albums?",
+        "database": "chinook",
+        "critic": True,
+    }
+    assert [e["name"] for e in events if e["type"] == "step"] == [
+        "plan",
+        "validate_sql",
+        "validate_sql",
+        "run_sql",
+        "review_answer",
+    ]
+    assert events[4] == {"type": "sql", "session": 1, "sql": SQL, "validation_id": "val-1"}
+    result = Asked.model_validate(events[-1])
+    assert result.verified and result.sql == SQL and len(result.steps) == 5
+    assert answers.asked == [("Who has the most albums?", "chinook", True)]
+
+
+def test_a_stream_left_early_goes_on_and_can_be_watched_again_from_the_start(
+    lifetime: Lifetime,
+) -> None:
+    answers = Held()
+    with ask_client(lifetime, answers) as c:
+        with c.stream("POST", "/ask/stream", json={"question": "q", "conversation": "c-1"}) as r:
+            assert [e["type"] for e in frames(r.iter_lines(), 2)] == ["run", "step"]
+        # The reader left. The question is still being answered, so the conversation is busy.
+        busy = c.post("/ask/stream", json={"question": "again", "conversation": "c-1"})
+        assert busy.status_code == 409
+        answers.go.set()
+        watched = c.get("/ask/watch", params={"conversation": "c-1"})
+    assert watched.status_code == 200
+    got = frames(iter(watched.text.splitlines()))
+    assert [e if e == "[DONE]" else e["type"] for e in got][:2] == ["run", "step"]
+    assert got[-2]["type"] == "result" and got[-1] == "[DONE]"
+    assert not answers.stopped.is_set()
+    assert answers.asked == [("q", None, True)]
+
+
+def test_watching_a_conversation_with_no_run_ends_at_once(lifetime: Lifetime) -> None:
+    with ask_client(lifetime, FakeAnswers()) as c:
+        r = c.get("/ask/watch", params={"conversation": "nope"})
+    assert r.status_code == 200 and frames(iter(r.text.splitlines())) == ["[DONE]"]
+
+
+def test_ask_cancel_ends_the_stream_and_stops_the_question(lifetime: Lifetime) -> None:
+    answers = Held()
+    with ask_client(lifetime, answers) as c:
+        with c.stream("POST", "/ask/stream", json={"question": "q", "conversation": "c-1"}) as r:
+            lines = r.iter_lines()
+            assert [e["type"] for e in frames(lines, 2)] == ["run", "step"]
+            cancelled = c.post("/ask/cancel", params={"conversation": "c-1"})
+            assert cancelled.json() == {"cancelled": True}
+            rest = frames(lines)
+        assert rest == [
+            {
+                "type": "error",
+                "code": "cancelled",
+                "status": None,
+                "message": "the question was cancelled",
+            },
+            "[DONE]",
+        ]
+        assert answers.stopped.wait(5)
+        again = c.post("/ask/cancel", params={"conversation": "c-1"})
+        assert again.json() == {"cancelled": False}
+        # The conversation is free for the next question
+        answers.go.set()
+        assert c.post("/ask/stream", json={"question": "q", "conversation": "c-1"}).is_success
+
+
+def test_a_failure_ends_the_stream_with_an_error_frame(lifetime: Lifetime) -> None:
+    with ask_client(lifetime, FakeAnswers()) as c:
+        r = c.post("/ask/stream", json={"question": "q", "database": "nope"})
+    assert r.status_code == 200
+    run, error, done = frames(iter(r.text.splitlines()))
+    assert run["type"] == "run" and run["conversation"]  # a new conversation
+    assert (error["type"], error["code"], error["status"]) == ("error", "no_source", 404)
+    assert "nope" in error["message"] and done == "[DONE]"
+
+
+def test_the_stream_needs_a_store(client: TestClient) -> None:
+    assert client.post("/ask/stream", json={"question": "q"}).status_code == 503
+    assert frames(iter(client.get("/ask/watch?conversation=c").text.splitlines())) == ["[DONE]"]
+    assert client.post("/ask/cancel?conversation=c").json() == {"cancelled": False}
 
 
 # --- answerable ------------------------------------------------------------------------------

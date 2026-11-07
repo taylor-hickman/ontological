@@ -76,6 +76,7 @@ from ontological.llm.env import sanitize_environ
 from ontological.llm.gateway import ClaudeGateway
 from ontological.llm.install import Claude, ClaudeCheck
 from ontological.llm.routes import Route, load_routes
+from ontological.settings import SettingsService, StoreSettings
 from ontological.sources import extensions
 from ontological.store import dal, pg
 
@@ -120,6 +121,7 @@ class Store(Protocol):
     def ontology(self, embedder: LocalEmbedder | None) -> OntologyService: ...
     def answers(self, embedder: LocalEmbedder | None) -> Answers: ...
     def interchange(self, jobs: JobsService) -> InterchangeService | None: ...
+    def settings(self) -> SettingsService | None: ...
 
 
 class PgStore:
@@ -198,6 +200,10 @@ class PgStore:
     def interchange(self, jobs: JobsService) -> InterchangeService:
         """Model import and export; an import re-embeds what it wrote as `jobs`' re-embeds."""
         return StoreInterchange(jobs)
+
+    def settings(self) -> SettingsService:
+        """The person's settings, in app.setting."""
+        return StoreSettings()
 
 
 def pg_store(config: Config) -> Store:
@@ -428,6 +434,7 @@ async def _serve(
         ontology=store.ontology(embedder),
         answers=store.answers(embedder),
         interchange=store.interchange(service),
+        settings=store.settings(),
     )
     server = _Server(
         uvicorn.Config(
@@ -476,7 +483,9 @@ async def _serve(
             await asyncio.wait({task}, timeout=tick)
         await task
     finally:
-        # Before the store stops: a compile and a refresh write to it.
+        # Before the store stops: a compile and a refresh write to it, and a question reads it.
+        if app.state.runs is not None:
+            await app.state.runs.close()
         await service.stop()
         staleness.cancel()
         await asyncio.to_thread(staleness.join)

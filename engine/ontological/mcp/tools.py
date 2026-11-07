@@ -15,7 +15,7 @@ to the engine's:
 | `get_sql_attribute` | `GET /sql-attributes/{id}` |
 | `describe_table` | `GET /tables/{id}` and `GET /tables/{id}/semantics` |
 | `check_answerable` | `POST /answerable` |
-| `ask_question` | `POST /ask`, answered whole: the engine doesn't stream it yet (M4.5) |
+| `ask_question` | `POST /ask`, answered whole, with no progress notifications |
 | `validate_sql`, `run_validated_sql` | `POST /sql/validate`, `POST /sql/run` |
 
 Every tool reads: none changes the ontology, the catalog or a source, so each is annotated

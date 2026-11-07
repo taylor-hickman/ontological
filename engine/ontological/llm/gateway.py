@@ -193,18 +193,32 @@ class AgentRun[M: BaseModel]:
     async def __aiter__(self) -> AsyncIterator[AgentEvent]:
         if self._task is None:
             self._task = asyncio.create_task(self._run())
-        while not self._drained:
-            event = await self._events.get()
-            if event is None:
-                self._drained = True
-                break
-            yield event
+        try:
+            while not self._drained:
+                event = await self._events.get()
+                if event is None:
+                    self._drained = True
+                    break
+                yield event
+        except BaseException:
+            # The reader was cancelled or left the loop: nobody reads the rest
+            await self.cancel()
+            raise
         await self._task  # raises what the session raised
 
     async def wait(self) -> AgentRun[M]:
         async for _ in self:
             pass
         return self
+
+    async def cancel(self) -> None:
+        """Stop the session and wait until it has stopped. The SDK closes its `query()`, which
+        ends the `claude` child: stdin closes, and SIGTERM follows 5 s later if it is still
+        running. The run then has no output, and its outcome is an error, "cancelled"."""
+        task = self._task
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.wait([task])
 
     def emit(self, event: AgentEvent) -> None:
         if isinstance(event, ToolCall):
@@ -214,6 +228,9 @@ class AgentRun[M: BaseModel]:
     async def _run(self) -> None:
         try:
             await self._drive(self)
+        except asyncio.CancelledError:
+            # Only cancel() cancels this task, and the run ends there, not its reader
+            self.output, self.outcome, self.error = None, "error", "cancelled"
         finally:
             self._events.put_nowait(None)
 

@@ -28,12 +28,13 @@ from llm.sdk_fakes import (
 from llm.sdk_fakes import answered as structured_session
 from test_tools import GOOD_SQL, PLAN, FakeOntology, FakeRunner
 
+from ontological.answer import service
 from ontological.answer.agent import Answered, Restarted, SessionEvent, ask
 from ontological.answer.pack import GroundingPack
 from ontological.answer.prompts import REFUSAL_RULE
 from ontological.answer.retrieval import Coverage
 from ontological.answer.service import asked
-from ontological.llm.gateway import ClaudeGateway, ToolCall
+from ontological.llm.gateway import ClaudeGateway, RateLimit, ToolCall
 
 QUESTION = "How many albums does each artist have?"
 PACK = GroundingPack(
@@ -354,3 +355,87 @@ def test_asked_without_an_answer_keeps_the_steps(tmp_path: Path) -> None:
     assert got.answer is None and got.sql is None and got.result is None
     assert [s.name for s in got.steps] == ["plan", "validate_sql"]
     assert got.outcome == "invalid"
+
+
+# --- the stream's events (M4.5) --------------------------------------------------------------
+
+
+def test_the_stream_sends_each_step_the_sql_once_it_passes_the_usage_and_the_answer_last(
+    tmp_path: Path,
+) -> None:
+    first = [init(OPUS), Call("plan", PLAN), OUT_OF_TURNS]
+    h = Harness(tmp_path, [first, agent(*FULL), structured_session(REVIEW_PASSES, model=SONNET)])
+
+    async def go() -> list[service.AnswerEvent]:
+        session = ask(
+            QUESTION,
+            PACK,
+            gateway=h.gateway,
+            ontology=FakeOntology(),
+            runners=lambda database: h.runner,
+        )
+        return [e async for e in service.events(session, lambda: h.gateway.status.rate_limit)]
+
+    got = asyncio.run(go())
+
+    def label(e: service.AnswerEvent) -> str:
+        match e:
+            case service.ToolStep():
+                return f"{e.session} {e.name}"
+            case service.SaidStep():
+                return f"{e.session} said"
+            case service.RestartStep():
+                return f"{e.session} restart"
+            case service.SqlPassed():
+                return f"{e.session} sql"
+            case service.Usage():
+                return "usage"
+            case service.Finished():
+                return "result"
+
+    assert [label(e) for e in got] == [
+        "1 plan",
+        "2 restart",
+        "2 plan",
+        "usage",  # the session's RateLimitEvent came before its first tool call
+        "2 validate_sql",
+        "2 sql",
+        "2 run_sql",
+        "2 review_answer",
+        "2 said",
+        "result",
+    ]
+    restart = got[1]
+    assert isinstance(restart, service.RestartStep) and "turns" in restart.reason
+    sql = got[5]
+    assert isinstance(sql, service.SqlPassed) and sql.sql == GOOD_SQL
+    assert sql.validation_id == "val-1"
+    usage = got[3]
+    assert isinstance(usage, service.Usage) and usage.status == "allowed"
+    assert usage.window == "seven_day" and usage.utilization == {"seven_day": 0.4}
+    done = got[-1]
+    assert isinstance(done, service.Finished) and done.type == "result"
+    assert done.verified and done.sql == GOOD_SQL and done.restarted is not None
+    assert [s.session for s in done.steps] == [1, 2, 2, 2, 2]
+
+
+def test_a_usage_already_known_is_sent_first_and_an_unchanged_one_not_again(
+    tmp_path: Path,
+) -> None:
+    h = Harness(tmp_path, [agent(*FULL), structured_session(REVIEW_PASSES, model=SONNET)])
+    h.gateway._rate_limit = RateLimit("allowed", "seven_day", None, {"seven_day": 0.4})  # pyright: ignore[reportPrivateUsage]
+
+    async def go() -> list[service.AnswerEvent]:
+        session = ask(
+            QUESTION,
+            PACK,
+            gateway=h.gateway,
+            ontology=FakeOntology(),
+            runners=lambda database: h.runner,
+        )
+        return [e async for e in service.events(session, lambda: h.gateway.status.rate_limit)]
+
+    got = asyncio.run(go())
+    usages = [i for i, e in enumerate(got) if isinstance(e, service.Usage)]
+    # The script's own event has a reset time, so it differs once, then stays the same
+    assert usages == [0, 2]

@@ -1,5 +1,5 @@
-"""One question through the engine (BUILD_PLAN.md M1.8, M4.3, M4.4): what `POST /ask` and
-`POST /answerable` run.
+"""One question through the engine (BUILD_PLAN.md M1.8, M4.3, M4.4, M4.5): what `POST /ask`, its
+stream and `POST /answerable` run.
 
 `StoreAnswers.ask()` builds the grounding pack from the store's semantic layer (`build_pack`)
 with hybrid search, and runs `ontological.answer.agent.ask()` to the end with the store's
@@ -14,6 +14,14 @@ a BM25 index of the semantic layer current, which a question shouldn't wait to r
 
 It returns an `Asked`: the answer, the verified flag, the SQL the answer carries as
 `validate_sql` passed it, the rows `run_sql` returned for it, and every session's tool log.
+
+`StoreAnswers.stream()` (M4.5) is the same question as events, as they happen (§8.4): a `step`
+for each tool call, each text the model writes between them and the restart, a `sql` once
+`validate_sql` passes, a `usage` whenever Claude's rate-limit status changes, and last a
+`result`, which is the `Asked`. `ask()` is the stream read to its end. Stopping the stream, by
+cancelling the task that reads it, stops the session and closes the question's source
+executors, which cancels a source query in flight. `ontological.answer.runs` keeps streams by
+conversation for the UI to re-attach to and cancel.
 
 `StoreAnswers.check()` is `check_answerable` (M4.4) on the same semantic layer, scored at the
 engine's embedding model's coverage distance: one Haiku call, and no source or executor.
@@ -31,14 +39,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
-from typing import Any, Protocol
+from collections.abc import AsyncIterator, Callable, Sequence
+from datetime import datetime
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
 from auto_ontology.semantic.constants import LABEL_TERM
 from auto_ontology.vdb.postgres import PostgresVDB
-from ontological.answer.agent import Answered, ask
+from ontological.answer.agent import Answered, AnswerSession, Restarted, ask
 from ontological.answer.answerable import Answerability, check_answerable
 from ontological.answer.models import AnswerModel
 from ontological.answer.ontology import StoreCatalog, StoreOntology
@@ -57,26 +66,34 @@ from ontological.embed.hybrid import HybridSearch, searcher
 from ontological.embed.search import semantic_vdb
 from ontological.jobs.service import NoSource, source_of
 from ontological.llm.calls import Outcome
-from ontological.llm.gateway import ClaudeGateway, ToolCall
+from ontological.llm.gateway import ClaudeGateway, RateLimit, Said, ToolCall
 from ontological.sources.executor import SourceExecutor
 from ontological.sources.spec import Source
 
 __all__ = [
+    "AnswerEvent",
     "Answerability",
     "Answers",
     "Asked",
+    "Finished",
     "NoEmbedder",
     "NoSource",
     "NoSuchValidation",
     "NothingFound",
     "Ran",
     "RanSql",
+    "RestartStep",
     "RunFailed",
+    "SaidStep",
+    "SqlPassed",
     "Step",
     "StoreAnswers",
     "TermHit",
+    "ToolStep",
+    "Usage",
     "Validated",
     "asked",
+    "events",
 ]
 
 log = logging.getLogger(__name__)
@@ -143,7 +160,116 @@ class TermHit(BaseModel):
     distance: float
 
 
+# --- the stream's events (§8.4) ------------------------------------------------------------------
+# Each is one SSE frame, `type` first, as upstream's chat stream. The steps share `type` "step" and
+# differ in `kind`. A `chart` event comes with M4.6's ResultChart, when the answer carries one.
+
+
+class ToolStep(Step):
+    """A tool call, once its handler has answered."""
+
+    type: Literal["step"] = "step"
+    kind: Literal["tool"] = "tool"
+
+
+class SaidStep(BaseModel):
+    """Text the model wrote between tool calls."""
+
+    type: Literal["step"] = "step"
+    kind: Literal["said"] = "said"
+    session: int
+    text: str
+
+
+class RestartStep(BaseModel):
+    """The first session ended without validated SQL, and session 2 starts (§8.1)."""
+
+    type: Literal["step"] = "step"
+    kind: Literal["restart"] = "restart"
+    session: int
+    reason: str
+
+
+class SqlPassed(BaseModel):
+    """SQL that passed `validate_sql`, before it runs."""
+
+    type: Literal["sql"] = "sql"
+    session: int
+    sql: str
+    validation_id: str
+
+
+class Usage(BaseModel):
+    """Claude's latest rate-limit status, from the session's RateLimitEvents (§6.5)."""
+
+    type: Literal["usage"] = "usage"
+    status: str  # allowed | allowed_warning | rejected
+    window: str | None  # five_hour, seven_day, ...
+    resets_at: datetime | None
+    utilization: dict[str, float]
+
+    @classmethod
+    def of(cls, limit: RateLimit) -> Usage:
+        return cls(
+            status=limit.status,
+            window=limit.window,
+            resets_at=limit.resets_at,
+            utilization=dict(limit.utilization),
+        )
+
+
+class Finished(Asked):
+    """The question's end: what `POST /ask` returns."""
+
+    type: Literal["result"] = "result"
+
+
+AnswerEvent = ToolStep | SaidStep | RestartStep | SqlPassed | Usage | Finished
+
+
+async def events(
+    session: AnswerSession, rate_limit: Callable[[], RateLimit | None]
+) -> AsyncIterator[AnswerEvent]:
+    """`session`'s events as the stream's, ending with the `Finished` answer. `rate_limit` reads
+    the gateway's latest status, which is sent whenever it changes."""
+    sent = rate_limit()
+    if sent is not None:
+        yield Usage.of(sent)
+    n = 1
+    async for event in session:
+        match event:
+            case ToolCall():
+                yield ToolStep(
+                    name=event.name,
+                    args=event.args,
+                    is_error=event.is_error,
+                    text=event.text,
+                    data=event.data,
+                    session=n,
+                )
+                if event.name == "validate_sql" and not event.is_error and event.data.get("ok"):
+                    yield SqlPassed(
+                        session=n,
+                        sql=str(event.data["sql"]),
+                        validation_id=str(event.data["validation_id"]),
+                    )
+            case Said():
+                yield SaidStep(session=n, text=event.text)
+            case Restarted():
+                n += 1
+                yield RestartStep(session=n, reason=event.reason)
+        limit = rate_limit()
+        if limit is not None and limit != sent:
+            sent = limit
+            yield Usage.of(limit)
+    yield Finished.model_validate(asked(await session.answered()).model_dump())
+
+
 class Answers(Protocol):
+    def stream(
+        self, question: str, database: str | None, *, critic: bool = True
+    ) -> AsyncIterator[AnswerEvent]: ...
+
     async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked: ...
 
     async def check(self, question: str, database: str | None = None) -> Answerability: ...
@@ -157,6 +283,14 @@ class Answers(Protocol):
     ) -> Validated: ...
 
     async def run_sql(self, validation_id: str) -> RanSql: ...
+
+
+async def answer_of(stream: AsyncIterator[AnswerEvent]) -> Asked:
+    """The `Finished` answer at the end of `stream`, as an `Asked`."""
+    async for event in stream:
+        if isinstance(event, Finished):
+            return Asked.model_validate(event.model_dump(exclude={"type"}))
+    raise RuntimeError("the stream ended without an answer")
 
 
 def asked(answered: Answered) -> Asked:
@@ -256,6 +390,13 @@ class StoreAnswers:
         """Answer `question` from `database`, or with none, from the database whose ontology
         covers it best. Uses Claude quota: one agent session, a second if the first ends without
         validated SQL, and a critic call per review."""
+        return await answer_of(self.stream(question, database, critic=critic))
+
+    async def stream(
+        self, question: str, database: str | None, *, critic: bool = True
+    ) -> AsyncIterator[AnswerEvent]:
+        """`ask()`, as its events. Raises `NoEmbedder`, `NoSource` or `NothingFound` before the
+        first one."""
         if self._embedder is None:
             raise NoEmbedder
         if database is not None:
@@ -277,8 +418,10 @@ class StoreAnswers:
                 runners=runners,
                 critic=critic,
             )
-            return asked(await session.answered())
+            async for event in events(session, lambda: self._gateway.status.rate_limit):
+                yield event
         finally:
+            # Cancels a source query in flight, killing its executor if it won't stop (§5.6)
             await asyncio.to_thread(runners.close)
 
     async def _search(self, embedder: LocalEmbedder) -> tuple[PostgresVDB, HybridSearch]:
