@@ -50,6 +50,7 @@ import ontological
 from ontological.answer.service import Answers, StoreAnswers
 from ontological.api.app import create_app
 from ontological.catalog.sources import Sources, StoreSources
+from ontological.curate.service import OntologyService, StoreOntology
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
@@ -99,6 +100,7 @@ class Store(Protocol):
     def sources(self, jobs: ActiveJobs, embedder: LocalEmbedder | None) -> Sources: ...
     def claude(self, config: Config) -> Claude: ...
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService: ...
+    def ontology(self, embedder: LocalEmbedder | None) -> OntologyService: ...
     def answers(self, embedder: LocalEmbedder | None) -> Answers: ...
 
 
@@ -153,6 +155,10 @@ class PgStore:
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService:
         """Compile jobs, with the gateway every Claude call goes through (§6)."""
         return Jobs(gateway=self._gateway(), active=active, embedder=embedder)
+
+    def ontology(self, embedder: LocalEmbedder | None) -> OntologyService:
+        """The Terms and Ontology screens' reads and edits; an edit re-embeds with `embedder`."""
+        return StoreOntology(embedder)
 
     def answers(self, embedder: LocalEmbedder | None) -> Answers:
         """Questions, answered through the same gateway."""
@@ -355,6 +361,7 @@ async def _serve(
         claude=store.claude(config),
         sources=store.sources(jobs, embedder),
         jobs_service=service,
+        ontology=store.ontology(embedder),
         answers=store.answers(embedder),
     )
     server = _Server(

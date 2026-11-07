@@ -14,5 +14,5 @@
     "baseUrl": ".",
     "paths": { "@shared/*": ["src/shared/*"] }
   },
-  "include": ["test/**/*", "playwright.config.ts", "vitest.config.ts", "src/shared/**/*", "src/main/**/*", "src/preload/index.d.ts", "src/renderer/src/jobs/format.ts", "src/renderer/src/jobs/types.ts"]
+  "include": ["test/**/*", "playwright.config.ts", "vitest.config.ts", "src/shared/**/*", "src/main/**/*", "src/preload/index.d.ts", "src/renderer/src/jobs/format.ts", "src/renderer/src/jobs/types.ts", "src/renderer/src/ontology/format.ts", "src/renderer/src/ontology/layout.ts"]
 }

@@ -710,7 +710,7 @@ The visual design, components, screen rules and UI states are in [DESIGN.md](DES
 
 Stack:
 - React 19 + Vite + TypeScript, TanStack Query, Tailwind.
-- sigma.js + graphology + d3-force for the ontology graph, as upstream.
+- d3-force for the ontology graph's layout, with nodes drawn as buttons over SVG edges (BUILD_PLAN.md M5.2). Upstream draws with sigma.js and graphology, which may come back for a large source (DESIGN.md §10).
 - A port of upstream's ResultChart (SVG, JSON spec).
 - Monaco or CodeMirror for SQL. Upstream uses textareas.
 
