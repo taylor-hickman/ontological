@@ -39,14 +39,17 @@ class Entry(Protocol):
     def table(self) -> str: ...
 
 
-def match[E: Entry](entries: Sequence[E], headings: Sequence[str]) -> dict[str, E]:
-    """Each heading's entry: the first that names it exactly, else the first that names it
-    ignoring case and surrounding space. A heading no entry names is left out."""
+def match[E](
+    entries: Sequence[E], headings: Sequence[str], key: Callable[[E], str]
+) -> dict[str, E]:
+    """Each heading's entry, by the name `key` reads from it: the first that names it exactly,
+    else the first that names it ignoring case and surrounding space. A heading no entry names
+    is left out."""
     exact: dict[str, E] = {}
     folded: dict[str, E] = {}
     for entry in entries:
-        exact.setdefault(entry.table, entry)
-        folded.setdefault(entry.table.strip().casefold(), entry)
+        exact.setdefault(key(entry), entry)
+        folded.setdefault(key(entry).strip().casefold(), entry)
     found: dict[str, E] = {}
     for heading in headings:
         entry = exact.get(heading) or folded.get(heading.strip().casefold())
@@ -76,4 +79,4 @@ async def ask_pack[E: Entry, P: BaseModel](
     )
     if result is None:
         return {}
-    return match(entries(result), [heading for heading, _ in sections])
+    return match(entries(result), [heading for heading, _ in sections], lambda e: e.table)

@@ -81,11 +81,12 @@ def test_the_compile_embeds_each_term_and_attribute(
 ) -> None:
     terms = int(sql(store, "SELECT count(*) FROM term"))
     attributes = int(sql(store, "SELECT count(*) FROM column__has_attribute"))
-    assert chinook_compiled.vectors == Synced(embedded=terms + attributes, deleted=0, current=0)
+    # and PlaylistTrack's bridge, Chinook's one SQL attribute
+    assert chinook_compiled.vectors == Synced(embedded=terms + attributes + 1, deleted=0, current=0)
 
     assert rows(
         store, "SELECT label || ' ' || count(*) FROM vdb.semantic_layer GROUP BY label ORDER BY 1"
-    ) == [f"ColumnAttribute {attributes}", f"Term {terms}"]
+    ) == [f"ColumnAttribute {attributes}", "SqlAttribute 1", f"Term {terms}"]
     assert rows(store, "SELECT DISTINCT database_name FROM vdb.semantic_layer") == ["chinook"]
     # Upstream's texts; every vector names its model and the hash of its text
     [country] = rows(

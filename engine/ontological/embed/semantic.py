@@ -7,10 +7,11 @@
 # embeds through the local embedder the rows whose text or model changed, or that have no
 # vector, and deletes the vectors of rows that changed or are gone. Each row's metadata also says
 # whether it is certified, for hybrid search's bonus, and a change to that alone updates the
-# vector's metadata in place.
+# vector's metadata in place. SQL attributes' rows are upstream's from `fetch_sql_attribute_docs`
+# and `embed_docs_into_vdb`, which upstream embedded as each attribute was created.
 
-"""The semantic layer's vectors: one per Term and one per column attribute (ARCHITECTURE.md
-§7.1). Retrieval (`ontological.answer`) searches them.
+"""The semantic layer's vectors: one per Term, column attribute and SQL attribute
+(ARCHITECTURE.md §7.1). Retrieval (`ontological.answer`) searches them.
 
 A row's vector is current when the collection holds one for its label and id with the same
 `content_hash` and `model`. `sync_database` embeds every row that has no current vector and
@@ -41,8 +42,10 @@ from sqlalchemy import func, select
 
 from auto_ontology.dal import schema as s
 from auto_ontology.dal.session import store
+from auto_ontology.dal.sql_attributes import fetch_sql_attribute_docs
 from auto_ontology.semantic.constants import (
     LABEL_COLUMN_ATTRIBUTE,
+    LABEL_SQL_ATTRIBUTE,
     LABEL_TERM,
     SEMANTIC_SOURCE,
 )
@@ -52,7 +55,7 @@ from auto_ontology.vdb.records import content_hash, embed_rows_into_vdb
 
 logger = logging.getLogger(__name__)
 
-LABELS = (LABEL_TERM, LABEL_COLUMN_ATTRIBUTE)
+LABELS = (LABEL_TERM, LABEL_COLUMN_ATTRIBUTE, LABEL_SQL_ATTRIBUTE)
 
 # Upstream's cutoffs for one formatted sample value in an attribute's text: JSON columns' samples
 # are `key [e.g. 'value']` strings, which need more room than a bare value.
@@ -209,8 +212,49 @@ def terms_and_attributes(
     return [dict(r) for r in terms], [dict(r) for r in attrs]
 
 
+def sql_attribute_rows(database_name: str) -> list[dict[str, Any]]:
+    """A row per SQL attribute of the database's Terms, with upstream's text
+    (`fetch_sql_attribute_docs`) and the metadata upstream's `embed_docs_into_vdb` gave it."""
+    tables = s.catalog_table.join(
+        s.catalog_schema, s.catalog_schema.c.id == s.catalog_table.c.schema_id
+    ).join(s.catalog_database, s.catalog_database.c.id == s.catalog_schema.c.database_id)
+    ids = store().query_read(
+        select(s.sql_attribute__term.c.attribute_id)
+        .distinct()
+        .select_from(
+            s.sql_attribute__term.join(
+                s.table__term, s.table__term.c.term_id == s.sql_attribute__term.c.term_id
+            ).join(tables, s.catalog_table.c.id == s.table__term.c.table_id)
+        )
+        .where(s.catalog_database.c.name == database_name)
+        .order_by(s.sql_attribute__term.c.attribute_id)
+    )
+    rows: list[dict[str, Any]] = []
+    for r in ids:
+        for doc in fetch_sql_attribute_docs(r["attribute_id"]):
+            path = f"auto_ontology:{doc['id']}"
+            fields = {
+                "id": doc["id"],
+                "label": doc["label"],
+                "name": doc["name"],
+                "source_path": path,
+                "database_name": database_name,
+                "source": doc.get("source", ""),
+                "certified": False,  # nothing certifies a SQL attribute yet
+            }
+            rows.append(
+                {
+                    "text": (doc.get("text") or "").strip(),
+                    "path": path,
+                    "page_number": -1,
+                    "metadata": {**fields, "content_metadata": dict(fields)},
+                }
+            )
+    return rows
+
+
 def database_rows(database_name: str) -> list[dict[str, Any]]:
-    """Every Term's row and its attributes' rows, for one database."""
+    """Every Term's row, its attributes' rows and its SQL attributes' rows, for one database."""
     terms, attrs = terms_and_attributes(database_name)
     attrs_by_term: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for attr in attrs:
@@ -221,7 +265,7 @@ def database_rows(database_name: str) -> list[dict[str, Any]]:
         for term in terms
         if term.get("name")
         for row in build_rows(database_name, term, attrs_by_term.get(term["name"], []))
-    ]
+    ] + sql_attribute_rows(database_name)
 
 
 @dataclass(frozen=True)

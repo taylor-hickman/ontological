@@ -8,16 +8,16 @@ name the edit they revert in `undoes`. `entity_id` names a Term or attribute wit
 key: the history outlives what it describes, and the store's semantic tables are the other
 chain's.
 
-Revision ID: 0006
-Revises: 0005
+Revision ID: 0007
+Revises: 0006
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0006"
-down_revision: str | None = "0005"
+revision: str = "0007"
+down_revision: str | None = "0006"
 branch_labels: str | None = None
 depends_on: str | None = None
 
