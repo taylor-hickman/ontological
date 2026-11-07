@@ -23,7 +23,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ontological.compile.split import Compiled, TableCalls, compile_database
+from ontological.compile.packing import TableCalls
+from ontological.compile.split import Compiled, compile_database
 from ontological.embed import model as models
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from ontological.compile.split import TableCalls
+from ontological.compile.packing import TableCalls
 from ontological.llm.routes import DEFAULT_ROUTES, Route
 from ontological.store import pg
 
