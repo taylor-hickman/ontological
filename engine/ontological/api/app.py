@@ -14,6 +14,8 @@ a database's compile, which uses Claude quota; `POST /jobs/{id}/hold` pauses one
 `POST /jobs/{id}/resume`; `POST /jobs/{id}/dismiss` puts off a refresh's new-tables prompt. The
 routes answer 503 in an engine with no store to keep jobs in.
 
+The Terms and Ontology screens read and edit the ontology through the routes in `curate.py`.
+
 Leases: `POST /leases` takes one, `PUT /leases/{id}` renews it, `DELETE /leases/{id}` releases
 it. A renewal of an expired lease is 404, and the client takes a new one. A closing engine
 refuses new leases with 503, and the client starts a new engine.
@@ -34,8 +36,10 @@ from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ontological.api.curate import add_curate_routes
 from ontological.api.setup import add_setup_routes
 from ontological.catalog.sources import Sources
+from ontological.curate.service import OntologyService
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine.lifetime import Closing, Lease, Lifetime
 from ontological.jobs.active import ActiveJobs, JobBusy
@@ -129,6 +133,7 @@ def create_app(
     claude: Claude | None = None,
     sources: Sources | None = None,
     jobs_service: JobsService | None = None,
+    ontology: OntologyService | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Ontological engine",
@@ -177,6 +182,7 @@ def create_app(
         return Response(status_code=204)
 
     add_setup_routes(app, claude=claude, sources=sources)
+    add_curate_routes(app, ontology=ontology)
 
     @app.get("/jobs")
     async def list_jobs() -> JobList:  # pyright: ignore[reportUnusedFunction]
@@ -228,7 +234,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=[APP_ORIGIN],
         allow_origin_regex=DEV_ORIGIN_REGEX,
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["authorization", "content-type"],
     )
     return app

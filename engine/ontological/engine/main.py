@@ -49,6 +49,7 @@ import uvicorn
 import ontological
 from ontological.api.app import create_app
 from ontological.catalog.sources import Sources, StoreSources
+from ontological.curate.service import OntologyService, StoreOntology
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
@@ -97,6 +98,7 @@ class Store(Protocol):
     def sources(self, jobs: ActiveJobs, embedder: LocalEmbedder | None) -> Sources: ...
     def claude(self, config: Config) -> Claude: ...
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService: ...
+    def ontology(self, embedder: LocalEmbedder | None) -> OntologyService: ...
 
 
 class PgStore:
@@ -150,6 +152,10 @@ class PgStore:
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService:
         """Compile jobs, with the gateway every Claude call goes through (§6)."""
         return Jobs(gateway=self._gateway(), active=active, embedder=embedder)
+
+    def ontology(self, embedder: LocalEmbedder | None) -> OntologyService:
+        """The Terms and Ontology screens' reads and edits; an edit re-embeds with `embedder`."""
+        return StoreOntology(embedder)
 
 
 def pg_store(config: Config) -> Store:
@@ -348,6 +354,7 @@ async def _serve(
         claude=store.claude(config),
         sources=store.sources(jobs, embedder),
         jobs_service=service,
+        ontology=store.ontology(embedder),
     )
     server = _Server(
         uvicorn.Config(
