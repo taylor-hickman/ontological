@@ -3,6 +3,7 @@ import type { Source } from '@shared/api'
 import type { ScreenId, ThemeSource } from '@shared/shell'
 import { useEngineGet } from './api/engine'
 import { Header } from './components/Header'
+import type { InterchangeRequest } from './interchange/ImportExport'
 import { Rail } from './components/Rail'
 import { ScreenBody } from './components/ScreenBody'
 import { Sidebar } from './components/Sidebar'
@@ -40,6 +41,7 @@ export function App(): React.JSX.Element {
   const [onboarding, setOnboarding] = useState<Step | null>(null)
   const [onboardingDismissed, setOnboardingDismissed] = useState(api.initial.setupClosed)
   const [catalogTable, setCatalogTable] = useState<string | null>(null)
+  const [interchange, setInterchange] = useState<InterchangeRequest | null>(null)
   const noSources = sources.data?.length === 0
   const ontologyScreen = screen === 'ontology' || screen === 'terms' ? screen : null
   const ontologyBase = useOntology(sources.data, onboarding === null ? ontologyScreen : null)
@@ -55,6 +57,8 @@ export function App(): React.JSX.Element {
 
   const navigate = (next: ScreenId): void => {
     setScreen(next)
+    // File → Import… or Export… is for the Settings it opened, not a later visit.
+    if (next !== 'settings') setInterchange(null)
     setSheetOpen(false)
     api.setScreen(next)
   }
@@ -81,6 +85,10 @@ export function App(): React.JSX.Element {
             break
           case 'theme':
             changeTheme(command.theme)
+            break
+          case 'interchange':
+            navigate('settings')
+            setInterchange(command.action)
             break
         }
       }),
@@ -181,6 +189,8 @@ export function App(): React.JSX.Element {
               ontology={ontology}
               onAddSource={() => setOnboarding('source')}
               onOpenJobs={() => navigate('jobs')}
+              interchange={interchange}
+              onInterchangeHandled={() => setInterchange(null)}
             />
             {showRail && frame.rail !== null && (
               <Rail label={frame.rail} sheet={narrow} onClose={() => setSheetOpen(false)}>
