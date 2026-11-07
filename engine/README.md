@@ -34,6 +34,16 @@ uv run ontological-engine --pg-bin <tree>/bin --model-dir ~/.cache/ontological/m
 
 At start the engine times one batch and caps bulk batches at what takes about 100 ms, up to 1,024 padded tokens. Without a model directory it runs with no embedder.
 
+## Asking a question
+
+`ontological ask` answers one question from one database with the gated agent ([ARCHITECTURE.md §8.1](../docs/ARCHITECTURE.md#81-shape-a-gated-agent)), through the engine's `POST /ask`. It attaches to the running engine, or starts one headless, and holds a lease until the answer is in. It prints the agent's steps, the SQL `validate_sql` passed, the rows `run_sql` returned, the answer and whether the post-run check verified it. The database must be ingested and compiled; the session uses Claude quota.
+
+```sh
+uv run ontological ask "Which artists have the most albums?" --source chinook --pg-bin <tree>/bin --model-dir <model>
+```
+
+It exits 0 for a verified answer, 2 for an unverified one, and 1 if it couldn't ask. `--no-critic` skips the critic's review; options it doesn't know go to the engine it starts.
+
 ## The MCP server
 
 `ontological-mcp` is the stdio MCP server for Claude Code, Claude Desktop and Cursor ([ARCHITECTURE.md §9.2](../docs/ARCHITECTURE.md#92-mcp-for-external-agents)). It answers `initialize` at once, then attaches to the running engine, or starts one with `--headless`, and holds a lease on it until the client disconnects. It passes its options to the engine it starts, and logs to stderr.
