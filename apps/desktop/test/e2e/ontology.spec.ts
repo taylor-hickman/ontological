@@ -141,7 +141,14 @@ async function start(): Promise<{ userData: string; page: Page; close(): Promise
   writeFileSync(join(userData, 'ontology.json'), JSON.stringify(SCENARIO))
   const { app, page } = await launch(userData)
   await page.setViewportSize({ width: 1400, height: 900 })
-  await clickMenuItem(app, 'screen-ontology')
+  // The window reloads once the engine is up on its port; a menu command sent before that reload
+  // is lost, so wait for the engine and retry until the screen is open.
+  await expect(page.getByTestId('engine-status')).toHaveText('Engine running')
+  await expect(async () => {
+    await clickMenuItem(app, 'screen-ontology')
+    await expect(page.locator('h1')).toHaveText('Ontology', { timeout: 1000 })
+  }).toPass()
+  await expect(page.getByTestId('graph-node').first()).toBeVisible()
   return { userData, page, close: () => app.close() }
 }
 
