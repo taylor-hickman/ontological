@@ -1,7 +1,8 @@
 """The post-run check (ARCHITECTURE.md §8.1, BUILD_PLAN.md M1.7): after the session, the tool log
 must show plan → validate → run → review for the SQL the answer gives, with matching ids, or the
 answer is shown as unverified with the reason. `information` answers need only a plan, with the
-critic off no review is needed, and an `answerable=false` answer needs a plan and no SQL."""
+critic off no review is needed, and an `answerable=false` answer needs a plan and no SQL. Neither
+of the last two may follow a successful run_sql."""
 
 from __future__ import annotations
 
@@ -177,6 +178,33 @@ def test_an_information_answer_needs_only_a_plan() -> None:
 def test_an_information_answer_with_sql_is_unverified(log: list[ToolCall]) -> None:
     # The model picks the intent: an information plan can't vouch for SQL, checked or not
     unverified(check(log, answer()), "information", "SQL")
+
+
+NO_SQL: dict[str, Any] = {"sql": None, "validation_id": None, "review_id": None}
+
+
+@pytest.mark.parametrize(
+    "log",
+    [
+        # A calculation the critic failed, re-planned as information
+        [plan(), validated(), ran(), reviewed(passed=False), plan("plan-2", intent="information")],
+        # Information from the start, run and never reviewed
+        [plan("plan-2", intent="information"), validated(plan_id="plan-2"), ran()],
+    ],
+)
+def test_an_information_answer_after_a_run_is_unverified(log: list[ToolCall]) -> None:
+    # The answer rests on rows, so it needs its SQL and the calculation checks
+    unverified(check(log, answer(plan_id="plan-2", **NO_SQL)), "run_sql", "SQL")
+
+
+def test_a_failed_run_doesnt_stop_an_information_answer() -> None:
+    log = [plan(intent="information"), validated(), call("run_sql", failed=True)]
+    assert check(log, answer(**NO_SQL)).verified
+
+
+def test_an_unanswerable_answer_after_a_run_is_unverified() -> None:
+    log = [plan(), validated(), ran(), reviewed(passed=False)]
+    unverified(check(log, answer(answerable=False, **NO_SQL)), "run_sql", "SQL")
 
 
 def test_an_information_answer_still_needs_its_plan() -> None:

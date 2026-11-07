@@ -7,7 +7,9 @@ What the sequence must hold depends on the session:
 - a `calculation` (or any intent but `information`) needs all four steps for the final SQL;
 - an `information` answer needs only its plan, and no SQL;
 - with the critic off, no review is needed;
-- an `answerable=false` answer needs its plan and no SQL.
+- an `answerable=false` answer needs its plan and no SQL;
+- an `information` or `answerable=false` answer is unverified once run_sql has returned rows in
+  the session, since it would rest on them unchecked.
 
 The intent is the one the answer's plan recorded.
 """
@@ -42,14 +44,19 @@ def post_run_check(log: Sequence[ToolCall], answer: AnswerModel | None, *, criti
     intent = plans[answer.plan_id][1].data.get("intent")
     sql = _normalized(answer.sql)
 
-    if not answer.answerable:
+    # The model picks the intent and answerable, and can re-plan at any time, so neither can
+    # vouch for SQL, nor for rows that run_sql returned (the tools don't withhold run_sql yet)
+    if not answer.answerable or intent == "information":
+        kind = (
+            "an answer with answerable=false" if not answer.answerable else "an information answer"
+        )
         if sql:
-            return _unverified("an answer with answerable=false carries SQL; it should carry none")
-        return VERIFIED
-    if intent == "information":
-        # The model picks the intent, so an information plan can't vouch for SQL
-        if sql:
-            return _unverified("an information answer carries SQL; it should carry none")
+            return _unverified(f"{kind} carries SQL; it should carry none")
+        if any(call.name == "run_sql" and not call.is_error for call in log):
+            return _unverified(
+                f"run_sql ran in this session, so {kind} rests on rows; it needs the SQL that "
+                "returned them, validated, run and reviewed"
+            )
         return VERIFIED
 
     if not sql:
