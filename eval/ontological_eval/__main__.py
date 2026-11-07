@@ -9,7 +9,7 @@
     sets freeze [--force]   choose eval/sets/{dev,heldout,smoke}.json with the fixed seed
     sets check        run every set's gold SQL: each must run and return rows (needs `cluster up`)
     compile [wwi | <bird db> ...]   compile them in the eval store: spends Claude quota
-    retrieval [--layer semantic|data] [--set dev] [--models <key> ...]
+    retrieval [--layer semantic|data] [--set dev] [--models <key> ...] [--store <config>]
                       the retrieval benchmark: recall@k per model and configuration, no Claude
     review run [--configs <config> ...] [pagila | wwi ...]
                       the compile-quality review: compile each config in its own store
@@ -73,6 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument(
         "--models", nargs="+", choices=list(models.CANDIDATES), default=list(models.CANDIDATES)
     )
+    r.add_argument(
+        "--store",
+        choices=list(review.CONFIGS),
+        help="a compile-review store instead of the eval store: its databases' questions only",
+    )
     r.add_argument("--pg-bin", help="the bundled Postgres's bin/ (default: $ONTOLOGICAL_PG_BIN)")
     v = sub.add_parser("review", help="the compile-quality review on Pagila and WWI")
     v.add_argument("action", choices=["run", "dump"])
@@ -109,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.layer,
                 args.set_name,
                 args.models,
+                store=args.store,
                 progress=lambda m: print(m, file=sys.stderr),
             )
             print(retrieval.markdown(report))
