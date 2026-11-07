@@ -698,9 +698,23 @@ Limits:
 
 ### 8.4 Event stream to the UI
 
-Upstream's SSE contract is kept so its UI patterns can be borrowed: `step` (tool calls and model thinking summaries, mapped from SDK messages), `sql` (only after `validate_sql` passes), `result`, `chart`, `error`, `usage` (new: rate-limit status).
+Upstream's SSE contract is kept so its UI patterns can be borrowed. Each frame is `data: <JSON>`, the JSON's `type` says what it is, and the stream ends with `data: [DONE]`:
 
-Runs are keyed by conversation and buffered so the UI can re-attach after a reload (upstream `/chat/watch`). Cancel aborts the SDK query, which kills the `claude` child, and cancels any source query in flight, killing the executor if needed (§5.6).
+| `type` | When | Carries |
+|---|---|---|
+| `run` | first | the conversation, the question, the scope or null, the critic setting |
+| `step` | each tool call (`kind: tool`), each text the model writes between calls (`kind: said`), the restart (`kind: restart`) | the tool call as `POST /ask`'s steps hold it, the text, or the restart's reason; each with its session number |
+| `sql` | once `validate_sql` passes, before the SQL runs | the SQL and its `validation_id` |
+| `usage` | when Claude's rate-limit status changes, and first if one is known (new) | status, window, reset time, utilization per window |
+| `result` | last, on an answer | what `POST /ask` returns |
+| `error` | last, on no answer | `code` (`cancelled`, `no_source`, `nothing_found`, `no_embedder`, `failed`), the HTTP status `POST /ask` gives the same failure, a message |
+| `chart` | after `result`, once M4.6 ports ResultChart | the chart spec |
+
+`POST /ask/stream` takes `POST /ask`'s body and an optional `conversation` id, the client's; without one the run gets a new one, which its `run` event names. A conversation answers one question at a time: another while one runs is 409.
+
+Runs are keyed by conversation and buffered so the UI can re-attach after a reload (upstream `/chat/watch`). The question runs in an engine task that reads the session into the buffer whether or not anyone is reading, so leaving the stream never stops it, as upstream. `GET /ask/watch?conversation=` replays the conversation's latest run from its first event and follows it live to the end; with nothing to replay it ends at once. A run that has ended is kept until the conversation's next question or until it is among the oldest past 20 ended runs; they live in the engine's memory. A run counts as activity for idle shutdown while it runs.
+
+`POST /ask/cancel?conversation=` ends the run at once with a `cancelled` error, which frees the conversation, and cancels its task. That aborts the SDK query, which closes the `claude` child (its stdin closes, and SIGTERM follows 5 s later if it is still running), and closes the question's source executors, which cancels any source query in flight, killing the executor if needed (§5.6). The cleanup finishes in the background. The engine cancels runs in flight before its store stops.
 
 ---
 
