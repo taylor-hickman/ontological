@@ -111,6 +111,15 @@ def build_prompt(
     return "\n".join(f"## {heading}\n{body.rstrip()}\n" for heading, body in parts)
 
 
+def suits(ctx: dict[str, Any]) -> bool:
+    """Whether merged asks about the table: it has candidate columns (those no declared FK
+    starts from), and no more than `terms.CHUNK_COLUMNS`."""
+    described, undescribed = descriptions.split_columns(
+        ctx.get("columns", []), ctx.get("fks", []), set()
+    )
+    return 0 < len(described) + len(undescribed) <= terms.CHUNK_COLUMNS
+
+
 async def table_semantics(
     gateway: Structured,
     table: dict[str, Any],
@@ -123,9 +132,9 @@ async def table_semantics(
     profiling = profiling or {}
     columns: list[dict[str, Any]] = ctx.get("columns", [])
     fks: list[dict[str, Any]] = ctx.get("fks", [])
-    described, undescribed = descriptions.split_columns(columns, fks, set())
-    if not 0 < len(described) + len(undescribed) <= terms.CHUNK_COLUMNS:
+    if not suits(ctx):
         return None
+    described, undescribed = descriptions.split_columns(columns, fks, set())
     built = keys.build_prompt(table, ctx, profiling)
     # Before the answer, the Terms section shows only the descriptions the columns already have.
     shown = descriptions.column_specs(described, undescribed, {}, profiling)

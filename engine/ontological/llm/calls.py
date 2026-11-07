@@ -79,6 +79,22 @@ def call_scope(job_id: int, pack: int | None, table_name: str) -> Generator[None
         _scope.reset(token)
 
 
+@contextmanager
+def table_scope(table_name: str) -> Generator[None]:
+    """Calls made inside are logged for this one table of the current pack, as merged's
+    per-table calls are, so the Jobs screen can tell whose they are. Outside a scope it does
+    nothing."""
+    current = _scope.get()
+    if current is None:
+        yield
+        return
+    token = _scope.set(CallScope(current.job_id, current.pack, table_name))
+    try:
+        yield
+    finally:
+        _scope.reset(token)
+
+
 def current_scope() -> CallScope:
     return _scope.get() or CallScope()
 

@@ -18,7 +18,33 @@ const summary = {
   tables: 0,
   tables_done: 0,
   calls: 0,
-  cache_hits: 0
+  cache_hits: 0,
+  table_calls: 'split'
+}
+
+function option(table_calls: 'split' | 'merged', calls: number, usd: number, seconds: number) {
+  return {
+    table_calls,
+    calls,
+    calls_high: calls + 1,
+    calls_by_model: { sonnet: calls },
+    usd,
+    usd_low: usd * 0.7,
+    usd_high: usd * 1.5,
+    seconds,
+    seconds_low: seconds * 0.7,
+    seconds_high: seconds * 1.5
+  }
+}
+
+function estimate(database_name: string, tables: number) {
+  return {
+    database_name,
+    tables,
+    split: option('split', 7 * tables, 0.012 * tables, 50 * tables),
+    merged: option('merged', 2 * tables, 0.02 * tables, 40 * tables),
+    spawn_overhead_s: 0.53
+  }
 }
 
 const SCENARIO = {
@@ -61,15 +87,15 @@ const SCENARIO = {
   ],
   details: {
     '2': {
-      stages: ['table_keys', 'column_descriptions', 'table_terms', 'table_synonyms'],
       tables: [
         { name: 'cities', state: 'done', stages_done: 4, skipped: null },
         { name: 'countries', state: 'skipped', stages_done: 0, skipped: 'no non-FK columns' },
         { name: 'cities_archive', state: 'pending', stages_done: 2, skipped: null },
-        { name: 'vehicle_temperatures', state: 'pending', stages_done: 0, skipped: null }
+        { name: 'vehicle_temperatures', state: 'pending', table_calls: 'merged', stages_done: 0, skipped: null }
       ]
     }
   },
+  estimates: { wwi: estimate('wwi', 2), pagila: estimate('pagila', 3) },
   calls: {
     '2': [
       {
@@ -149,6 +175,24 @@ test('shows a paused compile, its tables and calls, and holds and resumes it', a
       'queued'
     ])
     await expect(tiles.nth(2).getByRole('img')).toHaveAttribute('aria-label', '2 of 4 stages done')
+    // A table its job ran merged has merged's one stage, and the legend explains both
+    await expect(tiles.nth(3)).toHaveAttribute('data-table-calls', 'merged')
+    await expect(tiles.nth(3).locator('[data-tone]')).toHaveCount(1)
+    await expect(card).toContainText('Split tables: keys · descriptions · terms · synonyms')
+    await expect(card).toContainText('Merged tables: one merged call')
+
+    // The estimate for the tables left, split and merged; picking merged switches the job
+    const estimateCard = page.getByTestId('estimate-card')
+    await expect(estimateCard.getByRole('heading')).toHaveText('Remaining 2 tables: estimate')
+    const split = estimateCard.getByRole('radio', { name: /Split/ })
+    const merged = estimateCard.getByRole('radio', { name: /Merged/ })
+    await expect(split).toHaveAttribute('aria-checked', 'true')
+    await expect(split).toContainText('Split · current')
+    await expect(split).toContainText('≈ 14 calls · ≈ 2 min · ≈ $0.02 of usage')
+    await expect(merged).toContainText('≈ 4 calls')
+    await merged.click()
+    await expect(merged).toHaveAttribute('aria-checked', 'true')
+    await expect(card).toContainText('Merged calls · started')
 
     // The rail: the new-tables prompt, the call log, earlier runs
     const rail = page.getByTestId('rail')
@@ -180,7 +224,7 @@ test('shows a paused compile, its tables and calls, and holds and resumes it', a
     // Later puts off the prompt; Compile starts the source's compile
     await rail.getByRole('button', { name: 'Later' }).click()
     await expect(rail.getByTestId('new-tables')).toHaveCount(0)
-    expect(actions(userData)).toEqual(['hold 2', 'resume 2', 'hold 2', 'dismiss 3'])
+    expect(actions(userData)).toEqual(['choose 2 merged', 'hold 2', 'resume 2', 'hold 2', 'dismiss 3'])
 
     // An earlier run opens in the card
     await rail.getByRole('button', { name: /Compile · chinook/ }).click()
@@ -191,7 +235,7 @@ test('shows a paused compile, its tables and calls, and holds and resumes it', a
   }
 })
 
-test('Compile on a new-tables prompt starts that source’s compile', async () => {
+test('Compile on a new-tables prompt shows the estimate and starts that source’s compile', async () => {
   const userData = freshUserData()
   const scenario = structuredClone(SCENARIO)
   scenario.jobs[1]!.state = 'held'
@@ -201,9 +245,12 @@ test('Compile on a new-tables prompt starts that source’s compile', async () =
   const { app, page } = await launch(userData)
   try {
     await clickMenuItem(app, 'screen-jobs')
-    await page.getByTestId('rail').getByRole('button', { name: 'Compile 3 tables' }).click()
+    const prompt = page.getByTestId('rail').getByTestId('new-tables')
+    await expect(prompt.getByRole('radio', { name: /Split/ })).toContainText('≈ 21 calls')
+    await prompt.getByRole('radio', { name: /Merged/ }).click()
+    await prompt.getByRole('button', { name: 'Compile 3 tables' }).click()
     await expect(page.getByTestId('job-card')).toHaveAttribute('data-state', 'running')
-    expect(actions(userData)).toEqual(['compile pagila'])
+    expect(actions(userData)).toEqual(['compile pagila merged'])
   } finally {
     await app.close()
   }

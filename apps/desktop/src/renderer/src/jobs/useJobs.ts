@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { EngineState } from '@shared/engine'
 import { engineFetch } from '../engineApi'
 import { useEngine } from '../useEngine'
-import type { CallRow, JobDetail, JobSummary } from './types'
+import type { CallRow, Estimate, JobDetail, JobSummary } from './types'
 
 /** How often the screen asks the engine again. Jobs change by the table, so 2 s is plenty. */
 export const POLL_MS = 2000
@@ -74,6 +74,19 @@ export function useJobDetail(
   // A detail from another job, while the new one loads, is not this job's.
   const matching = detail.data && detail.data.job.id === jobId ? detail.data : null
   return { detail: matching, calls: matching ? (calls.data?.calls ?? []) : [], refresh }
+}
+
+/** How often an estimate is asked again while its compile runs: it changes by the pack. */
+export const ESTIMATE_POLL_MS = 10_000
+
+/**
+ * The split and merged estimate (§6.5) for a database's next compile, or what its unfinished one
+ * has left. Asks Claude nothing.
+ */
+export function useEstimate(databaseName: string | null, live: boolean): { estimate: Estimate | null; refresh(): void } {
+  const path = databaseName === null ? null : `/jobs/estimate?database_name=${encodeURIComponent(databaseName)}`
+  const { data, refresh } = usePoll<Estimate>(path, live ? ESTIMATE_POLL_MS : null)
+  return { estimate: data && data.database_name === databaseName ? data : null, refresh }
 }
 
 /** POSTs a job action, then refreshes what shows it. Returns the error, if any, for the screen. */
