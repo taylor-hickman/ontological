@@ -28,6 +28,7 @@ from test_tools import GOOD_SQL, PLAN, FakeOntology, FakeRunner
 from ontological.answer.agent import Answered, ask
 from ontological.answer.pack import GroundingPack
 from ontological.answer.prompts import REFUSAL_RULE
+from ontological.answer.service import asked
 from ontological.llm.gateway import ClaudeGateway
 
 QUESTION = "How many albums does each artist have?"
@@ -180,3 +181,36 @@ def test_a_session_without_an_answer_is_unverified(tmp_path: Path) -> None:
     assert got.answer is None and not got.verified
     assert got.reason is not None and "no answer" in got.reason
     assert got.outcome == "invalid" and len(got.tool_log) == 2
+
+
+# --- what POST /ask returns (M1.8) -----------------------------------------------------------
+
+
+def test_asked_carries_the_validated_sql_its_rows_and_every_step(tmp_path: Path) -> None:
+    h = Harness(tmp_path, [agent(*FULL), structured_session(REVIEW_PASSES, model=SONNET)])
+    got = asked(h.ask())
+
+    assert got.verified and got.sql == GOOD_SQL
+    assert got.result is not None
+    assert got.result.columns == ["Name", "albums"]
+    assert got.result.rows == [["AC/DC", 2], ["Accept", 2]]
+    assert [s.name for s in got.steps] == ["plan", "validate_sql", "run_sql", "review_answer"]
+    assert got.steps[2].data["row_count"] == 2
+    assert got.answered_model == OPUS
+    assert got.model_dump(mode="json")["result"]["rows"][0] == ["AC/DC", 2]  # as the route sends
+
+
+def test_asked_has_no_sql_or_rows_for_an_id_that_never_passed(tmp_path: Path) -> None:
+    h = Harness(tmp_path, [agent(*FULL[:2], output={**ANSWER, "validation_id": "val-9"})])
+    got = asked(h.ask())
+    assert not got.verified
+    assert got.sql is None and got.result is None
+    assert got.answer is not None and got.answer.sql == GOOD_SQL  # what the model claimed
+
+
+def test_asked_without_an_answer_keeps_the_steps(tmp_path: Path) -> None:
+    out_of_turns = result(is_error=True, subtype="error_max_turns")
+    got = asked(Harness(tmp_path, [[init(OPUS), *FULL[:2], out_of_turns]]).ask())
+    assert got.answer is None and got.sql is None and got.result is None
+    assert [s.name for s in got.steps] == ["plan", "validate_sql"]
+    assert got.outcome == "invalid"

@@ -47,6 +47,7 @@ from typing import Any, Protocol
 import uvicorn
 
 import ontological
+from ontological.answer.service import Answers, StoreAnswers
 from ontological.api.app import create_app
 from ontological.catalog.sources import Sources, StoreSources
 from ontological.embed.embedder import LocalEmbedder
@@ -97,6 +98,7 @@ class Store(Protocol):
     def sources(self, jobs: ActiveJobs, embedder: LocalEmbedder | None) -> Sources: ...
     def claude(self, config: Config) -> Claude: ...
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService: ...
+    def answers(self, embedder: LocalEmbedder | None) -> Answers: ...
 
 
 class PgStore:
@@ -150,6 +152,10 @@ class PgStore:
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService:
         """Compile jobs, with the gateway every Claude call goes through (§6)."""
         return Jobs(gateway=self._gateway(), active=active, embedder=embedder)
+
+    def answers(self, embedder: LocalEmbedder | None) -> Answers:
+        """Questions, answered through the same gateway."""
+        return StoreAnswers(gateway=self._gateway(), embedder=embedder)
 
 
 def pg_store(config: Config) -> Store:
@@ -348,6 +354,7 @@ async def _serve(
         claude=store.claude(config),
         sources=store.sources(jobs, embedder),
         jobs_service=service,
+        answers=store.answers(embedder),
     )
     server = _Server(
         uvicorn.Config(
