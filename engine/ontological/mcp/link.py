@@ -11,7 +11,8 @@ it has taken engine.lock to stop. So the shim waits until engine.json no longer 
 has died, and attaches again, which starts a new engine. The shim never takes engine.lock
 itself; the engine takes it to settle which of two starting engines serves.
 
-Tool calls wait on `EngineLink.engine()`, so a call made while the engine starts waits for it.
+Tool calls go through `EngineLink.call()`, which waits on `EngineLink.engine()`, so a call made
+while the engine starts waits for it.
 """
 
 from __future__ import annotations
@@ -80,6 +81,32 @@ class EngineLink:
                 raise self._error
             await self._changed.wait()
         return self._engine
+
+    async def call(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        timeout: float,
+    ) -> httpx.Response:
+        """One request to the engine's API, once there is an engine. Raises EngineUnavailable
+        when there is none, or it doesn't answer within `timeout` seconds."""
+        info = await self.engine()
+        try:
+            return await self._http.request(
+                method,
+                f"http://127.0.0.1:{info.port}{path}",
+                headers={"Authorization": f"Bearer {info.token}"},
+                json=body,
+                params=params,
+                timeout=timeout,
+            )
+        except httpx.TimeoutException as e:
+            raise EngineUnavailable(f"the engine didn't answer in {timeout:g}s") from e
+        except httpx.TransportError as e:
+            raise EngineUnavailable(f"the engine didn't answer: {e}") from e
 
     def _notify(self) -> None:
         self._changed.set()

@@ -5,7 +5,9 @@
 Add it to Claude Code with `claude mcp add ontological -- ontological-mcp`. It passes
 `--app-data` and every other option to the engine it starts.
 
-It answers MCP `initialize` at once and attaches to an engine in the background, starting one
+Its tools are upstream's curated nine plus `validate_sql` and `run_validated_sql`
+(`ontological.mcp.tools`). It answers MCP `initialize` at once and attaches to an engine in the
+background, starting one
 headless if none is running, because Postgres start-up and model loading take longer than MCP
 clients wait for a handshake. It holds a lease on the engine while the client is connected, and
 releases it when the client closes stdin or sends SIGTERM or SIGINT. Nothing but MCP goes to
@@ -23,11 +25,11 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import anyio
-from mcp.server.mcpserver import MCPServer
 
 import ontological
 from ontological.engine import main as engine_main
 from ontological.mcp.link import EngineLink, hold_engine
+from ontological.mcp.tools import build_server
 
 log = logging.getLogger("ontological.mcp")
 
@@ -44,7 +46,7 @@ async def _exit_on_signal(link: EngineLink) -> None:
 
 
 async def serve(link: EngineLink) -> None:
-    server = MCPServer(name="ontological", version=ontological.__version__)
+    server = build_server(link, version=ontological.__version__)
     async with anyio.create_task_group() as tg:
         tg.start_soon(_exit_on_signal, link)
         await server.run_stdio_async()
