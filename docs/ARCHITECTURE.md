@@ -483,7 +483,7 @@ Every Claude call names a task, and the route table maps each task to a model an
 | `table_terms` | split (default): term extraction, assigning every column, with the new descriptions as input | `sonnet` | `high` | 1 per table |
 | `table_synonyms` | split (default): synonyms already written in the table description | `haiku` | `low` | 0–1 per table |
 | `table_semantics` | merged (option): keys, descriptions, terms and synonyms in one call | `sonnet` | `high` | 1 per table |
-| `semantic_fk_pick` | pick the referenced attribute from the top-3 candidates | `sonnet` | `medium` | 1 per ~25 columns |
+| `semantic_fk_pick` | pick the referenced attribute from each column's candidates (upstream's two top-3 searches) | `sonnet` | `medium` | 1 per ~25 columns |
 | `sql_attribute_judge` | keep or drop query-history fragments, and name them | `sonnet` | `medium` | 1 per batch of terms |
 | `bridge_sql` | write a bridge table's join SQL and pick its owning term | `opus` | `high` | 1 per bridge |
 | `pii_classify` | classify uncertain columns from metadata | `haiku` | `low` | 1 per ~40 columns |
@@ -512,7 +512,7 @@ Upstream was written for a cheap, fast HTTP endpoint and makes many small calls.
 | Upstream | Ontological |
 |---|---|
 | Per table: FK suggestion (1) + column descriptions (⌈n/15⌉) + term extraction (1) + synonyms (0–1) | **Default `split`: upstream's four calls, in upstream's order, on tiered models** (§6.3). Keys and terms run on Sonnet, descriptions and synonyms on Haiku. Term extraction sees the finished descriptions, as upstream's does. Tables with ≤ 6 columns are **packed several to a call** within each stage (up to about 8k tokens of input). Columns beyond prompt capacity are chunked instead of truncated at 40. **Option `merged`:** one `TableSemantics` call per table returning `{pk, fk_suggestions, is_junction, column_descriptions[], terms[], synonyms[]}`, built from the same four prompts as sections. It is for very large schemas where split would take many usage windows. The setting is `compile.table_calls`, and the pre-compile estimate shows both options (§6.5). |
-| Semantic FK: 1 call per unresolved column | **1 call per batch of about 25 unresolved columns**, each with its top-3 retrieval candidates; then upstream's deterministic overlap probe and pruning |
+| Semantic FK: 1 call per unresolved column | **1 call per batch of 25 unresolved columns**, each with its candidates from upstream's two top-3 searches; then upstream's deterministic sample-match and overlap probes, through the executor's `probe` op, and pruning |
 | SQL attribute judge: 1 call per term | 1 call per batch of terms (fragments are short) |
 | Bridge owner via RERANK | Claude picks the owner inside the bridge-SQL call |
 | PII LLM fallback: 1 call per uncertain column | 1 call per batch of about 40 uncertain columns, metadata only (unchanged) |
