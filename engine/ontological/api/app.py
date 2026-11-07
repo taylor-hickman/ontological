@@ -22,6 +22,9 @@ Ask: `POST /ask` answers one question from one database with the gated agent (§
 Claude quota, and returns once the session ends: the answer, whether the post-run check verified
 it, the validated SQL, its rows and the tool log (`ontological.answer.service.Asked`). It answers
 404 for a database with no source, and 503 in an engine with no store or no embedder.
+`POST /answerable` is `check_answerable` (§8.3), the pre-check: one Haiku call, then how much of
+the question the semantic layer covers, within the database given or the one that covers it best
+(`ontological.answer.answerable.Answerability`). It answers 503 as `/ask` does.
 
 The Terms and Ontology screens read and edit the ontology through the routes in `curate.py`.
 
@@ -45,7 +48,7 @@ from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from ontological.answer.service import Answers, Asked, NoEmbedder
+from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder
 from ontological.api.curate import add_curate_routes
 from ontological.api.setup import add_setup_routes
 from ontological.catalog.sources import Sources
@@ -92,6 +95,11 @@ class AskRequest(BaseModel):
     question: str
     database: str
     critic: bool = True  # the `answer.critic` setting (§8.1)
+
+
+class AnswerableRequest(BaseModel):
+    question: str
+    database: str | None = None  # None: the database that covers the question best
 
 
 class TableCallsRequest(BaseModel):
@@ -216,6 +224,15 @@ def create_app(
             return await answers.ask(body.question, body.database, critic=body.critic)
         except NoSource:
             raise HTTPException(404, f"no source for {body.database}") from None
+        except NoEmbedder:
+            raise HTTPException(503, "this engine has no embedding model to search with") from None
+
+    @app.post("/answerable")
+    async def answerable(body: AnswerableRequest) -> Answerability:  # pyright: ignore[reportUnusedFunction]
+        if answers is None:
+            raise HTTPException(503, "this engine has no store to check against")
+        try:
+            return await answers.check(body.question, body.database)
         except NoEmbedder:
             raise HTTPException(503, "this engine has no embedding model to search with") from None
 

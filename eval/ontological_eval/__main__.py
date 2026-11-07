@@ -11,6 +11,9 @@
     compile [wwi | <bird db> ...]   compile them in the eval store: spends Claude quota
     retrieval [--layer semantic|data] [--set dev] [--models <key> ...]
                       the retrieval benchmark: recall@k per model and configuration, no Claude
+    answerable [--set dev] [--models <key> ...]
+                      check_answerable's coverage distance on extracted entities: one Haiku
+                      call a question, none on a rerun
 
 The data, the cluster and the eval store live under ONTOLOGICAL_EVAL_HOME (default
 ~/Library/Application Support/Ontological Eval). The cluster and the store run the bundled
@@ -28,7 +31,7 @@ from pathlib import Path
 from ontological.embed import model as models
 from ontological.store import pg
 
-from . import cluster, compile_store, fetch, ingest, questions, retrieval, sets
+from . import answerable, cluster, compile_store, fetch, ingest, questions, retrieval, sets
 from .home import eval_home, wwi_dir
 
 
@@ -69,6 +72,14 @@ def main(argv: list[str] | None = None) -> int:
         "--models", nargs="+", choices=list(models.CANDIDATES), default=list(models.CANDIDATES)
     )
     r.add_argument("--pg-bin", help="the bundled Postgres's bin/ (default: $ONTOLOGICAL_PG_BIN)")
+    a = sub.add_parser(
+        "answerable", help="the coverage distance on extracted entities (one Haiku call each)"
+    )
+    a.add_argument("--set", default="dev", choices=sets.NAMES, dest="set_name")
+    a.add_argument(
+        "--models", nargs="+", choices=list(models.CANDIDATES), default=list(models.CANDIDATES)
+    )
+    a.add_argument("--pg-bin", help="the bundled Postgres's bin/ (default: $ONTOLOGICAL_PG_BIN)")
     args = parser.parse_args(argv)
     home = eval_home()
 
@@ -96,6 +107,17 @@ def main(argv: list[str] | None = None) -> int:
                 progress=lambda m: print(m, file=sys.stderr),
             )
             print(retrieval.markdown(report))
+            print(f"written to {out}")
+            return 0
+        if args.command == "answerable":
+            found, out = answerable.bench(
+                home,
+                pg_bin,
+                args.set_name,
+                args.models,
+                progress=lambda m: print(m, file=sys.stderr),
+            )
+            print(answerable.markdown(found))
             print(f"written to {out}")
             return 0
         lay = cluster.layout(home, pg_bin)
