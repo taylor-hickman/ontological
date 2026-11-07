@@ -21,13 +21,15 @@ from conftest import sql
 from fakes import HashEmbeddings, ScriptedGateway
 from test_compile import claude
 
+from auto_ontology.dal.session import write_transaction
 from auto_ontology.vdb.postgres import PostgresVDB
 from ontological.catalog.ingest import ingest
-from ontological.compile.split import compile_database
+from ontological.compile.split import compile_database, compile_pack
 from ontological.curate import edits
 from ontological.curate.edits import (
     AlreadyUndone,
     Conflict,
+    Creation,
     EditRefused,
     NameTaken,
     NotFound,
@@ -376,6 +378,108 @@ def test_undoing_an_undo_makes_the_edit_again(curated: Curated) -> None:
     assert {c.undoes for c in redo.changes} == {undone.id}
     assert one(lay, f"SELECT description || ' ' || certified FROM column_attribute "
                f"WHERE id = '{country}'") == "Where it was billed. true"  # fmt: skip
+
+
+# --- what compile changes ---------------------------------------------------------------------
+
+
+def recompile(lay: pg.Layout, chinook: Path, *names: str) -> None:
+    """Compile these tables again, as "recompile with current models" does, through the same
+    scripted Claude."""
+    tables = [
+        {
+            "id": one(lay, f"SELECT id FROM catalog_table WHERE name = '{name}'"),
+            "name": name,
+            "schema_name": "main",
+            "description": one(lay, f"SELECT description FROM catalog_table WHERE name = '{name}'")
+            or None,
+        }
+        for name in names
+    ]
+    with SourceExecutor(SqliteSource(chinook)) as executor:
+        asyncio.run(compile_pack([(t, None) for t in tables], executor, ScriptedGateway(claude)))
+
+
+def test_a_first_compile_logs_nothing_and_a_recompile_logs_what_it_changes(
+    curated: Curated, chinook: Path
+) -> None:
+    lay = curated.store
+    # What a compile creates isn't a change; the Term's `created` says when it was compiled
+    assert change_log(lay) == []
+    # The first recompile reads each generated description back as its column's own and
+    # appends the samples the prompt showed, so it changes every sampled attribute once
+    recompile(lay, chinook, "Customer", "Invoice")
+    first = change_log(lay)
+    assert first and all(
+        line.startswith('column_attribute description "About ')
+        and " — samples: " in line
+        and line.endswith(" compile")
+        for line in first
+    ), first
+    # The next answers the same, so it changes nothing and logs nothing
+    recompile(lay, chinook, "Customer", "Invoice")
+    assert change_log(lay) == first
+
+
+def test_a_recompile_logs_each_field_it_changes_as_actor_compile(
+    curated: Curated, chinook: Path
+) -> None:
+    lay = curated.store
+    customer = term_id(lay, "Customer")
+    city = attr_id(lay, "Invoice", "BillingCity")
+    # Once, so the samples are on every description, and the log emptied
+    recompile(lay, chinook, "Customer", "Invoice")
+    sql(lay, "DELETE FROM ops.change_log")
+    # Written behind the log's back, so the recompile has something to change
+    sql(
+        lay,
+        "UPDATE term SET description = 'Stale.' WHERE name = 'Customer';"
+        f"UPDATE column_attribute SET description = 'Stale city.' WHERE id = '{city}'",
+    )
+
+    recompile(lay, chinook, "Customer", "Invoice")
+
+    [term_change] = history("term", customer)
+    assert (term_change.field, term_change.old, term_change.new, term_change.actor) == (
+        "description",
+        "Stale.",
+        "A Customer.",
+        "compile",
+    )
+    [city_change] = history("column_attribute", city)
+    assert (city_change.field, city_change.old, city_change.actor) == (
+        "description",
+        "Stale city.",
+        "compile",
+    )
+    assert city_change.new == one(
+        lay, f"SELECT description FROM column_attribute WHERE id = '{city}'"
+    )
+    # An edit per Term: Customer's and Invoice's are undone apart
+    assert city_change.edit != term_change.edit
+    assert [line.rsplit(" ", 1)[1] for line in change_log(lay)] == ["compile", "compile"]
+
+    # A person can take back what compile wrote
+    undone = undo(term_change.edit)
+    assert [(c.old, c.new, c.actor) for c in undone.changes] == [("A Customer.", "Stale.", "user")]
+    assert one(lay, f"SELECT description FROM term WHERE id = '{customer}'") == "Stale."
+
+
+def test_an_edit_that_created_what_it_changed_isnt_undone(curated: Curated) -> None:
+    lay = curated.store
+    album = term_id(lay, "Album")
+    # Logged as an import logs the Terms it creates: each field it holds, from nothing
+    with write_transaction():
+        changes = edits.log_write(
+            album, [], {("term", album): edits.CREATED["term"]}, actor="import"
+        )
+    assert [(c.field, c.old, c.new) for c in changes] == [
+        ("name", None, "Album"),
+        ("description", None, "A Album."),
+    ]
+    with pytest.raises(Creation):
+        undo(changes[0].edit)
+    assert one(lay, f"SELECT name FROM term WHERE id = '{album}'") == "Album"
 
 
 # --- a full re-embed, as a job ----------------------------------------------------------------

@@ -63,6 +63,7 @@ jobs:
         working-directory: engine
         run: uv sync --locked
       - uses: ./.github/actions/embedding-model
+      - uses: ./.github/actions/duckdb-extensions
       - name: Store lifecycle tests (first launch, stop, adopt, stale pid, second engine, restore, 16 to 17, disk full), and the engine idling out on the store
         working-directory: engine
         env:

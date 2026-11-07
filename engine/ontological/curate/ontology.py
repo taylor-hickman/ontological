@@ -28,7 +28,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from auto_ontology.dal.session import store
-from ontological.curate.edits import Change, history
+from ontological.curate.edits import Change, created, history
 
 Layer = Literal["semantic", "data"]
 TermKind = Literal["entity", "association"]
@@ -145,7 +145,7 @@ class TermDetail(BaseModel):
     joins: list[JoinOut]
     sql_attributes: list[SqlAttributeOut]
     history: list[ChangeOut]  # newest first
-    undoable: int | None  # the edit Undo would revert: the latest one
+    undoable: int | None  # the edit Undo would revert: the latest, unless it created the Term
 
 
 class GraphNode(BaseModel):
@@ -351,8 +351,16 @@ def term(term_id: str) -> TermDetail:
             for s in sql_attributes
         ],
         history=[ChangeOut.of(c) for c in changes],
-        undoable=changes[0].edit if changes else None,
+        undoable=_undoable(changes),
     )
+
+
+def _undoable(changes: list[Change]) -> int | None:
+    """The edit Undo reverts, the latest, unless it created the Term."""
+    if not changes:
+        return None
+    latest = changes[0].edit
+    return None if any(created(c) for c in changes if c.edit == latest) else latest
 
 
 def _term_names(ids: Iterable[str]) -> dict[str, str]:

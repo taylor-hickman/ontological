@@ -77,6 +77,6 @@ def _refused(e: NotFound | edits.EditRefused) -> HTTPException:
     """An edit's refusal, as the API answers it."""
     if isinstance(e, NotFound | edits.NotFound):
         return HTTPException(404, str(e))
-    if isinstance(e, edits.NameTaken | edits.Conflict | edits.AlreadyUndone):
+    if isinstance(e, edits.NameTaken | edits.Conflict | edits.AlreadyUndone | edits.Creation):
         return HTTPException(409, str(e))
     return HTTPException(400, str(e))

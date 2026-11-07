@@ -71,7 +71,10 @@ describe('history lines', () => {
       'You renamed it from “Song” to “Track” (undo)'
     )
     expect(historyLine(change({ field: 'description', old: 'a', new: '' }))).toBe('You cleared the description')
-    expect(historyLine(change({ field: 'description', new: 'b', actor: 'import' }))).toBe('Import changed the description')
+    expect(historyLine(change({ field: 'description', old: 'a', new: 'b', actor: 'import' }))).toBe('Import changed the description')
+    expect(historyLine(change({ field: 'name', old: null, new: 'Rental', actor: 'import' }))).toBe('Import created it as “Rental”')
+    expect(historyLine(change({ field: 'description', old: null, new: 'b', actor: 'import' }))).toBe('Import wrote the description')
+    expect(historyLine(change({ field: 'description', old: 'a', new: 'b', actor: 'compile' }))).toBe('Compile changed the description')
   })
 
   it('names who wrote the description', () => {

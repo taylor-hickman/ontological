@@ -18,6 +18,7 @@ import duckdb
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs]
 
 from ontological.profile.sampling import TableProfile, calculate_columns_profiling
+from ontological.sources import extensions
 
 ALIAS = "src"
 
@@ -58,9 +59,14 @@ class Session:
 
     database_name: str
     catalog_name = ALIAS  # the DuckDB catalog the source's relations are in
+    # The scanner a subclass attaches its source with. Autoinstall and autoload are off, so it is
+    # loaded by name from the engine's extension directory (`extensions.py`).
+    extension: str | None = None
 
     def __init__(self) -> None:
-        self.con = duckdb.connect(":memory:")
+        self.con = extensions.connect()
+        if self.extension is not None:
+            extensions.load(self.con, self.extension)
         self._lock = threading.Lock()
         self._current: int | None = None
         self._cancelled: int | None = None

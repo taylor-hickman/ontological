@@ -4,23 +4,24 @@
 # Modified by Ontological: ported from upstream's
 # auto_ontology/retrieval/text_to_sql/agents/candidates_retrieval.py and
 # auto_ontology/retrieval/data_access/semantic_search.py at 2a24f5d. Dense search runs through the
-# local embedder (ontological/embed/search.py), one search after another. Upstream's LLM intent
-# filters are dropped: retrieval runs before the agent, with no Claude call, and the agent judges
-# the candidates itself (ARCHITECTURE.md §8.1). SQL attributes (M3.5) and custom analyses (M5.3)
-# join the search once something writes them.
+# local embedder, one search after another, through whichever search the caller passes: the
+# engine's is hybrid search (ontological/embed/hybrid.py). Upstream's LLM intent filters are
+# dropped: retrieval runs with no Claude call, and the agent judges the candidates itself
+# (ARCHITECTURE.md §8.1). Custom analyses (M5.3) join the search once something writes them.
 
-"""Dense retrieval over the semantic layer's Terms and column attributes (ARCHITECTURE.md §7,
-§8.1).
+"""Retrieval over the semantic layer's Terms, column attributes and SQL attributes
+(ARCHITECTURE.md §7, §8.1).
 
-Each entity searches the attributes, the evidence searches them once more, and the subject
-searches the Terms. With no database given, the one that covers the most entities wins, as
-upstream's `_select_candidate_database` picks it, and entities it doesn't cover search it again.
-The subject searches that database only, where upstream searches every database and drops the
-other databases' tables later.
+Each entity searches the attributes, the evidence searches them once more, the question searches
+the SQL attributes and the subject searches the Terms. With no database given, the one that
+covers the most entities wins, as upstream's `_select_candidate_database` picks it (SQL
+attributes count as hits), and entities it doesn't cover search it again. The subject searches
+that database only, where upstream searches every database and drops the other databases' tables
+later.
 Hits keep upstream's `{text, id, label, score, ...}` shape, `score` being cosine distance (lower
-is nearer). The search is dense unless the caller passes another (`Search`): the retrieval
-benchmark (§7.4) runs the pack on each of hybrid search's rankings, and M4.3 puts hybrid search
-(`ontological.embed.hybrid`) under it for good.
+is nearer). The engine searches with hybrid search (`ontological.embed.hybrid.searcher`); the
+default here is dense alone, and the retrieval benchmark (§7.4) passes each of hybrid search's
+rankings.
 """
 
 from __future__ import annotations
@@ -30,7 +31,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from auto_ontology.semantic.constants import LABEL_COLUMN_ATTRIBUTE, LABEL_TERM
+from auto_ontology.semantic.constants import (
+    LABEL_COLUMN_ATTRIBUTE,
+    LABEL_SQL_ATTRIBUTE,
+    LABEL_TERM,
+)
 from auto_ontology.vdb.postgres import PostgresVDB
 from ontological.embed.search import dense_search
 
@@ -40,6 +45,7 @@ logger = logging.getLogger(__name__)
 ENTITY_K = 2  # attributes per extracted entity
 EVIDENCE_K = 3  # attributes for the evidence text
 SUBJECT_K = 1  # Terms for the subject
+SQL_ATTRIBUTE_K = 3  # SQL attributes for the question
 
 # The metadata fields a hit carries over (upstream's `_hits_to_semantic_rows`).
 _HIT_FIELDS = ("name", "schema_name", "database_name", "data_type", "source")
@@ -157,6 +163,7 @@ class Retrieved:
     database: str | None  # the one given, or the one chosen by coverage
     attributes: list[Hit]  # deduplicated, nearest first
     terms: list[Hit]  # the subject's, nearest first
+    sql_attributes: list[Hit] = field(default_factory=list[Hit])  # the question's, nearest first
     coverage: list[Coverage] = field(default_factory=list[Coverage])  # when it chose
 
 
@@ -170,21 +177,24 @@ def retrieve(
     *,
     evidence: str = "",
     subject: str = "",
+    question: str = "",
     database: str | None = None,
     entity_k: int = ENTITY_K,
     evidence_k: int = EVIDENCE_K,
     subject_k: int = SUBJECT_K,
+    sql_attribute_k: int = SQL_ATTRIBUTE_K,
     search: Search = dense_search,
 ) -> Retrieved:
-    """Search the attributes per entity and for the evidence, and the Terms for the subject,
-    within `database` when it is given. Without one, keep the database that covers the most
-    entities and drop the rest, as upstream does; hits with no database are dropped too.
+    """Search the attributes per entity and for the evidence, the SQL attributes for the
+    question, and the Terms for the subject, within `database` when it is given. Without one,
+    keep the database that covers the most entities and drop the rest, as upstream does; hits
+    with no database are dropped too.
 
     Only each entity's nearest `ENTITY_K` hits rank the databases, as many as upstream's
     per-entity search returns. Past that, an `entity_k` wider than upstream's (the raw question's)
     would let the database with the most middling hits beat the one with the nearest."""
     entities = list(dict.fromkeys(e.strip() for e in entities if e.strip()))
-    evidence, subject = evidence.strip(), subject.strip()
+    evidence, subject, question = evidence.strip(), subject.strip(), question.strip()
 
     attributes: list[Hit] = []
     voters: list[Hit] = []
@@ -196,15 +206,22 @@ def retrieve(
         found = search_by_label(vdb, evidence, LABEL_COLUMN_ATTRIBUTE, evidence_k, database, search)
         attributes += _tagged(found, query_evidence=evidence)
         voters += found
+    sql_attributes: list[Hit] = []
+    if question:
+        sql_attributes = search_by_label(
+            vdb, question, LABEL_SQL_ATTRIBUTE, sql_attribute_k, database, search
+        )
+        voters += sql_attributes
 
     ranking: list[Coverage] = []
     if database is None:
         ranking = coverage(voters)
         if not ranking:
             logger.warning("no hit names a database; dropping %d hit(s)", len(attributes))
-            return Retrieved(None, [], [], ranking)
+            return Retrieved(None, [], [], [], ranking)
         database = ranking[0].database
         attributes = [h for h in attributes if _database_name(h) == database]
+        sql_attributes = [h for h in sql_attributes if _database_name(h) == database]
         covered = {str(h.get("query_entity") or "").strip() for h in attributes}
         for entity in (e for e in entities if e not in covered):
             found = search_by_label(vdb, entity, LABEL_COLUMN_ATTRIBUTE, entity_k, database, search)
@@ -219,4 +236,6 @@ def retrieve(
     terms = (
         search_by_label(vdb, subject, LABEL_TERM, subject_k, database, search) if subject else []
     )
-    return Retrieved(database, dedupe_best_score(attributes), terms, ranking)
+    return Retrieved(
+        database, dedupe_best_score(attributes), terms, dedupe_best_score(sql_attributes), ranking
+    )

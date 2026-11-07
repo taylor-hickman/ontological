@@ -19,9 +19,10 @@ import pytest
 import yaml
 from fakes import ScriptedGateway
 from test_compile import claude
-from test_curation import Curated, Hashed, attr_id, curated, jobs, one, term_id
+from test_curation import Curated, Hashed, attr_id, attributes_of, curated, jobs, one, term_id
 
-from ontological.curate.edits import edit_attribute, edit_term
+from ontological.curate import ontology
+from ontological.curate.edits import Creation, edit_attribute, edit_term, history, undo
 from ontological.embed import reembed
 from ontological.embed.semantic import Synced
 from ontological.interchange import service
@@ -153,6 +154,43 @@ def test_a_native_import_into_an_empty_store_restores_synonyms_and_certification
     assert one(lay, "SELECT count(*) FROM sql_attribute__sql") == one(
         lay, "SELECT count(*) FROM sql_attribute"
     )
+
+
+def test_an_import_logs_what_it_creates_as_actor_import(curated: Curated) -> None:
+    lay = curated.store
+    curate(curated)
+    text = export()
+    empty_the_store(lay)
+    one(lay, "DELETE FROM ops.change_log")
+
+    service.import_model(text, replace=True)
+
+    album_id = term_id(lay, "Album")
+    changes = history("term", album_id)
+    assert {c.actor for c in changes} == {"import"}
+    [edit] = {c.edit for c in changes}
+    assert sorted((c.field, str(c.old), str(c.new)) for c in changes) == [
+        ("description", "None", "A Album."),
+        ("description_certified", "False", "True"),
+        ("name", "None", "Album"),
+        ("name_certified", "False", "True"),
+        ("synonyms", "[]", "['Record', 'LP']"),
+    ]
+    # The Term's attributes are logged in its edit, each from no name
+    assert one(
+        lay,
+        "SELECT count(DISTINCT entity_id) FROM ops.change_log "
+        f"WHERE entity = 'column_attribute' AND field = 'name' AND old = 'null' AND edit = {edit}",
+    ) == str(attributes_of(lay, "Album"))
+    # A creation isn't undone, so the Term editor offers no Undo for it
+    with pytest.raises(Creation):
+        undo(edit)
+    assert ontology.term(album_id).undoable is None
+
+    # Importing it again creates nothing, so it logs nothing
+    logged = one(lay, "SELECT count(*) FROM ops.change_log")
+    service.import_model(text, replace=True)
+    assert one(lay, "SELECT count(*) FROM ops.change_log") == logged
 
 
 def test_the_re_embed_after_an_import_embeds_both_layers(curated: Curated) -> None:

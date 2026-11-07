@@ -8,7 +8,8 @@
 # sqlglot), and its statement is written with `catalog.query_history.write_statement`, where
 # upstream went through every connector, `server/sql_utils.py` and `add_query`. The embed buffer
 # collects the names of the databases the import wrote, which are re-embedded as a tracked job
-# once it commits, in place of the texts upstream embedded itself.
+# once it commits, in place of the texts upstream embedded itself. The Terms and attributes it
+# creates are logged in ops.change_log as actor `import` (ontological/curate/edits.py).
 
 """Auto Ontology model YAML export and import.
 
@@ -48,6 +49,7 @@ from auto_ontology.semantic.constants import (
     SQL_ATTR_SOURCE_TABLE,
 )
 from auto_ontology.server.sql_errors import SqlParseError
+from ontological.curate.edits import CREATED, Row, log_write
 from ontological.interchange.dialects import parse_dialects
 from ontological.interchange.embed import ImportEmbedBuffer
 from ontological.interchange.schemas import (
@@ -1040,7 +1042,9 @@ def apply_import_model(
 
     An entity the store already holds is adopted as it is, as upstream's are:
     the document's names, descriptions, synonyms and certification are written
-    only onto the rows it creates.
+    only onto the rows it creates. Each Term and attribute it creates is logged
+    in ``ops.change_log`` as actor ``import``, an edit per Term, in the same
+    transaction.
     """
     id_map: dict[str, str] = {}
     column_meta: dict[str, _ColumnCatalogMeta] = {}
@@ -1056,6 +1060,8 @@ def apply_import_model(
     }
     skipped: dict[str, int] = {key: 0 for key in created}
     schema_cache: dict[str | None, tuple[list[str], Any]] = {}
+    new_terms: list[str] = []
+    new_attributes: dict[str, list[str]] = {}
 
     with write_transaction():
         live_db_ids = _import_catalog(document, id_map, created, skipped, column_meta)
@@ -1063,8 +1069,11 @@ def apply_import_model(
             _delete_scoped_semantics_not_in_payload(document, live_db_ids)
         _import_foreign_keys(document, id_map)
         _import_joins(document, id_map)
-        _import_terms(document, id_map, created, skipped)
-        _import_column_attributes(document, id_map, created, skipped, column_meta)
+        _import_terms(document, id_map, created, skipped, new_terms)
+        _import_column_attributes(
+            document, id_map, created, skipped, column_meta, new_attributes
+        )
+        _log_created(new_terms, new_attributes)
         _import_semantic_fks(document, id_map)
         _import_sql_attributes(document, id_map, created, skipped, schema_cache)
         _import_custom_analyses(document, id_map, created, skipped, schema_cache)
@@ -1365,6 +1374,7 @@ def _import_terms(
     id_map: dict[str, str],
     created: dict[str, int],
     skipped: dict[str, int],
+    new_terms: list[str],
 ) -> None:
     terms = document.semantic_layer.terms
     term_results = _resolve_entities_batch(
@@ -1390,6 +1400,8 @@ def _import_terms(
         live_term_id, was_created = term_results[term.id]
         id_map[term.id] = live_term_id
         (created if was_created else skipped)["terms"] += 1
+        if was_created:
+            new_terms.append(live_term_id)
         # The payload is authoritative about which tables represent a term --
         # but only for the tables it carries. Scoped to those, so a term also
         # represented in a database outside this export keeps that link: the
@@ -1427,6 +1439,7 @@ def _import_column_attributes(
     created: dict[str, int],
     skipped: dict[str, int],
     column_meta: dict[str, _ColumnCatalogMeta],
+    new_attributes: dict[str, list[str]],
 ) -> None:
     attr_items: list[tuple[str, dict[str, Any]]] = []
     context: dict[str, dict[str, Any]] = {}
@@ -1468,6 +1481,8 @@ def _import_column_attributes(
         attr = ctx["attr"]
         id_map[attr_id] = live_attr_id
         (created if was_created else skipped)["column_attributes"] += 1
+        if was_created:
+            new_attributes.setdefault(ctx["live_term_id"], []).append(live_attr_id)
 
         has_attribute_rows.append(
             {
@@ -1483,6 +1498,22 @@ def _import_column_attributes(
 
     _link(s.column__has_attribute, has_attribute_rows)
     _link(s.column_attribute__term, property_of_rows)
+
+
+def _log_created(new_terms: list[str], new_attributes: dict[str, list[str]]) -> None:
+    """Log each Term and attribute the import created, field by field from nothing, as
+    actor ``import``: an edit per Term, with its new attributes, or its new attributes
+    alone where the Term was adopted."""
+    created_terms = set(new_terms)
+    for term_id in dict.fromkeys([*new_terms, *new_attributes]):
+        attribute_ids = new_attributes.get(term_id, [])
+        before: dict[Row, Any] = {
+            ("column_attribute", attribute_id): CREATED["column_attribute"]
+            for attribute_id in attribute_ids
+        }
+        if term_id in created_terms:
+            before["term", term_id] = CREATED["term"]
+        log_write(term_id, attribute_ids, before, actor="import")
 
 
 def _import_semantic_fks(

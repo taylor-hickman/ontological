@@ -68,7 +68,7 @@ def steps(*, critic: bool) -> list[Step]:
 
 class FakeAnswers:
     def __init__(self) -> None:
-        self.asked: list[tuple[str, str, bool]] = []
+        self.asked: list[tuple[str, str | None, bool]] = []
         self.checked: list[tuple[str, str | None]] = []
 
     async def check(self, question: str, database: str | None = None) -> Answerability:
@@ -101,8 +101,9 @@ class FakeAnswers:
             missing=["release year"] if known else ["artist", "release year"],
         )
 
-    async def ask(self, question: str, database: str, *, critic: bool = True) -> Asked:
+    async def ask(self, question: str, database: str | None, *, critic: bool = True) -> Asked:
         self.asked.append((question, database, critic))
+        database = database or "chinook"  # the one database, which covers every question
         if database != "chinook":
             raise NoSource(database)
         return Asked(

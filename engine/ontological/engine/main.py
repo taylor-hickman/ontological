@@ -1,13 +1,19 @@
 """The engine process (ARCHITECTURE.md §4.3, §4.4).
 
     python -m ontological.engine [--app-data DIR] [--pg-bin DIR] [--model-dir DIR]
-                                 [--claude-cli PATH] [--routes FILE] [--headless]
+                                 [--duckdb-extensions DIR] [--claude-cli PATH]
+                                 [--routes FILE] [--headless]
                                  [--idle-timeout S] [--lease-renew S]
+
+The packaged app passes the three directories it bundles (§10): `--pg-bin`, `--model-dir` and
+`--duckdb-extensions`.
 
 Under engine.lock, it looks for a live engine through engine.json. If there is one, it prints
 that engine and exits 0: the caller attaches to it. Otherwise it starts or adopts the store's
-Postgres, applies pending migrations (§5.3), loads the embedder from `--model-dir` and calibrates
-its bulk batch cap (§7.1; with no model directory it runs without one), serves the API on
+Postgres, applies pending migrations (§5.3), checks the model's files against their pinned
+SHA-256s, loads the embedder from `--model-dir` and calibrates its bulk batch cap (§7.1; with no
+model directory it runs without one), checks that the source executors' DuckDB extensions load
+from `--duckdb-extensions` (§10; without it, DuckDB's default directory), serves the API on
 127.0.0.1 at a random port with a new bearer token, writes engine.json and releases the lock. It
 prints one JSON line when it serves or attaches, `{"pid", "port", "version", "started"}`, or
 `{"error"}` and exits 1. Once it serves, it re-ingests the metadata of every source last ingested
@@ -56,6 +62,7 @@ from ontological.answer.service import Answers, StoreAnswers
 from ontological.api.app import create_app
 from ontological.catalog.sources import Sources, StoreSources
 from ontological.curate.service import OntologyService, StoreOntology
+from ontological.embed import model
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
@@ -70,6 +77,7 @@ from ontological.llm.gateway import ClaudeGateway
 from ontological.llm.install import Claude, ClaudeCheck
 from ontological.llm.routes import Route, load_routes
 from ontological.settings import SettingsService, StoreSettings
+from ontological.sources import extensions
 from ontological.store import dal, pg
 
 log = logging.getLogger("ontological.engine")
@@ -96,6 +104,7 @@ class Config:
     app_data: Path  # <appData>/Ontological
     pg_bin: Path | None
     model_dir: Path | None = None  # the embedding model's files (ontological.embed.model)
+    duckdb_extensions: Path | None = None  # DuckDB's extension_directory (sources.extensions)
     claude_cli: Path | None = None  # the user's `claude`, when it isn't the one on PATH
     routes: dict[str, Route] | None = None  # laid over the default routes (`--routes`)
     idle_timeout_s: float = IDLE_TIMEOUT_S
@@ -130,6 +139,7 @@ class PgStore:
         self.claude_cli = claude_cli
         self.routes = routes
         self._shared_gateway: ClaudeGateway | None = None
+        self._answers: StoreAnswers | None = None
 
     def start(self) -> None:
         """Start or adopt the server, then bring both Alembic chains to their heads (a first
@@ -143,6 +153,8 @@ class PgStore:
         dal.connect(self.layout)
 
     def stop(self) -> None:
+        if self._answers is not None:
+            self._answers.close()
         if self._calls is not None:
             self._calls.close()
         dal.close()
@@ -180,8 +192,10 @@ class PgStore:
         return StoreOntology(embedder)
 
     def answers(self, embedder: LocalEmbedder | None) -> Answers:
-        """Questions, answered through the same gateway."""
-        return StoreAnswers(gateway=self._gateway(), embedder=embedder)
+        """Questions, answered through the same gateway, with one hybrid search for the engine's
+        lifetime."""
+        self._answers = StoreAnswers(gateway=self._gateway(), embedder=embedder)
+        return self._answers
 
     def interchange(self, jobs: JobsService) -> InterchangeService:
         """Model import and export; an import re-embeds what it wrote as `jobs`' re-embeds."""
@@ -203,14 +217,28 @@ def pg_store(config: Config) -> Store:
 
 
 def start_embedder(config: Config) -> LocalEmbedder | None:
-    """Load the embedder and set its bulk batch cap from one timed batch (§7.1)."""
+    """Check the model's files, load the embedder and set its bulk batch cap from one timed
+    batch (§7.1). The files are never fetched here: they come with the app."""
     if config.model_dir is None:
         log.warning("embedder: no model directory, so no embeddings")
         return None
+    model.verify(config.model_dir)
     embedder = LocalEmbedder(config.model_dir)
     cap = embedder.calibrate()
     log.info("embedder: %s, bulk batches up to %d padded tokens", embedder.model, cap)
     return embedder
+
+
+def use_extensions(config: Config) -> None:
+    """Point every source executor at the DuckDB extensions, and check they load from there
+    with autoinstall off (§10). The executors' children inherit the directory through the
+    environment."""
+    if config.duckdb_extensions is not None:
+        os.environ[extensions.ENV] = str(config.duckdb_extensions)
+        extensions.verify(config.duckdb_extensions)
+        log.info("sources: DuckDB extensions from %s", config.duckdb_extensions)
+    else:
+        log.warning("sources: no --duckdb-extensions, so DuckDB's default directory")
 
 
 def default_app_data() -> Path:
@@ -227,6 +255,9 @@ def parse_args(argv: Sequence[str]) -> tuple[Config, bool]:
     ap.add_argument("--app-data", type=Path, default=None, help="<appData>/Ontological")
     ap.add_argument("--pg-bin", type=Path, default=os.environ.get("ONTOLOGICAL_PG_BIN"))
     ap.add_argument("--model-dir", type=Path, default=os.environ.get("ONTOLOGICAL_MODEL_DIR"))
+    ap.add_argument(
+        "--duckdb-extensions", type=Path, default=os.environ.get(extensions.ENV), metavar="DIR"
+    )
     ap.add_argument("--claude-cli", type=Path, default=os.environ.get("ONTOLOGICAL_CLAUDE_CLI"))
     ap.add_argument("--routes", type=Path, default=None, help="routes over the defaults (JSON)")
     ap.add_argument("--headless", action="store_true", help="start detached, print, exit")
@@ -241,6 +272,7 @@ def parse_args(argv: Sequence[str]) -> tuple[Config, bool]:
         app_data=(a.app_data or default_app_data()).absolute(),
         pg_bin=Path(a.pg_bin) if a.pg_bin else None,
         model_dir=Path(a.model_dir) if a.model_dir else None,
+        duckdb_extensions=Path(a.duckdb_extensions).absolute() if a.duckdb_extensions else None,
         claude_cli=Path(a.claude_cli) if a.claude_cli else None,
         routes=routes,
         idle_timeout_s=a.idle_timeout,
@@ -341,6 +373,7 @@ def serve(config: Config, make_store: Callable[[Config], Store]) -> int:
             announce(live, started=False)
             return 0
         sock = discovery.bind_localhost()
+        use_extensions(config)
         new_store = make_store(config)
         new_store.start()
         store = new_store
