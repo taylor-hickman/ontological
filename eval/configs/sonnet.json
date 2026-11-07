@@ -1,0 +1,9 @@
+{
+  "about": "Day-to-day development: the default routes with the agent on Sonnet (BUILD_PLAN.md, Usage).",
+  "critic": true,
+  "routes": {
+    "answer_agent": {"model": "claude-sonnet-5-5", "effort": "medium"},
+    "answer_review": {"model": "claude-sonnet-5-5", "effort": "medium"},
+    "answerable_extract": {"model": "claude-haiku-5-5", "effort": "low"}
+  }
+}

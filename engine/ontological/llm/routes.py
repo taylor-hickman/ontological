@@ -66,18 +66,23 @@ def fallback_for(model: str) -> str | None:
 
 
 def load_routes(path: Path) -> dict[str, Route]:
-    """`{"<task>": {"model": ..., "effort": ...}, ...}` from a JSON file. Raises ValueError on a
-    file that isn't that shape, a bad model or effort, or a task that doesn't exist."""
+    """`parse_routes` on a JSON file."""
     try:
         raw: Any = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as e:
         raise ValueError(f"can't read routes from {path}: {e}") from e
+    return parse_routes(raw, where=str(path))
+
+
+def parse_routes(raw: Any, *, where: str = "routes") -> dict[str, Route]:
+    """`{"<task>": {"model": ..., "effort": ...}, ...}` as routes. Raises ValueError on anything
+    else, a bad model or effort, or a task that doesn't exist; `where` names the source."""
     if not isinstance(raw, dict):
-        raise ValueError(f"{path}: routes must be an object of task -> {{model, effort}}")
+        raise ValueError(f"{where}: routes must be an object of task -> {{model, effort}}")
     routes: dict[str, Route] = {}
     for task, route in cast(dict[str, Any], raw).items():
         if not isinstance(route, dict) or set(cast(dict[str, Any], route)) != {"model", "effort"}:
-            raise ValueError(f"{path}: the route for {task} must be {{model, effort}}")
+            raise ValueError(f"{where}: the route for {task} must be {{model, effort}}")
         r = cast(dict[str, Any], route)
         routes[task] = Route(str(r["model"]), str(r["effort"]))
     merge_routes(routes)  # refuses tasks that don't exist
