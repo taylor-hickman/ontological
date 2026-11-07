@@ -7,6 +7,8 @@ import { Rail } from './components/Rail'
 import { ScreenBody } from './components/ScreenBody'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
+import { JobsRail, useJobsScreen } from './jobs/JobsScreen'
+import { useJobs } from './jobs/useJobs'
 import { FRAMES } from './screens'
 import { TablePanel } from './screens/Catalog'
 import { Onboarding, type Step } from './screens/onboarding/Onboarding'
@@ -26,6 +28,8 @@ export function App(): React.JSX.Element {
   const searchRef = useRef<HTMLInputElement>(null)
   const narrowRef = useRef(narrow)
   narrowRef.current = narrow
+  const jobs = useJobs()
+  const jobsScreen = useJobsScreen(jobs.jobs, jobs.loaded, screen === 'jobs', jobs.refresh)
   const [sourcesKey, setSourcesKey] = useState(0)
   const sources = useEngineGet<Source[]>('/sources', sourcesKey)
   // Onboarding opens by itself while there are no sources, until the user leaves it; File → Add
@@ -98,7 +102,7 @@ export function App(): React.JSX.Element {
             }}
           />
         </div>
-        <StatusBar />
+        <StatusBar jobs={jobs.jobs} onOpenJobs={() => navigate('jobs')} />
       </div>
     )
   }
@@ -112,7 +116,13 @@ export function App(): React.JSX.Element {
   return (
     <div className="flex h-full flex-col" data-screen={screen}>
       <div className="flex min-h-0 flex-1">
-        <Sidebar screen={screen} sources={sources.data} onNavigate={navigate} onAddSource={() => setOnboarding('source')} />
+        <Sidebar
+          screen={screen}
+          sources={sources.data}
+          jobs={jobs.jobs}
+          onNavigate={navigate}
+          onAddSource={() => setOnboarding('source')}
+        />
         <div className="flex min-w-0 flex-1 flex-col">
           <Header title={frame.title} screen={screen} searchRef={searchRef} onAddSource={() => setOnboarding('source')} />
           <div className="relative flex min-h-0 flex-1 flex-wrap overflow-auto">
@@ -120,6 +130,7 @@ export function App(): React.JSX.Element {
               screen={screen}
               frame={frame}
               theme={theme}
+              jobs={jobsScreen}
               onThemeChange={(next) => {
                 changeTheme(next)
                 void api.setTheme(next)
@@ -134,13 +145,17 @@ export function App(): React.JSX.Element {
             />
             {showRail && frame.rail !== null && (
               <Rail label={frame.rail} sheet={narrow} onClose={() => setSheetOpen(false)}>
-                {screen === 'catalog' ? <TablePanel tableId={catalogTable} /> : undefined}
+                {screen === 'catalog' ? (
+                  <TablePanel tableId={catalogTable} />
+                ) : screen === 'jobs' ? (
+                  <JobsRail state={jobsScreen} />
+                ) : undefined}
               </Rail>
             )}
           </div>
         </div>
       </div>
-      <StatusBar />
+      <StatusBar jobs={jobs.jobs} onOpenJobs={() => navigate('jobs')} />
     </div>
   )
 }

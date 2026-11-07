@@ -1,44 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { EngineState } from '@shared/engine'
+import { engineFetch } from '../engineApi'
 import { useEngine } from '../useEngine'
 
-type Running = Pick<Extract<EngineState, { status: 'running' }>, 'engineUrl' | 'token'>
-
-/** An engine answer that wasn't 2xx: `detail` is the engine's sentence for it. */
-export class EngineError extends Error {
-  constructor(
-    readonly status: number,
-    readonly detail: string
-  ) {
-    super(detail)
-  }
-}
-
 export type EngineRequest = <T>(path: string, init?: { method?: string; body?: unknown }) => Promise<T>
-
-function requester(engine: Running): EngineRequest {
-  return async <T,>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> => {
-    const res = await fetch(`${engine.engineUrl}${path}`, {
-      method: init.method ?? 'GET',
-      headers: {
-        Authorization: `Bearer ${engine.token}`,
-        ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' })
-      },
-      body: init.body === undefined ? undefined : JSON.stringify(init.body)
-    })
-    if (!res.ok) {
-      let detail = `The engine answered ${res.status}.`
-      try {
-        const body = (await res.json()) as { detail?: unknown }
-        if (typeof body.detail === 'string') detail = body.detail
-      } catch {
-        // not JSON: keep the status sentence
-      }
-      throw new EngineError(res.status, detail)
-    }
-    return (res.status === 204 ? undefined : await res.json()) as T
-  }
-}
 
 /** A request function while the engine runs, else null. A new one only when the engine moves. */
 export function useEngineRequest(): EngineRequest | null {
@@ -46,7 +10,11 @@ export function useEngineRequest(): EngineRequest | null {
   const url = engine.status === 'running' ? engine.engineUrl : null
   const token = engine.status === 'running' ? engine.token : null
   return useMemo(
-    () => (url !== null && token !== null ? requester({ engineUrl: url, token }) : null),
+    () =>
+      url !== null && token !== null
+        ? <T,>(path: string, init?: { method?: string; body?: unknown }) =>
+            engineFetch<T>({ engineUrl: url, token }, path, init)
+        : null,
     [url, token]
   )
 }

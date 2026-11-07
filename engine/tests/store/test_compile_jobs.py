@@ -13,13 +13,14 @@ from typing import Any
 
 import pytest
 from fakes import T0, FakeClock, NoAnswer, ScriptedGateway
-from test_compile import ORDER, PACK_ORDER, SMALL, claude, rows, table_of
+from test_compile import ORDER, PACK_ORDER, SMALL, claude, rows, table_of, tables_of
 
 from ontological.catalog.ingest import ingest
 from ontological.compile.split import RESUME_MARGIN_S, RETRY_WITHOUT_RESET_S, compile_database
 from ontological.engine.lifetime import Lifetime
 from ontological.jobs import store as jobs
 from ontological.jobs.active import ActiveJobs
+from ontological.llm.calls import CallScope, current_scope
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.store import pg
 
@@ -166,6 +167,68 @@ def test_a_logged_out_claude_stops_the_job_and_the_next_run_resumes_it(
     assert jobs.job(done.job_id).state == "done"
     counts = "SELECT count(*) FROM term UNION ALL SELECT count(*) FROM column__semantic_fk"
     assert rows(store, counts) == ["10", "10"]
+
+
+def test_a_person_pausing_stops_the_job_before_its_next_pack(
+    store: pg.Layout, executor: SourceExecutor
+) -> None:
+    hold = asyncio.Event()
+
+    def pause_in_the_small_pack(task: str, user: str) -> Any:
+        if task == "table_terms" and "Artist" in tables_of(user):
+            hold.set()
+        return claude(task, user)
+
+    gateway = ScriptedGateway(pause_in_the_small_pack)
+    held = asyncio.run(compile_database("chinook", executor, gateway, hold=hold))
+
+    # The small tables' pack was under way, so it finished; no later pack started
+    assert held.held and not held.complete and held.stopped is None
+    assert [t.name for t in held.tables] == SMALL
+    asked = {t for c in gateway.calls for t in tables_of(c.user)}
+    assert asked <= set(SMALL)
+    job = jobs.job(held.job_id)
+    assert (job.state, job.paused_until, job.error) == ("held", None, None)
+
+    done = asyncio.run(compile_database("chinook", executor, ScriptedGateway(claude)))
+    assert done.job_id == held.job_id and done.complete
+    assert [t.name for t in done.tables] == PACK_ORDER[len(SMALL) :]
+    assert jobs.job(done.job_id).state == "done"
+
+
+def test_a_person_pausing_during_a_usage_pause_holds_the_job_at_once(
+    executor: SourceExecutor,
+) -> None:
+    hold = asyncio.Event()
+    clock = FakeClock(on_sleep=lambda _: hold.set())  # "Don't resume", while it waits
+    gateway = ScriptedGateway(once_at_employee(NoAnswer("limited", "limited", RESETS_AT)))
+
+    held = asyncio.run(compile_database("chinook", executor, gateway, clock=clock, hold=hold))
+
+    assert held.held
+    assert {t.name for t in held.tables} == BEFORE_EMPLOYEE
+    job = jobs.job(held.job_id)
+    assert (job.state, job.paused_until) == ("held", None)
+    # The last call was Employee's that hit the limit: nothing was asked after it
+    assert (gateway.calls[-1].task, table_of(gateway.calls[-1].user)) == ("table_terms", "Employee")
+
+
+def test_each_packs_calls_are_made_under_its_job_and_pack(executor: SourceExecutor) -> None:
+    scopes: list[tuple[CallScope, list[str]]] = []
+
+    def note(task: str, user: str) -> Any:
+        scopes.append((current_scope(), tables_of(user)))  # a description prompt names none
+        return claude(task, user)
+
+    got = asyncio.run(compile_database("chinook", executor, ScriptedGateway(note)))
+
+    assert scopes and all(scope.job_id == got.job_id for scope, _ in scopes)
+    for scope, asked in scopes:
+        assert scope.pack is not None and scope.table_name is not None
+        assert all(PACKS[t] == scope.pack for t in asked), (scope, asked)
+        assert set(asked) <= set(scope.table_name.split(", "))
+    assert {scope.pack for scope, _ in scopes} == set(PACKS.values())
+    assert current_scope() == CallScope()
 
 
 class Crash(Exception):

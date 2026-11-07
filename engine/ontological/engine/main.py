@@ -11,7 +11,8 @@ its bulk batch cap (§7.1; with no model directory it runs without one), serves 
 127.0.0.1 at a random port with a new bearer token, writes engine.json and releases the lock. It
 prints one JSON line when it serves or attaches, `{"pid", "port", "version", "started"}`, or
 `{"error"}` and exits 1. Once it serves, it re-ingests the metadata of every source last ingested
-over a day ago, in the background (§9.1, `jobs/staleness.py`).
+over a day ago, in the background (§9.1, `jobs/staleness.py`), and resumes the compiles an earlier
+engine left running or paused (`jobs/service.py`), through its one Claude gateway.
 
 It exits 0 after `--idle-timeout` seconds (600) with no live lease, no request in flight and no
 running job, or on SIGTERM or SIGINT. Either way it removes engine.json, writes the quit dump
@@ -52,6 +53,7 @@ from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
 from ontological.jobs.active import ActiveJobs
+from ontological.jobs.service import Jobs, JobsService
 from ontological.jobs.staleness import StalenessCheck
 from ontological.llm.calls import PgCallLog
 from ontological.llm.env import sanitize_environ
@@ -94,13 +96,17 @@ class Store(Protocol):
     def staleness_check(self) -> StalenessCheck: ...
     def sources(self, jobs: ActiveJobs, embedder: LocalEmbedder | None) -> Sources: ...
     def claude(self, config: Config) -> Claude: ...
+    def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService: ...
 
 
 class PgStore:
     """The bundled Postgres (§5.3)."""
 
-    def __init__(self, layout: pg.Layout) -> None:
+    def __init__(self, layout: pg.Layout, *, claude_cli: Path | None = None) -> None:
         self.layout = layout
+        self._calls: PgCallLog | None = None
+        self.claude_cli = claude_cli
+        self._shared_gateway: ClaudeGateway | None = None
 
     def start(self) -> None:
         """Start or adopt the server, then bring both Alembic chains to their heads (a first
@@ -114,6 +120,8 @@ class PgStore:
         dal.connect(self.layout)
 
     def stop(self) -> None:
+        if self._calls is not None:
+            self._calls.close()
         dal.close()
         dump = pg.stop(self.layout)
         log.info("store stopped; quit dump %s", dump.name if dump else "not needed")
@@ -121,24 +129,33 @@ class PgStore:
     def staleness_check(self) -> StalenessCheck:
         return StalenessCheck()
 
+    def _gateway(self) -> ClaudeGateway:
+        """The one gateway every Claude call goes through (§6): compile jobs and the onboarding
+        test call, so both see the same status."""
+        if self._shared_gateway is None:
+            self._calls = PgCallLog(pg.url(self.layout))
+            self._shared_gateway = ClaudeGateway(
+                calls=self._calls,
+                sandbox=self.layout.app_data / "claude-sandbox",
+                cli_path=self.claude_cli,
+            )
+        return self._shared_gateway
+
     def sources(self, jobs: ActiveJobs, embedder: LocalEmbedder | None) -> Sources:
         return StoreSources(jobs=jobs, embedder=embedder)
 
     def claude(self, config: Config) -> Claude:
-        def gateway() -> ClaudeGateway:
-            return ClaudeGateway(
-                calls=PgCallLog(pg.url(self.layout)),
-                sandbox=config.app_data / "claude-sandbox",
-                cli_path=config.claude_cli,
-            )
+        return ClaudeCheck(self._gateway, cli_path=config.claude_cli)
 
-        return ClaudeCheck(gateway, cli_path=config.claude_cli)
+    def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService:
+        """Compile jobs, with the gateway every Claude call goes through (§6)."""
+        return Jobs(gateway=self._gateway(), active=active, embedder=embedder)
 
 
 def pg_store(config: Config) -> Store:
     if config.pg_bin is None:
         raise RuntimeError("no Postgres binaries: pass --pg-bin or set ONTOLOGICAL_PG_BIN")
-    return PgStore(pg.Layout(config.app_data, config.pg_bin))
+    return PgStore(pg.Layout(config.app_data, config.pg_bin), claude_cli=config.claude_cli)
 
 
 def start_embedder(config: Config) -> LocalEmbedder | None:
@@ -309,6 +326,7 @@ async def _serve(
 ) -> None:
     staleness = store.staleness_check()
     jobs = ActiveJobs()
+    service = store.jobs(jobs, embedder)
     lifetime = Lifetime(
         idle_timeout_s=config.idle_timeout_s,
         renew_every_s=config.renew_every_s,
@@ -329,6 +347,7 @@ async def _serve(
         jobs=jobs,
         claude=store.claude(config),
         sources=store.sources(jobs, embedder),
+        jobs_service=service,
     )
     server = _Server(
         uvicorn.Config(
@@ -352,6 +371,7 @@ async def _serve(
     log.info("serving on 127.0.0.1:%d", info.port)
     staleness.start()
     try:
+        await service.resume_unfinished()
         tick = min(1.0, config.idle_timeout_s / 4, config.renew_every_s)
         while not task.done():
             if lifetime.should_exit():
@@ -370,7 +390,8 @@ async def _serve(
             await asyncio.wait({task}, timeout=tick)
         await task
     finally:
-        # Before the store stops: a refresh writes to it.
+        # Before the store stops: a compile and a refresh write to it.
+        await service.stop()
         staleness.cancel()
         await asyncio.to_thread(staleness.join)
 
