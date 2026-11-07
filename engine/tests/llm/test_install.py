@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from ontological.llm.gateway import install_locations, resolve_cli
 from ontological.llm.install import ClaudeInstall, detect, ignored_variables
 
 
@@ -91,3 +92,34 @@ def test_set_auth_variables_are_named_as_ignored(tmp_path: Path) -> None:
         "ANTHROPIC_API_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN",
     ]
+
+
+def test_without_claude_on_path_the_native_install_folder_is_tried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An app opened from Finder: launchd's PATH, with no ~/.local/bin on it.
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    home = tmp_path / "home"
+    native = fake_claude_at(home / ".local" / "bin")
+    assert resolve_cli(None, home=home) == native
+
+
+def test_claude_on_path_wins_over_the_install_folders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    on_path = fake_claude_at(tmp_path / "bin")
+    fake_claude_at(tmp_path / "home" / ".local" / "bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    assert resolve_cli(None, home=tmp_path / "home") == on_path
+
+
+def test_the_install_folders_are_where_the_installers_put_claude(tmp_path: Path) -> None:
+    assert install_locations(tmp_path)[:2] == [
+        tmp_path / ".local" / "bin" / "claude",
+        tmp_path / ".claude" / "local" / "claude",
+    ]
+
+
+def fake_claude_at(folder: Path) -> Path:
+    folder.mkdir(parents=True)
+    return fake_claude(folder)

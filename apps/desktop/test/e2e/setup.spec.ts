@@ -6,11 +6,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
-import { clickMenuItem, freshUserData, launch } from './app'
+import { clickMenuItem, fakeShell, freshUserData, launch } from './app'
 
 /** A `claude` that answers --version and `auth status --json`. */
-function fakeClaude({ version = '2.1.319', loggedIn = true } = {}): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ontological-claude-'))
+function fakeClaude({ version = '2.1.319', loggedIn = true, dir = mkdtempSync(join(tmpdir(), 'ontological-claude-')) } = {}): string {
   const path = join(dir, 'claude')
   writeFileSync(
     path,
@@ -202,6 +201,29 @@ test('leaving setup is remembered, so a reload with no sources opens the shell',
     // The sidebar's source switcher adds the first source.
     await page.getByTestId('source-switcher').click()
     await expect(page.getByTestId('onboarding')).toHaveAttribute('data-step', 'source')
+  } finally {
+    await app.close()
+  }
+})
+
+test('opened from Finder: claude and an API key are found through the login shell', async () => {
+  // launchd's PATH and a HOME with nothing in it: only the login shell knows where claude is.
+  const home = mkdtempSync(join(tmpdir(), 'ontological-home-'))
+  const bin = mkdtempSync(join(tmpdir(), 'ontological-bin-'))
+  fakeClaude({ dir: bin })
+  const { app, page } = await launch(freshUserData({ onboarding: true }), undefined, {
+    ...NO_KEYS,
+    ONTOLOGICAL_CLAUDE_CLI: undefined,
+    HOME: home,
+    PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+    SHELL: fakeShell({ PATH: `${bin}:$PATH`, ANTHROPIC_API_KEY: 'sk-from-zshrc' })
+  })
+  try {
+    await onboarding(page)
+    const checks = page.getByTestId('claude-checks')
+    await expect(checks).toContainText('Installed')
+    await expect(checks).toContainText('v2.1.319')
+    await expect(page.getByTestId('ignored-variable')).toContainText('ANTHROPIC_API_KEY is set in your shell')
   } finally {
     await app.close()
   }

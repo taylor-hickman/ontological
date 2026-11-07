@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
@@ -34,6 +34,18 @@ export function freshUserData({ onboarding = false }: { onboarding?: boolean } =
   return dir
 }
 
+/**
+ * A stand-in for the login shell main reads its environment from (src/main/shell-env.ts), so the
+ * tests never pick up the developer's own rc files. `exports` are what its "rc" exports.
+ */
+export function fakeShell(exports: Record<string, string> = {}): string {
+  const path = join(mkdtempSync(join(tmpdir(), 'ontological-shell-')), 'shell')
+  const lines = Object.entries(exports).map(([k, v]) => `export ${k}="${v}"`)
+  writeFileSync(path, ['#!/bin/sh', ...lines, 'exec /bin/sh -c "$2"', ''].join('\n'))
+  chmodSync(path, 0o755)
+  return path
+}
+
 /** Launches the built app against its own userData folder, so tests don't share state or engines. */
 export async function launch(
   userData: string,
@@ -47,6 +59,7 @@ export async function launch(
       ...process.env,
       ONTOLOGICAL_USER_DATA: userData,
       ONTOLOGICAL_ENGINE_CMD: JSON.stringify([PYTHON, STUB, ...engineArgs]),
+      SHELL: fakeShell(),
       ...env
     }).filter((entry): entry is [string, string] => entry[1] !== undefined)
   )

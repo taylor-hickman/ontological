@@ -133,14 +133,32 @@ class _Verdict:
     output: Any = None
 
 
-def resolve_cli(override: str | Path | None) -> Path | None:
-    """The user's `claude`: the settings override when there is one, else a PATH lookup. Never
-    the SDK's bundled binary (§3 rule 1)."""
+def install_locations(home: Path | None = None) -> list[Path]:
+    """Where Claude Code's installers put `claude`, for an engine whose PATH lacks them: an app
+    opened from Finder has launchd's PATH unless the shell's could be read."""
+    home = home or Path.home()
+    return [
+        home / ".local" / "bin" / "claude",  # the native installer
+        home / ".claude" / "local" / "claude",  # a local npm install
+        Path("/opt/homebrew/bin/claude"),
+        Path("/usr/local/bin/claude"),
+    ]
+
+
+def _executable(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
+
+
+def resolve_cli(override: str | Path | None, *, home: Path | None = None) -> Path | None:
+    """The user's `claude`: the settings override when there is one, else a PATH lookup, else
+    the usual install folders. Never the SDK's bundled binary (§3 rule 1)."""
     if override is not None:
         path = Path(override)
-        return path if path.is_file() and os.access(path, os.X_OK) else None
+        return path if _executable(path) else None
     found = shutil.which("claude")
-    return Path(found) if found else None
+    if found:
+        return Path(found)
+    return next((p for p in install_locations(home) if _executable(p)), None)
 
 
 class ClaudeGateway:
