@@ -244,6 +244,7 @@ def test_stopping_the_stream_closes_the_questions_source_executors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     a_pack(monkeypatch)
+
     def ask(*args: Any, runners: Any, **kwargs: Any) -> StuckSession:
         return StuckSession(runners)
 
