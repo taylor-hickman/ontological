@@ -69,9 +69,9 @@ _scope: ContextVar[CallScope | None] = ContextVar("call_scope", default=None)
 
 
 @contextmanager
-def call_scope(job_id: int, pack: int, table_name: str) -> Generator[None]:
+def call_scope(job_id: int, pack: int | None, table_name: str) -> Generator[None]:
     """Calls made inside, in this task or a thread it starts, are logged under this job and
-    pack."""
+    pack. A compile's post-stages, which belong to no pack, pass None and name the stage."""
     token = _scope.set(CallScope(job_id, pack, table_name))
     try:
         yield

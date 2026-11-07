@@ -249,3 +249,50 @@ class PackedSynonyms(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tables: list[TableSynonymsEntry] = Field(..., description="One entry per table in the request.")
+
+
+# --- sql_attribute_judge -----------------------------------------------------------------------
+# Upstream's `_SuggestedAttr` and `_Suggestions` (semantic/sql_attribute_suggester.py).
+
+
+class SuggestedSqlAttribute(BaseModel):
+    name: str
+    description: str
+    expression: str
+
+
+class SqlAttributeSuggestions(BaseModel):
+    suggestions: list[SuggestedSqlAttribute]
+
+
+class TermSuggestionsEntry(SqlAttributeSuggestions):
+    term: str = Field(
+        ...,
+        description="The term this entry answers for, exactly as written after 'Business term:'.",
+    )
+
+
+class PackedSqlAttributeSuggestions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    terms: list[TermSuggestionsEntry] = Field(..., description="One entry per business term.")
+
+
+# --- bridge_sql --------------------------------------------------------------------------------
+# Upstream's `_BridgeSqlAttributeProposal` (semantic/bridge_tables.py), and the same with the
+# owning Term, which Claude picks where upstream reranked the candidates.
+
+
+class BridgeSqlAttributeProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str
+    expression: str
+
+
+class OwnedBridgeSqlAttributeProposal(BridgeSqlAttributeProposal):
+    owner_term: str = Field(
+        ...,
+        description="The candidate owning term the attribute belongs to, exactly as listed.",
+    )

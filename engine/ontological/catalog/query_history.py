@@ -296,6 +296,21 @@ def _insert_statements(new: list[tuple[str, ParsedQuery, Tally]]) -> None:
     _write_links(s.column__union, [(sql_id, link) for sql_id, q, _ in new for link in q.unions])
 
 
+def write_statement(q: ParsedQuery) -> str:
+    """The id of the statement holding `q`'s text, written with its links when the store has none:
+    upstream's `add_query` for a statement that isn't history, such as a SQL attribute's, so it
+    has no sightings. A history statement with the same text is the one returned, as upstream's
+    upsert by `sql_full_query` matched it. Joins the caller's write transaction."""
+    found = store().query_read(
+        select(s.sql_query.c.id).where(s.sql_query.c.sql_full_query == q.sql_text).limit(1)
+    )
+    if found:
+        return str(found[0]["id"])
+    sql_id = str(uuid.uuid4())
+    _insert_statements([(sql_id, q, Tally())])
+    return sql_id
+
+
 def _write_links(table: Table, links: list[tuple[str, Link]]) -> None:
     """Column pairs with their `refs` (`<statement id>|<condition>`), which accumulate: a pair
     another statement made already keeps its refs and gains these, without repeats."""

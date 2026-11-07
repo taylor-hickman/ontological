@@ -215,13 +215,18 @@ def test_a_person_pausing_during_a_usage_pause_holds_the_job_at_once(
 
 def test_each_packs_calls_are_made_under_its_job_and_pack(executor: SourceExecutor) -> None:
     scopes: list[tuple[CallScope, list[str]]] = []
+    post: list[tuple[str, CallScope]] = []
 
     def note(task: str, user: str) -> Any:
-        scopes.append((current_scope(), tables_of(user)))  # a description prompt names none
+        if task == "bridge_sql":  # a post-stage: under the job, by its stage, in no pack
+            post.append((task, current_scope()))
+        else:
+            scopes.append((current_scope(), tables_of(user)))  # a description prompt names none
         return claude(task, user)
 
     got = asyncio.run(compile_database("chinook", executor, ScriptedGateway(note)))
 
+    assert post == [("bridge_sql", CallScope(got.job_id, None, "bridge tables"))]
     assert scopes and all(scope.job_id == got.job_id for scope, _ in scopes)
     for scope, asked in scopes:
         assert scope.pack is not None and scope.table_name is not None
@@ -257,8 +262,11 @@ def test_a_crash_leaves_the_job_running_and_the_next_run_resumes_it(
 
     assert done.job_id == job.id and done.complete
     assert table_of(resumed.calls[0].user) == "Employee"
-    asked = {table_of(c.user) for c in resumed.calls if c.task != "column_descriptions"}
+    per_table = {"table_keys", "table_terms"}
+    asked = {table_of(c.user) for c in resumed.calls if c.task in per_table}
     assert asked == set(PACK_ORDER[8:])
+    # then the post-stages, which the crash never reached
+    assert resumed.tasks()[-1] == "bridge_sql"
 
 
 def test_a_job_paused_when_the_engine_stopped_waits_out_the_rest_of_the_pause(

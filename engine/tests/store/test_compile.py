@@ -86,9 +86,25 @@ def answer_table(task: str, table: str, user: str) -> dict[str, Any] | None:
     }
 
 
+#: The scripted Claude's join SQL for Chinook's one bridge table.
+PLAYLIST_TRACKS = (
+    "SELECT * FROM main.PlaylistTrack AS pt "
+    "JOIN main.Playlist AS p ON pt.PlaylistId = p.PlaylistId "
+    "JOIN main.Track AS t ON pt.TrackId = t.TrackId"
+)
+
+
 def claude(task: str, user: str) -> dict[str, Any] | NoAnswer | None:
     """What the scripted Claude says to each stage: an entry per table to a packed call, which
     leaves out a table whose own answer would be invalid."""
+    if task == "bridge_sql":
+        assert "Bridge table: main.PlaylistTrack" in user, user
+        return {
+            "name": "Playlist Tracks",
+            "description": "Which tracks each playlist holds.",
+            "expression": PLAYLIST_TRACKS,
+            "owner_term": "Playlist",
+        }
     found = sections(user)
     if len(found) > 1 or (found and task in ("column_descriptions", "table_synonyms")):
         entries = [
@@ -141,6 +157,8 @@ def test_compile_runs_each_stage_once_a_pack_one_call_at_a_time(
             for t in PACK_ORDER[7:]
             for task in ("table_keys", "column_descriptions", "table_terms")
         ],
+        # Chinook has no query history to judge; PlaylistTrack is its one bridge
+        ("bridge_sql", []),
     ]
     assert gateway.peak == 1
     assert [t.name for t in got.tables if t.skipped] == ["PlaylistTrack"]
@@ -213,7 +231,11 @@ def test_terms_and_attributes_are_written_for_every_non_fk_column(
         "SELECT count(*) FROM column__has_attribute h JOIN catalog_column c ON c.id = h.column_id "
         "WHERE c.name = 'Composer'",
     ) == ["0"]
-    assert rows(store, "SELECT name FROM catalog_table WHERE is_junction_table") == ["InvoiceLine"]
+    # InvoiceLine by the keys call; PlaylistTrack, all foreign keys, by the bridge stage
+    assert rows(store, "SELECT name FROM catalog_table WHERE is_junction_table ORDER BY name") == [
+        "InvoiceLine",
+        "PlaylistTrack",
+    ]
 
 
 def test_semantic_fks_come_from_declared_fks_only(

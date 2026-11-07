@@ -5,15 +5,23 @@
 # row texts and metadata are upstream's. Upstream embeds each table's Terms through its NIM
 # client as it commits them, and appends. This syncs a whole database after its compile: it
 # embeds through the local embedder the rows whose text or model changed, or that have no
-# vector, and deletes the vectors of rows that changed or are gone.
+# vector, and deletes the vectors of rows that changed or are gone. Each row's metadata also says
+# whether it is certified, for hybrid search's bonus, and a change to that alone updates the
+# vector's metadata in place. SQL attributes' rows are upstream's from `fetch_sql_attribute_docs`
+# and `embed_docs_into_vdb`, which upstream embedded as each attribute was created.
 
-"""The semantic layer's vectors: one per Term and one per column attribute (ARCHITECTURE.md
-§7.1). Retrieval (`ontological.answer`) searches them.
+"""The semantic layer's vectors: one per Term, column attribute and SQL attribute
+(ARCHITECTURE.md §7.1). Retrieval (`ontological.answer`) searches them.
 
 A row's vector is current when the collection holds one for its label and id with the same
 `content_hash` and `model`. `sync_database` embeds every row that has no current vector and
 deletes every other vector of the database's Terms and attributes, so it can run after any
-compile, finished or stopped, and catches up whatever an earlier run left out.
+compile, finished or stopped, and catches up whatever an earlier run left out. Curation edits
+(`ontological.curate`) run it too, so an edit re-embeds only the texts it changed.
+
+Each row's metadata carries `certified`, which hybrid search's bonus reads (§7.3): a Term's when
+its name and its description are both certified, an attribute's when it is. It isn't in the text,
+so a certification re-embeds nothing: the sync writes the flag into the current vector's metadata.
 """
 
 # The vendored DAL and vdb are untyped.
@@ -22,17 +30,22 @@ compile, finished or stopped, and catches up whatever an earlier run left out.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+import psycopg
+from psycopg import sql
 from sqlalchemy import func, select
 
 from auto_ontology.dal import schema as s
 from auto_ontology.dal.session import store
+from auto_ontology.dal.sql_attributes import fetch_sql_attribute_docs
 from auto_ontology.semantic.constants import (
     LABEL_COLUMN_ATTRIBUTE,
+    LABEL_SQL_ATTRIBUTE,
     LABEL_TERM,
     SEMANTIC_SOURCE,
 )
@@ -42,7 +55,7 @@ from auto_ontology.vdb.records import content_hash, embed_rows_into_vdb
 
 logger = logging.getLogger(__name__)
 
-LABELS = (LABEL_TERM, LABEL_COLUMN_ATTRIBUTE)
+LABELS = (LABEL_TERM, LABEL_COLUMN_ATTRIBUTE, LABEL_SQL_ATTRIBUTE)
 
 # Upstream's cutoffs for one formatted sample value in an attribute's text: JSON columns' samples
 # are `key [e.g. 'value']` strings, which need more room than a bare value.
@@ -80,6 +93,7 @@ def build_rows(
         }
         if term.get("id"):
             fields["id"] = term["id"]
+        fields["certified"] = bool(term.get("name_certified") and term.get("description_certified"))
         schema_names = [n for n in (term.get("schema_names") or []) if n]
         if schema_names:
             fields["schema_names"] = schema_names
@@ -128,6 +142,7 @@ def build_rows(
             fields["data_type"] = a["datatype"]
         if a.get("id"):
             fields["id"] = a["id"]
+        fields["certified"] = bool(a.get("certified"))
         rows.append(
             {
                 "text": text,
@@ -155,6 +170,8 @@ def terms_and_attributes(
             s.term.c.description,
             s.term.c.synonyms,
             s.term.c.id,
+            s.term.c.name_certified,
+            s.term.c.description_certified,
             func.array_agg(func.distinct(s.catalog_schema.c.name)).label("schema_names"),
         )
         .select_from(
@@ -179,6 +196,7 @@ def terms_and_attributes(
             s.column_attribute.c.id,
             s.catalog_schema.c.name.label("schema_name"),
             s.column_attribute.c.datatype,
+            s.column_attribute.c.certified,
         )
         .select_from(
             s.column_attribute.join(
@@ -194,8 +212,49 @@ def terms_and_attributes(
     return [dict(r) for r in terms], [dict(r) for r in attrs]
 
 
+def sql_attribute_rows(database_name: str) -> list[dict[str, Any]]:
+    """A row per SQL attribute of the database's Terms, with upstream's text
+    (`fetch_sql_attribute_docs`) and the metadata upstream's `embed_docs_into_vdb` gave it."""
+    tables = s.catalog_table.join(
+        s.catalog_schema, s.catalog_schema.c.id == s.catalog_table.c.schema_id
+    ).join(s.catalog_database, s.catalog_database.c.id == s.catalog_schema.c.database_id)
+    ids = store().query_read(
+        select(s.sql_attribute__term.c.attribute_id)
+        .distinct()
+        .select_from(
+            s.sql_attribute__term.join(
+                s.table__term, s.table__term.c.term_id == s.sql_attribute__term.c.term_id
+            ).join(tables, s.catalog_table.c.id == s.table__term.c.table_id)
+        )
+        .where(s.catalog_database.c.name == database_name)
+        .order_by(s.sql_attribute__term.c.attribute_id)
+    )
+    rows: list[dict[str, Any]] = []
+    for r in ids:
+        for doc in fetch_sql_attribute_docs(r["attribute_id"]):
+            path = f"auto_ontology:{doc['id']}"
+            fields = {
+                "id": doc["id"],
+                "label": doc["label"],
+                "name": doc["name"],
+                "source_path": path,
+                "database_name": database_name,
+                "source": doc.get("source", ""),
+                "certified": False,  # nothing certifies a SQL attribute yet
+            }
+            rows.append(
+                {
+                    "text": (doc.get("text") or "").strip(),
+                    "path": path,
+                    "page_number": -1,
+                    "metadata": {**fields, "content_metadata": dict(fields)},
+                }
+            )
+    return rows
+
+
 def database_rows(database_name: str) -> list[dict[str, Any]]:
-    """Every Term's row and its attributes' rows, for one database."""
+    """Every Term's row, its attributes' rows and its SQL attributes' rows, for one database."""
     terms, attrs = terms_and_attributes(database_name)
     attrs_by_term: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for attr in attrs:
@@ -206,7 +265,7 @@ def database_rows(database_name: str) -> list[dict[str, Any]]:
         for term in terms
         if term.get("name")
         for row in build_rows(database_name, term, attrs_by_term.get(term["name"], []))
-    ]
+    ] + sql_attribute_rows(database_name)
 
 
 @dataclass(frozen=True)
@@ -214,6 +273,7 @@ class Synced:
     embedded: int  # rows embedded and written
     deleted: int  # vectors deleted: their row changed, or is gone
     current: int  # rows whose vector was already current
+    retagged: int = 0  # current vectors whose `certified` flag was rewritten in place
 
 
 Key = tuple[str, str, str, str]  # label, id, content_hash, model
@@ -233,23 +293,48 @@ def sync_database(vdb: PostgresVDB, database_name: str) -> Synced:
     stored = vdb.row_metadata({"database_name": database_name, "label": {"$in": list(LABELS)}})
     kept: set[Key] = set()
     stale: list[str] = []
+    retag: list[tuple[str, bool]] = []
     for row_id, metadata in stored:
         key = _key(metadata, str(metadata.get("content_hash")), str(metadata.get("model")))
         if key in wanted and key not in kept:
             kept.add(key)
+            certified = wanted[key]["metadata"]["certified"]
+            if metadata.get("certified") is not certified:
+                retag.append((row_id, certified))
         else:
             stale.append(row_id)
     vdb.delete_rows(stale)
+    _retag(vdb, retag)
 
     missing = [row for key, row in wanted.items() if key not in kept]
     embedded = (
         embed_rows_into_vdb(missing, vdb.embeddings, vdb, what="semantic layer") if missing else 0
     )
     logger.info(
-        "semantic layer of %s: %d embedded, %d deleted, %d current",
+        "semantic layer of %s: %d embedded, %d deleted, %d current, %d retagged",
         database_name,
         embedded,
         len(stale),
         len(kept),
+        len(retag),
     )
-    return Synced(embedded=embedded, deleted=len(stale), current=len(kept))
+    return Synced(embedded=embedded, deleted=len(stale), current=len(kept), retagged=len(retag))
+
+
+def _retag(vdb: PostgresVDB, rows: list[tuple[str, bool]]) -> None:
+    """Set `certified` in these rows' metadata (a `json` column), and in the copy under
+    `content_metadata`. The text is unchanged, so BM25's index is too, and hybrid search reads
+    the flag from the row."""
+    if not rows:
+        return
+    statement = sql.SQL(
+        "UPDATE {} SET langchain_metadata = jsonb_set("
+        "langchain_metadata::jsonb || %(patch)s::jsonb, '{{content_metadata}}', "
+        "coalesce(langchain_metadata::jsonb -> 'content_metadata', '{{}}') || %(patch)s::jsonb"
+        ")::json WHERE langchain_id = %(id)s::uuid"
+    ).format(sql.Identifier(vdb.schema_name, vdb.collection_name))
+    with psycopg.connect(vdb.connection_string) as conn, conn.cursor() as cur:
+        cur.executemany(
+            statement,
+            [{"id": row_id, "patch": json.dumps({"certified": c})} for row_id, c in rows],
+        )
