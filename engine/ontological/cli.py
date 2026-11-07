@@ -47,7 +47,7 @@ async def ask_engine(
     minutes, so the request has no read timeout. Errors are caught inside `hold_engine`, whose
     task group would wrap them in an ExceptionGroup."""
     async with hold_engine(app_data, start, client=CLIENT) as link:
-        r = await _post(link, question, database, critic=critic)
+        r = await post_ask(link, question, database, critic=critic)
     if isinstance(r, str):
         raise AskFailed(r)
     if r.status_code != 200:
@@ -55,10 +55,11 @@ async def ask_engine(
     return Asked.model_validate(r.json())
 
 
-async def _post(
+async def post_ask(
     link: EngineLink, question: str, database: str, *, critic: bool
 ) -> httpx.Response | str:
-    """The engine's response, or why there is none."""
+    """The engine's response to `POST /ask`, or why there is none. The eval runner calls it
+    too, with one lease held across its questions."""
     try:
         info = await link.engine()
     except EngineUnavailable as e:

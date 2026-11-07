@@ -3,12 +3,14 @@
 <appData>/jobs.json, when it exists, holds what the Jobs screen should show:
 
     {"jobs": [JobSummary, ...], "details": {"<id>": {"tables": [...]}},
-     "calls": {"<id>": [CallRow, ...]}, "estimates": {"<database>": Estimate}}
+     "calls": {"<id>": [CallRow, ...]}, "estimates": {"<database>": Estimate},
+     "embeddings": Embeddings}
 
 A table with no `table_calls` takes its job's. Actions change the jobs in memory, as the real
 service would change their rows: hold makes a compile `held`, resume and compile make it
-`running`, choose sets its option, dismiss puts off a refresh's prompt. Each action is appended to
-<appData>/jobs.log, so a test can see what the app asked for.
+`running`, choose sets its option, dismiss puts off a refresh's prompt, and a re-embed of the stale
+databases names the scenario's `embeddings.stale`. Each action is appended to <appData>/jobs.log,
+so a test can see what the app and the engine asked for.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from typing import Any
 from ontological.compile.estimate import Estimate, estimate
 from ontological.compile.packing import TableCalls
 from ontological.jobs.active import JobBusy
-from ontological.jobs.service import NoSource, NoSuchJob, NotNow
+from ontological.jobs.service import Embeddings, NoSource, NoSuchJob, NotNow
 from ontological.jobs.view import STAGES, CallRow, JobDetail, JobSummary, TableProgress
 
 
@@ -33,6 +35,9 @@ class FakeJobs:
         self._details: dict[str, Any] = scenario.get("details", {})
         self._calls: dict[str, Any] = scenario.get("calls", {})
         self._estimates: dict[str, Any] = scenario.get("estimates", {})
+        self._embeddings = Embeddings.model_validate(
+            scenario.get("embeddings", {"model": None, "stale": []})
+        )
 
     def _note(self, line: str) -> None:
         with open(self._log, "a") as f:
@@ -85,6 +90,13 @@ class FakeJobs:
 
     async def reembed(self, database_name: str) -> None:
         self._note(f"reembed {database_name}")
+
+    async def embeddings(self) -> Embeddings:
+        return self._embeddings
+
+    async def reembed_stale(self) -> list[str]:
+        self._note("reembed stale")
+        return list(self._embeddings.stale)
 
     async def choose(self, job_id: int, table_calls: TableCalls) -> None:
         self._note(f"choose {job_id} {table_calls}")

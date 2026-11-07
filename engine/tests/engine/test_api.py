@@ -17,6 +17,7 @@ from ontological.answer.service import Answerability, Answers, Asked, NoEmbedder
 from ontological.api.app import create_app
 from ontological.compile.estimate import EstimatedTable, estimate
 from ontological.engine.lifetime import Lifetime
+from ontological.jobs.service import NoEmbedder as NoReembedder
 
 TOKEN = "t" * 43
 
@@ -264,6 +265,38 @@ def jobs_client(lifetime: Lifetime, tmp_path: Path) -> Iterator[TestClient]:
 def test_jobs_routes_need_a_store(client: TestClient) -> None:
     assert client.get("/jobs").status_code == 503
     assert client.post("/jobs/compile", json={"database_name": "x"}).status_code == 503
+    assert client.get("/embeddings").status_code == 503
+    assert client.post("/jobs/reembed").status_code == 503
+
+
+def test_embeddings_names_the_model_and_re_embeds_the_stale_databases(
+    lifetime: Lifetime, tmp_path: Path
+) -> None:
+    embeddings = {"model": "arctic-m", "stale": ["chinook", "wwi"]}
+    (tmp_path / "jobs.json").write_text(json.dumps({"embeddings": embeddings}))
+    app = create_app(
+        token=TOKEN, lifetime=lifetime, pid=1, version="9.9.9", jobs_service=FakeJobs(tmp_path)
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.headers["Authorization"] = f"Bearer {TOKEN}"
+        assert c.get("/embeddings").json() == embeddings
+        r = c.post("/jobs/reembed")
+    assert (r.status_code, r.json()) == (202, {"databases": ["chinook", "wwi"]})
+    assert (tmp_path / "jobs.log").read_text() == "reembed stale\n"
+
+
+def test_re_embedding_needs_an_embedder(lifetime: Lifetime, tmp_path: Path) -> None:
+    class NoModel(FakeJobs):
+        async def reembed_stale(self) -> list[str]:
+            raise NoReembedder("every database")
+
+    app = create_app(
+        token=TOKEN, lifetime=lifetime, pid=1, version="9.9.9", jobs_service=NoModel(tmp_path)
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.headers["Authorization"] = f"Bearer {TOKEN}"
+        assert c.get("/embeddings").json() == {"model": None, "stale": []}
+        assert c.post("/jobs/reembed").status_code == 503
 
 
 def test_jobs_lists_reads_and_acts_on_jobs(jobs_client: TestClient) -> None:

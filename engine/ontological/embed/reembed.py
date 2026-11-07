@@ -125,8 +125,3 @@ def reembed_database(
         data_layer,
     )
     return Reembedded(database_name, job.id, semantic, data_layer)
-
-
-def reembed_stale(embedder: LocalEmbedder, *, jobs: ActiveJobs | None = None) -> list[Reembedded]:
-    """Re-embed every database with vectors from another model, one after another."""
-    return [reembed_database(name, embedder, jobs=jobs) for name in stale_databases(embedder)]

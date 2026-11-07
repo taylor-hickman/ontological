@@ -18,6 +18,10 @@ compile, which uses Claude quota, optionally with `table_calls` for its tables;
 off a refresh's new-tables prompt. The routes answer 503 in an engine with no store to keep jobs
 in.
 
+Settings → Embeddings: `GET /embeddings` names the engine's embedding model and the databases with
+vectors from another; `POST /jobs/reembed` starts a `reembed` job for each of them and names them.
+It answers 503 in an engine with no embedder too.
+
 Ask: `POST /ask` answers one question from one database with the gated agent (§8.1), which uses
 Claude quota, and returns once the session ends: the answer, whether the post-run check verified
 it, the validated SQL, its rows and the tool log (`ontological.answer.service.Asked`). It answers
@@ -61,7 +65,8 @@ from ontological.embed.embedder import LocalEmbedder
 from ontological.engine.lifetime import Closing, Lease, Lifetime
 from ontological.interchange.store import InterchangeService
 from ontological.jobs.active import ActiveJobs, JobBusy
-from ontological.jobs.service import JobsService, NoSource, NoSuchJob, NotNow
+from ontological.jobs.service import Embeddings, JobsService, NoSource, NoSuchJob, NotNow
+from ontological.jobs.service import NoEmbedder as NoReembedder
 from ontological.jobs.view import CallRow, JobDetail, JobSummary
 from ontological.llm.install import Claude
 
@@ -115,6 +120,10 @@ class JobList(BaseModel):
 
 class CallList(BaseModel):
     calls: list[CallRow]
+
+
+class Reembedding(BaseModel):
+    databases: list[str]
 
 
 class Health(BaseModel):
@@ -273,6 +282,17 @@ def create_app(
         except JobBusy as e:
             raise HTTPException(409, str(e)) from None
         return Response(status_code=202)
+
+    @app.get("/embeddings")
+    async def embeddings() -> Embeddings:  # pyright: ignore[reportUnusedFunction]
+        return await service().embeddings()
+
+    @app.post("/jobs/reembed", status_code=202)
+    async def reembed_stale() -> Reembedding:  # pyright: ignore[reportUnusedFunction]
+        try:
+            return Reembedding(databases=await service().reembed_stale())
+        except NoReembedder:
+            raise HTTPException(503, "this engine has no embedding model") from None
 
     @app.post("/jobs/{job_id}/table_calls", status_code=202)
     async def choose(job_id: int, body: TableCallsRequest) -> Response:  # pyright: ignore[reportUnusedFunction]

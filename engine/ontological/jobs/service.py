@@ -10,6 +10,9 @@ starts their compile itself (`auto_compile`), as the person's Compile on that pr
 `Jobs` also runs re-embeds (`ontological.embed.reembed`), one task per database: an import starts
 one for each database it wrote (M6.4), and Resume on a stopped one runs it again. A re-embed asked
 for while one of that database runs follows it, so it sees what was committed meanwhile.
+`reembed_stale` starts one for each database with vectors from a model other than the engine's:
+the engine runs it once it has loaded its embedder, so a new model re-embeds by itself, and so does
+Settings → Embeddings' Re-embed.
 
 When the engine starts, it resumes every compile an earlier engine left `running` (it crashed or
 was stopped mid-table) or `paused` (it was waiting out a usage limit, and picks up by itself), and
@@ -28,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from auto_ontology.dal import schema as s
@@ -38,7 +42,7 @@ from ontological.compile.gateway import Structured
 from ontological.compile.packing import TableCalls
 from ontological.compile.split import Clock, compile_database
 from ontological.embed.embedder import LocalEmbedder
-from ontological.embed.reembed import reembed_database
+from ontological.embed.reembed import reembed_database, stale_databases
 from ontological.jobs import store as job_store
 from ontological.jobs import view
 from ontological.jobs.active import ActiveJobs, JobBusy
@@ -67,6 +71,13 @@ class NoEmbedder(Exception):
     """This engine has no embedding model, so it can't re-embed."""
 
 
+class Embeddings(BaseModel):
+    """Settings → Embeddings: the engine's model, and the databases with vectors from another."""
+
+    model: str | None  # None: this engine runs without an embedder
+    stale: list[str]
+
+
 class JobsService(Protocol):
     async def summaries(self) -> list[view.JobSummary]: ...
     async def detail(self, job_id: int) -> view.JobDetail: ...
@@ -74,6 +85,8 @@ class JobsService(Protocol):
     async def estimate(self, database_name: str) -> Estimate: ...
     async def compile(self, database_name: str, table_calls: TableCalls | None = None) -> None: ...
     async def reembed(self, database_name: str) -> None: ...
+    async def embeddings(self) -> Embeddings: ...
+    async def reembed_stale(self) -> list[str]: ...
     async def choose(self, job_id: int, table_calls: TableCalls) -> None: ...
     async def hold(self, job_id: int) -> None: ...
     async def resume(self, job_id: int) -> None: ...
@@ -142,6 +155,12 @@ class Jobs:
         await self._job(job_id)
         return await asyncio.to_thread(view.calls, job_id)
 
+    async def embeddings(self) -> Embeddings:
+        if self._embedder is None:
+            return Embeddings(model=None, stale=[])
+        stale = await asyncio.to_thread(stale_databases, self._embedder)
+        return Embeddings(model=self._embedder.model, stale=stale)
+
     async def estimate(self, database_name: str) -> Estimate:
         """The calls, quota and time of the database's next compile, or the rest of its
         unfinished one, with split and with merged. Asks Claude nothing."""
@@ -178,6 +197,18 @@ class Jobs:
         )
         self._reembeds[database_name] = task
         task.add_done_callback(lambda _: self._forget_reembed(database_name, task))
+
+    async def reembed_stale(self) -> list[str]:
+        """Re-embed every database with vectors from another model, each as its own `reembed`
+        job; one already re-embedding is left to finish. The databases, by name."""
+        if self._embedder is None:
+            raise NoEmbedder("every database")
+        stale = await asyncio.to_thread(stale_databases, self._embedder)
+        for name in stale:
+            if name not in self._reembeds:
+                log.info("re-embedding %s: it has vectors from another model", name)
+                await self.reembed(name)
+        return stale
 
     async def choose(self, job_id: int, table_calls: TableCalls) -> None:
         """Switch an unfinished compile's option: a running one takes it from its next pack."""

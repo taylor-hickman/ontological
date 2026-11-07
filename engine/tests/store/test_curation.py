@@ -10,6 +10,7 @@ embedded with hash vectors, so it needs the binaries and not the model."""
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,7 @@ from ontological.embed.search import semantic_vdb
 from ontological.embed.semantic import Synced, sync_database
 from ontological.jobs import store as jobs_store
 from ontological.jobs.active import ActiveJobs, JobBusy
+from ontological.jobs.service import Embeddings, Jobs, NoEmbedder
 from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.store import pg
 
@@ -534,10 +536,40 @@ def test_one_re_embed_of_a_database_runs_at_a_time(curated: Curated) -> None:
         reembed.reembed_database("chinook", Hashed("hash-2"), jobs=active)
 
 
-def test_reembed_stale_runs_every_database_on_another_model(curated: Curated) -> None:
-    done = reembed.reembed_stale(Hashed("hash-2"))
-    assert [d.database_name for d in done] == ["chinook"]
-    assert reembed.reembed_stale(Hashed("hash-2")) == []
+def test_the_engine_re_embeds_each_stale_database_as_its_own_job(curated: Curated) -> None:
+    changed = Hashed("hash-2")
+
+    async def run() -> None:
+        active = ActiveJobs()
+        engine_jobs = Jobs(gateway=ScriptedGateway(claude), active=active, embedder=changed)
+        assert await engine_jobs.embeddings() == Embeddings(model="hash-2", stale=["chinook"])
+        assert await engine_jobs.reembed_stale() == ["chinook"]
+        assert await engine_jobs.reembed_stale() == ["chinook"], "still stale while it runs"
+        await asyncio.to_thread(wait_for, curated.store, "reembed chinook done")
+        assert active.count() == 0
+        assert await engine_jobs.embeddings() == Embeddings(model="hash-2", stale=[])
+        assert await engine_jobs.reembed_stale() == []
+        await engine_jobs.stop()
+
+    asyncio.run(run())
+    assert [j for j in jobs(curated.store) if j.startswith("reembed")] == ["reembed chinook done"]
+
+
+def test_an_engine_with_no_embedder_has_nothing_to_re_embed_with(curated: Curated) -> None:
+    async def run() -> None:
+        engine_jobs = Jobs(gateway=ScriptedGateway(claude), active=ActiveJobs())
+        assert await engine_jobs.embeddings() == Embeddings(model=None, stale=[])
+        with pytest.raises(NoEmbedder):
+            await engine_jobs.reembed_stale()
+
+    asyncio.run(run())
+
+
+def wait_for(lay: pg.Layout, line: str) -> None:
+    deadline = time.monotonic() + TIMEOUT
+    while line not in jobs(lay):
+        assert time.monotonic() < deadline, jobs(lay)
+        time.sleep(0.1)
 
 
 def test_edits_module_names_its_fields() -> None:

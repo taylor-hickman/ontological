@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test'
 
 export interface Launched {
   app: ElectronApplication
@@ -65,8 +65,33 @@ export async function launch(
   )
   const app = await electron.launch({ args: ['.'], env: merged })
   const page = await app.firstWindow()
-  await page.waitForSelector('[data-testid="status-bar"]')
+  await settled(page)
   return { app, page }
+}
+
+/**
+ * Waits for the document the test will use. A document that loads before the engine serves has
+ * no engine port in its CSP, so main reloads it once the engine is up (src/main/index.ts), and
+ * whatever a test did to the first document is lost: focus, a menu command, an evaluate.
+ * On a slow machine the engine misses the 2 s main waits for it, so wait here until the
+ * document can reach the engine, or the engine has settled without one.
+ */
+async function settled(page: Page): Promise<void> {
+  await expect(async () => {
+    const ready = await page.evaluate(async () => {
+      const state = await window.ontological.engine()
+      if (state.status === 'starting' || state.status === 'restarting') return false
+      if (state.status !== 'running') return true
+      try {
+        await fetch(`${state.engineUrl}/health`, { headers: { Authorization: `Bearer ${state.token}` } })
+        return true
+      } catch {
+        return false // the CSP blocks the engine: the reload is on its way
+      }
+    })
+    expect(ready, 'the document reaches the engine').toBe(true)
+  }).toPass({ timeout: 20_000 })
+  await page.waitForSelector('[data-testid="status-bar"]')
 }
 
 /** Starts an engine the way the MCP shim does, detached, and returns its pid. */

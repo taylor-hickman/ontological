@@ -1,7 +1,7 @@
 """The engine process (ARCHITECTURE.md §4.3, §4.4).
 
     python -m ontological.engine [--app-data DIR] [--pg-bin DIR] [--model-dir DIR]
-                                 [--claude-cli PATH] [--headless]
+                                 [--claude-cli PATH] [--routes FILE] [--headless]
                                  [--idle-timeout S] [--lease-renew S]
 
 Under engine.lock, it looks for a live engine through engine.json. If there is one, it prints
@@ -11,8 +11,9 @@ its bulk batch cap (§7.1; with no model directory it runs without one), serves 
 127.0.0.1 at a random port with a new bearer token, writes engine.json and releases the lock. It
 prints one JSON line when it serves or attaches, `{"pid", "port", "version", "started"}`, or
 `{"error"}` and exits 1. Once it serves, it re-ingests the metadata of every source last ingested
-over a day ago, in the background (§9.1, `jobs/staleness.py`), and resumes the compiles an earlier
-engine left running or paused (`jobs/service.py`), through its one Claude gateway.
+over a day ago, in the background (§9.1, `jobs/staleness.py`), resumes the compiles an earlier
+engine left running or paused (`jobs/service.py`), through its one Claude gateway, and starts a
+`reembed` job for each database with vectors from a model other than its embedder's (§7.1).
 
 It exits 0 after `--idle-timeout` seconds (600) with no live lease, no request in flight and no
 running job, or on SIGTERM or SIGINT. Either way it removes engine.json, writes the quit dump
@@ -24,6 +25,10 @@ engine it started if it crashes. `--headless` is for every other client, such as
 and a shell: it starts the engine detached, in its own session with its output in
 logs/engine.log, prints the same line once it serves, and exits, leaving the engine to run until
 it idles out.
+
+`--routes` lays the routes in a JSON file over the defaults for this engine's gateway, as
+`{"<task>": {"model", "effort"}}`. The eval runner starts its engine with its config's routes,
+which pin full model IDs (§6.3).
 """
 
 from __future__ import annotations
@@ -57,12 +62,13 @@ from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
 from ontological.interchange.store import InterchangeService, StoreInterchange
 from ontological.jobs import store as job_store
 from ontological.jobs.active import ActiveJobs
-from ontological.jobs.service import Jobs, JobsService, auto_compile_from
+from ontological.jobs.service import Jobs, JobsService, NoEmbedder, auto_compile_from
 from ontological.jobs.staleness import StalenessCheck
 from ontological.llm.calls import PgCallLog
 from ontological.llm.env import sanitize_environ
 from ontological.llm.gateway import ClaudeGateway
 from ontological.llm.install import Claude, ClaudeCheck
+from ontological.llm.routes import Route, load_routes
 from ontological.store import dal, pg
 
 log = logging.getLogger("ontological.engine")
@@ -90,6 +96,7 @@ class Config:
     pg_bin: Path | None
     model_dir: Path | None = None  # the embedding model's files (ontological.embed.model)
     claude_cli: Path | None = None  # the user's `claude`, when it isn't the one on PATH
+    routes: dict[str, Route] | None = None  # laid over the default routes (`--routes`)
     idle_timeout_s: float = IDLE_TIMEOUT_S
     renew_every_s: float = RENEW_EVERY_S
 
@@ -109,10 +116,17 @@ class Store(Protocol):
 class PgStore:
     """The bundled Postgres (§5.3)."""
 
-    def __init__(self, layout: pg.Layout, *, claude_cli: Path | None = None) -> None:
+    def __init__(
+        self,
+        layout: pg.Layout,
+        *,
+        claude_cli: Path | None = None,
+        routes: dict[str, Route] | None = None,
+    ) -> None:
         self.layout = layout
         self._calls: PgCallLog | None = None
         self.claude_cli = claude_cli
+        self.routes = routes
         self._shared_gateway: ClaudeGateway | None = None
 
     def start(self) -> None:
@@ -145,6 +159,7 @@ class PgStore:
                 calls=self._calls,
                 sandbox=self.layout.app_data / "claude-sandbox",
                 cli_path=self.claude_cli,
+                routes=self.routes,
             )
         return self._shared_gateway
 
@@ -174,7 +189,11 @@ class PgStore:
 def pg_store(config: Config) -> Store:
     if config.pg_bin is None:
         raise RuntimeError("no Postgres binaries: pass --pg-bin or set ONTOLOGICAL_PG_BIN")
-    return PgStore(pg.Layout(config.app_data, config.pg_bin), claude_cli=config.claude_cli)
+    return PgStore(
+        pg.Layout(config.app_data, config.pg_bin),
+        claude_cli=config.claude_cli,
+        routes=config.routes,
+    )
 
 
 def start_embedder(config: Config) -> LocalEmbedder | None:
@@ -203,15 +222,21 @@ def parse_args(argv: Sequence[str]) -> tuple[Config, bool]:
     ap.add_argument("--pg-bin", type=Path, default=os.environ.get("ONTOLOGICAL_PG_BIN"))
     ap.add_argument("--model-dir", type=Path, default=os.environ.get("ONTOLOGICAL_MODEL_DIR"))
     ap.add_argument("--claude-cli", type=Path, default=os.environ.get("ONTOLOGICAL_CLAUDE_CLI"))
+    ap.add_argument("--routes", type=Path, default=None, help="routes over the defaults (JSON)")
     ap.add_argument("--headless", action="store_true", help="start detached, print, exit")
     ap.add_argument("--idle-timeout", type=float, default=IDLE_TIMEOUT_S, metavar="S")
     ap.add_argument("--lease-renew", type=float, default=RENEW_EVERY_S, metavar="S")
     a = ap.parse_args(argv)
+    try:
+        routes = load_routes(a.routes) if a.routes else None
+    except ValueError as e:
+        ap.error(str(e))
     config = Config(
         app_data=(a.app_data or default_app_data()).absolute(),
         pg_bin=Path(a.pg_bin) if a.pg_bin else None,
         model_dir=Path(a.model_dir) if a.model_dir else None,
         claude_cli=Path(a.claude_cli) if a.claude_cli else None,
+        routes=routes,
         idle_timeout_s=a.idle_timeout,
         renew_every_s=a.lease_renew,
     )
@@ -394,6 +419,12 @@ async def _serve(
     staleness.start()
     try:
         await service.resume_unfinished()
+        try:
+            await service.reembed_stale()
+        except NoEmbedder:
+            pass  # start_embedder said so
+        except Exception:
+            log.exception("looking for vectors from another model failed")
         tick = min(1.0, config.idle_timeout_s / 4, config.renew_every_s)
         while not task.done():
             if lifetime.should_exit():
