@@ -1,7 +1,7 @@
-"""Compile as a job (BUILD_PLAN.md M3.1; ARCHITECTURE.md §4.4, §6.5): each table checkpointed in
-ops.job_step, a pause until `resets_at` on a rate limit, and a resume on the plan the job began
-with, after a pause, a stop or a crash. Chinook, ingested into the bundled store, with a scripted
-gateway and a clock whose sleeps return at once."""
+"""Compile as a job (BUILD_PLAN.md M3.1, M3.2; ARCHITECTURE.md §4.4, §6.5): each table
+checkpointed in ops.job_step, a pack's tables together, a pause until `resets_at` on a rate limit,
+and a resume on the plan the job began with, after a pause, a stop or a crash. Chinook, ingested
+into the bundled store, with a scripted gateway and a clock whose sleeps return at once."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 from fakes import T0, FakeClock, NoAnswer, ScriptedGateway
-from test_compile import ORDER, claude, rows, table_of
+from test_compile import ORDER, PACK_ORDER, SMALL, claude, rows, table_of, tables_of
 
 from ontological.catalog.ingest import ingest
 from ontological.compile.split import RESUME_MARGIN_S, RETRY_WITHOUT_RESET_S, compile_database
@@ -25,6 +25,8 @@ from ontological.sources.executor import SourceExecutor, SqliteSource
 from ontological.store import pg
 
 RESETS_AT = T0 + timedelta(hours=2)
+# The tables a compile writes before it gets to Employee: the small tables' pack, then Customer
+BEFORE_EMPLOYEE = {*SMALL, "Customer"}
 # The plan for Chinook's tables: the small ones share pack 0 (tests/compile/test_packing.py)
 PACKS = {
     "Album": 0, "Artist": 0, "Customer": 1, "Employee": 2, "Genre": 0, "Invoice": 3,
@@ -107,12 +109,14 @@ def test_a_rate_limit_pauses_until_resets_at_then_resumes_in_the_same_run(
     assert clock.sleeps == [7200 + RESUME_MARGIN_S]
     # Paused until the reset, counted as running, so the engine stays up through the pause
     assert during[0] == ("paused", RESETS_AT, 1, False)
+    # The small tables' pack and Customer are written; Employee and the rest are not
     assert [(t, s) for t, s, _ in during[1]] == [
-        (t, "done" if t in ("Album", "Artist", "Customer") else "pending") for t in ORDER
+        (t, "skipped" if t == "PlaylistTrack" else "done" if t in BEFORE_EMPLOYEE else "pending")
+        for t in ORDER
     ]
     # Then Employee again, and the rest, in the same run
     assert got.complete and got.stopped is None
-    assert [t.name for t in got.tables] == ORDER
+    assert [t.name for t in got.tables] == PACK_ORDER
     terms_calls = [table_of(c.user) for c in gateway.calls if c.task == "table_terms"]
     assert terms_calls.count("Employee") == 2
     job = jobs.job(got.job_id)
@@ -145,7 +149,7 @@ def test_a_logged_out_claude_stops_the_job_and_the_next_run_resumes_it(
     assert clock.sleeps == []
     assert (stopped.complete, stopped.semantic_fks) == (False, None)
     assert stopped.stopped is not None and stopped.stopped.status.state == "needs_login"
-    assert [t.name for t in stopped.tables] == ["Album", "Artist", "Customer"]
+    assert [t.name for t in stopped.tables] == PACK_ORDER[:8]
     job = jobs.job(stopped.job_id)
     assert job.state == "stopped" and job.error is not None and "needs_login" in job.error
 
@@ -154,7 +158,7 @@ def test_a_logged_out_claude_stops_the_job_and_the_next_run_resumes_it(
 
     assert done.job_id == stopped.job_id
     assert done.complete
-    assert [t.name for t in done.tables] == ORDER[3:]
+    assert [t.name for t in done.tables] == PACK_ORDER[8:]
     assert table_of(resumed.calls[0].user) == "Employee"
     # The packs the job began with, though the work list is now eight tables
     assert step_states(done.job_id) == [
@@ -165,30 +169,30 @@ def test_a_logged_out_claude_stops_the_job_and_the_next_run_resumes_it(
     assert rows(store, counts) == ["10", "10"]
 
 
-def test_a_person_pausing_stops_the_job_before_its_next_table(
+def test_a_person_pausing_stops_the_job_before_its_next_pack(
     store: pg.Layout, executor: SourceExecutor
 ) -> None:
     hold = asyncio.Event()
 
-    def pause_at_artist(task: str, user: str) -> Any:
-        if task == "table_terms" and table_of(user) == "Artist":
+    def pause_in_the_small_pack(task: str, user: str) -> Any:
+        if task == "table_terms" and "Artist" in tables_of(user):
             hold.set()
         return claude(task, user)
 
-    gateway = ScriptedGateway(pause_at_artist)
+    gateway = ScriptedGateway(pause_in_the_small_pack)
     held = asyncio.run(compile_database("chinook", executor, gateway, hold=hold))
 
-    # Artist was under way, so it finished; nothing after it started
+    # The small tables' pack was under way, so it finished; no later pack started
     assert held.held and not held.complete and held.stopped is None
-    assert [t.name for t in held.tables] == ["Album", "Artist"]
-    asked = {table_of(c.user) for c in gateway.calls if c.task != "column_descriptions"}
-    assert asked == {"Album", "Artist"}
+    assert [t.name for t in held.tables] == SMALL
+    asked = {t for c in gateway.calls for t in tables_of(c.user)}
+    assert asked <= set(SMALL)
     job = jobs.job(held.job_id)
     assert (job.state, job.paused_until, job.error) == ("held", None, None)
 
     done = asyncio.run(compile_database("chinook", executor, ScriptedGateway(claude)))
     assert done.job_id == held.job_id and done.complete
-    assert [t.name for t in done.tables] == ORDER[2:]
+    assert [t.name for t in done.tables] == PACK_ORDER[len(SMALL) :]
     assert jobs.job(done.job_id).state == "done"
 
 
@@ -202,27 +206,28 @@ def test_a_person_pausing_during_a_usage_pause_holds_the_job_at_once(
     held = asyncio.run(compile_database("chinook", executor, gateway, clock=clock, hold=hold))
 
     assert held.held
-    assert [t.name for t in held.tables] == ["Album", "Artist", "Customer"]
+    assert {t.name for t in held.tables} == BEFORE_EMPLOYEE
     job = jobs.job(held.job_id)
     assert (job.state, job.paused_until) == ("held", None)
     # The last call was Employee's that hit the limit: nothing was asked after it
     assert (gateway.calls[-1].task, table_of(gateway.calls[-1].user)) == ("table_terms", "Employee")
 
 
-def test_each_tables_calls_are_made_under_its_job_and_table(executor: SourceExecutor) -> None:
-    scopes: list[tuple[CallScope, str | None]] = []
+def test_each_packs_calls_are_made_under_its_job_and_pack(executor: SourceExecutor) -> None:
+    scopes: list[tuple[CallScope, list[str]]] = []
 
     def note(task: str, user: str) -> Any:
-        # A description call's prompt names only columns
-        scopes.append((current_scope(), None if task == "column_descriptions" else table_of(user)))
+        scopes.append((current_scope(), tables_of(user)))  # a description prompt names none
         return claude(task, user)
 
     got = asyncio.run(compile_database("chinook", executor, ScriptedGateway(note)))
 
-    ids = {s.table_name: s.table_id for s in jobs.job_steps(got.job_id)}
     assert scopes and all(scope.job_id == got.job_id for scope, _ in scopes)
-    assert all(scope.table_name == asked for scope, asked in scopes if asked is not None)
-    assert all(ids[str(scope.table_name)] == scope.table_id for scope, _ in scopes)
+    for scope, asked in scopes:
+        assert scope.pack is not None and scope.table_name is not None
+        assert all(PACKS[t] == scope.pack for t in asked), (scope, asked)
+        assert set(asked) <= set(scope.table_name.split(", "))
+    assert {scope.pack for scope, _ in scopes} == set(PACKS.values())
     assert current_scope() == CallScope()
 
 
@@ -244,8 +249,8 @@ def test_a_crash_leaves_the_job_running_and_the_next_run_resumes_it(
     job = jobs.open_job("compile", "chinook")
     assert job is not None and job.state == "running"
     assert [t for t, s, _ in step_states(job.id) if s != "pending"] == [
-        "Album", "Artist", "Customer",
-    ]  # fmt: skip
+        t for t in ORDER if t in BEFORE_EMPLOYEE
+    ]
 
     resumed = ScriptedGateway(claude)
     done = asyncio.run(compile_database("chinook", executor, resumed))
@@ -253,7 +258,7 @@ def test_a_crash_leaves_the_job_running_and_the_next_run_resumes_it(
     assert done.job_id == job.id and done.complete
     assert table_of(resumed.calls[0].user) == "Employee"
     asked = {table_of(c.user) for c in resumed.calls if c.task != "column_descriptions"}
-    assert asked == set(ORDER[3:]) - {"PlaylistTrack"}
+    assert asked == set(PACK_ORDER[8:])
 
 
 def test_a_job_paused_when_the_engine_stopped_waits_out_the_rest_of_the_pause(

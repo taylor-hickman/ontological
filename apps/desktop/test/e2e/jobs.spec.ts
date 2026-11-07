@@ -61,9 +61,9 @@ const SCENARIO = {
   ],
   details: {
     '2': {
-      stages: ['table_keys', 'column_descriptions', 'table_terms'],
+      stages: ['table_keys', 'column_descriptions', 'table_terms', 'table_synonyms'],
       tables: [
-        { name: 'cities', state: 'done', stages_done: 3, skipped: null },
+        { name: 'cities', state: 'done', stages_done: 4, skipped: null },
         { name: 'countries', state: 'skipped', stages_done: 0, skipped: 'no non-FK columns' },
         { name: 'cities_archive', state: 'pending', stages_done: 2, skipped: null },
         { name: 'vehicle_temperatures', state: 'pending', stages_done: 0, skipped: null }
@@ -141,13 +141,14 @@ test('shows a paused compile, its tables and calls, and holds and resumes it', a
     await expect(tiles.nth(1).getByRole('img')).toHaveAttribute('aria-label', 'skipped: no non-FK columns')
     // Stopped mid-table: the two stages it got through are checkpointed
     const archive = tiles.nth(2).locator('[data-tone]')
-    await expect(archive).toHaveCount(3)
+    await expect(archive).toHaveCount(4)
     expect(await archive.evaluateAll((els) => els.map((e) => e.getAttribute('data-tone')))).toEqual([
       'checkpointed',
       'checkpointed',
+      'queued',
       'queued'
     ])
-    await expect(tiles.nth(2).getByRole('img')).toHaveAttribute('aria-label', '2 of 3 stages done')
+    await expect(tiles.nth(2).getByRole('img')).toHaveAttribute('aria-label', '2 of 4 stages done')
 
     // The rail: the new-tables prompt, the call log, earlier runs
     const rail = page.getByTestId('rail')

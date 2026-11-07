@@ -1,7 +1,8 @@
 """What the Jobs screen reads (DESIGN.md §5.4, BUILD_PLAN.md M3.8).
 
-ops.llm_call: `job_id`, `table_id` and `table_name` say which job and table a call was for, so the
-screen can show a job's call log and each table's stages. `cached` marks a row the gateway wrote
+ops.llm_call: `job_id` and `pack` say which job and pack of tables a call was for, and
+`table_name` names the pack's tables, so the screen can show a job's call log and each table's
+stages. `cached` marks a row the gateway wrote
 for a cache hit: no spawn, no output, never served itself.
 
 ops.job: an `ingest` kind for the staleness check's refreshes, with the tables a refresh found in
@@ -26,7 +27,7 @@ def upgrade() -> None:
     op.execute(
         "ALTER TABLE ops.llm_call "
         "ADD COLUMN job_id bigint REFERENCES ops.job (id) ON DELETE SET NULL, "
-        "ADD COLUMN table_id text, "
+        "ADD COLUMN pack integer, "
         "ADD COLUMN table_name text, "
         "ADD COLUMN cached boolean NOT NULL DEFAULT false"
     )
@@ -79,6 +80,6 @@ def downgrade() -> None:
     )
     op.execute("DROP INDEX ops.llm_call_job")
     op.execute(
-        "ALTER TABLE ops.llm_call DROP COLUMN job_id, DROP COLUMN table_id, "
+        "ALTER TABLE ops.llm_call DROP COLUMN job_id, DROP COLUMN pack, "
         "DROP COLUMN table_name, DROP COLUMN cached"
     )

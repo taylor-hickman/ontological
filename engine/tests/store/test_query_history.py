@@ -9,12 +9,14 @@ import socket
 import statistics
 import threading
 import time
+import uuid
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import httpx
+import psycopg
 import pytest
 import uvicorn
 from conftest import sql
@@ -25,6 +27,7 @@ from ontological.catalog import query_history
 from ontological.catalog.ingest import ingest
 from ontological.catalog.parse_pool import ParsePool
 from ontological.catalog.query_history import (
+    HistoryIngested,
     HistoryRow,
     NotInCatalog,
     ingest_query_history,
@@ -32,7 +35,7 @@ from ontological.catalog.query_history import (
 )
 from ontological.catalog.query_stats import recent_usage
 from ontological.engine.lifetime import Lifetime
-from ontological.sources.executor import SourceExecutor, SqliteSource
+from ontological.sources.executor import PostgresSource, SourceExecutor, SqliteSource
 from ontological.store import pg
 
 DIALECTS = ["sqlite"]
@@ -117,6 +120,55 @@ def test_history_is_written_with_its_links_counts_and_months(
     ) == [f"ArtistId->ArtistId {join_id}|album.artistid = artist.artistid"]
     assert rows(chinook_store, "SELECT count(*) FROM column__union") == ["1"]
     assert month_counts([join_id]) == {join_id: {date(2025, 12, 1): 1, date(2026, 1, 1): 4}}
+
+
+def test_a_postgres_source_s_query_history_is_ingested_after_its_catalog(
+    store: pg.Layout, pool: ParsePool
+) -> None:
+    """Ingest reads the source's `pg_stat_activity` through its executor once the catalog is
+    written, and resolves the statements against it."""
+    name = f"history_{uuid.uuid4().hex[:12]}"
+    pg.psql(store, f'CREATE DATABASE "{name}"', db="postgres")
+    pg.psql(
+        store,
+        "CREATE SCHEMA shop; "
+        "CREATE TABLE shop.customer (customer_id int PRIMARY KEY, name text); "
+        "CREATE TABLE shop.orders (order_id int PRIMARY KEY, "
+        "customer_id int REFERENCES shop.customer, total numeric(10, 2))",
+        db=name,
+    )
+    ran = (
+        "SELECT c.name, o.total FROM shop.customer c "
+        "JOIN shop.orders o ON o.customer_id = c.customer_id"
+    )
+    source = PostgresSource(str(store.pgsocket), name, pg.USER, port=pg.PORT)
+    with (
+        psycopg.connect(
+            host=str(store.pgsocket), port=pg.PORT, dbname=name, user=pg.USER, autocommit=True
+        ) as client,
+        SourceExecutor(source) as ex,
+    ):
+        client.execute(ran).fetchall()
+        got = ingest(ex, pool=pool)
+
+    assert got.history == HistoryIngested(name, rows=1, added=1, merged=0, unmatched=0, failed=0)
+    assert rows(store, "SELECT sql_full_query || ' | ' || total_counter FROM sql_query") == [
+        f"{ran} | 1"
+    ]
+    assert rows(
+        store,
+        "SELECT string_agg(t.name, ',' ORDER BY t.name) FROM sql_query__table qt "
+        "JOIN catalog_table t ON t.id = qt.table_id",
+    ) == ["customer,orders"]
+    assert rows(store, "SELECT count(*) FROM column__join") == ["1"]
+
+
+def test_a_source_without_query_history_ingests_none(
+    chinook_store: pg.Layout, chinook: Path
+) -> None:
+    with SourceExecutor(SqliteSource(chinook)) as ex:
+        assert ingest(ex).history is None
+    assert rows(chinook_store, "SELECT count(*) FROM sql_query") == ["0"]
 
 
 def test_a_second_ingest_adds_to_what_the_store_holds(

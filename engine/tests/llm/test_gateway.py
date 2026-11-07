@@ -203,14 +203,14 @@ def test_a_repeated_call_is_answered_from_the_cache(tmp_path: Path) -> None:
     assert not any(r.cacheable for r in hits)
 
 
-def test_calls_are_logged_under_the_callers_job_and_table(tmp_path: Path) -> None:
+def test_calls_are_logged_under_the_callers_job_and_pack(tmp_path: Path) -> None:
     h = Harness(tmp_path, [answered({"pk": ["id"]})])
     h.structured()
-    with call_scope(7, "t-9", "Invoice"):
+    with call_scope(7, 2, "Invoice, InvoiceLine"):
         h.structured()
-    assert [(r.job_id, r.table_id, r.table_name, r.cached) for r in h.rows] == [
+    assert [(r.job_id, r.pack, r.table_name, r.cached) for r in h.rows] == [
         (None, None, None, False),
-        (7, "t-9", "Invoice", True),
+        (7, 2, "Invoice, InvoiceLine", True),
     ]
 
 

@@ -12,8 +12,10 @@ import signal
 import subprocess
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import duckdb
+import psycopg
 import pytest
 from conftest import MySQLServer, PgCluster
 from fakes import MemoryKeyring
@@ -21,6 +23,7 @@ from test_executor import run_in_thread, wait_running
 
 from ontological.sources.executor import (
     Cancelled,
+    History,
     MySQLSource,
     PostgresSource,
     SourceError,
@@ -179,6 +182,39 @@ def test_postgres_run_sql_runs_duckdb_sql_on_the_remote_tables(pg_ex: SourceExec
     assert rows.rows[0][0] == "Ada"
     assert rows.types == ["VARCHAR", "DECIMAL(38,2)"]
     assert pg_ex.run_sql("SELECT count(*) FROM events").rows == [(1,)]
+
+
+def test_postgres_query_history_reads_pg_stat_activity(
+    pg: PgCluster, pg_ex: SourceExecutor
+) -> None:
+    """Upstream's `get_queries`: each backend's latest statement in the last 24 hours, here only
+    this database's and only those the role may read, and none of the executor's own."""
+    pg_ex.extract()
+    ran = "SELECT name FROM sales.customer WHERE id = 1"
+
+    def connect(db: str, user: str) -> psycopg.Connection[tuple[object, ...]]:
+        password = PASSWORD if user == "reader" else None
+        return psycopg.connect(
+            host=str(pg.socket_dir), dbname=db, user=user, password=password, autocommit=True
+        )
+
+    with (
+        connect("shop", "reader") as mine,
+        connect("postgres", "reader") as other_database,
+        connect("shop", "postgres") as other_role,
+    ):
+        mine.execute(ran).fetchall()
+        other_database.execute("SELECT 'another database'").fetchall()
+        other_role.execute("SELECT 'another role'").fetchall()
+        history = pg_ex.history()
+        recent = pg_ex.history(hours=0)
+
+    assert history.dialects == ["postgres"]
+    assert [(r["query_text"], r["count"]) for r in history.rows] == [(ran, 1)]
+    ended = history.rows[0]["end_time"]
+    assert ended.tzinfo is not None
+    assert abs((datetime.now(UTC) - ended).total_seconds()) < 60
+    assert recent.rows == []
 
 
 @pytest.mark.parametrize(
@@ -411,6 +447,10 @@ def test_mysql_extract_reads_keys(mysql_ex: SourceExecutor) -> None:
     }  # fmt: skip
     pairs = [(f["column_name"], f["referenced_column"]) for f in cat.fks]
     assert pairs.index(("country", "country")) + 1 == pairs.index(("code", "code"))
+
+
+def test_mysql_has_no_query_history(mysql_ex: SourceExecutor) -> None:
+    assert mysql_ex.history() == History(dialects=[], rows=[])
 
 
 def test_mysql_run_sql_and_read_only(mysql: MySQLServer, mysql_ex: SourceExecutor) -> None:

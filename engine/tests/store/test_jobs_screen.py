@@ -77,7 +77,7 @@ class LoggingGateway(ScriptedGateway):
                 duration_ms=None if cached else 1500,
                 cached=cached,
                 job_id=scope.job_id,
-                table_id=scope.table_id,
+                pack=scope.pack,
                 table_name=scope.table_name,
             )
         )
@@ -162,15 +162,16 @@ def test_a_compile_shows_its_tables_calls_and_cache_hits(
             compile_database("chinook", ex, gateway, clock=InstantClock(on_sleep=look))
         )
 
-    # While paused: the finished tables are done, Employee got through keys and descriptions
+    # While paused: the small tables' pack and Customer are done; Employee, a pack of its own, got
+    # through keys and descriptions; Invoice's pack hasn't started
     [paused] = during
     assert paused.job.state == "paused" and paused.job.paused_until is not None
     assert paused.stages == list(STAGES)
     progress = {t.name: (t.state, t.stages_done) for t in paused.tables}
-    assert progress["Album"] == ("done", 3)
+    assert progress["Album"] == ("done", 4)
     assert progress["Employee"] == ("pending", 2)
-    assert progress["Genre"] == ("pending", 0)
-    assert (paused.job.tables, paused.job.tables_done) == (11, 3)
+    assert progress["Invoice"] == ("pending", 0)
+    assert (paused.job.tables, paused.job.tables_done) == (11, 8)
 
     [summary] = view.summaries()
     spawns = len(gateway.calls)  # every call that reached the scripted Claude
@@ -190,7 +191,7 @@ def test_a_compile_shows_its_tables_calls_and_cache_hits(
         "skipped",
         "no non-FK columns",
     )
-    assert all(t.stages_done == 3 for t in done.tables if t.state == "done")
+    assert all(t.stages_done == len(STAGES) for t in done.tables if t.state == "done")
 
     log = view.calls(got.job_id, limit=500)
     assert [c.id for c in log] == sorted((c.id for c in log), reverse=True), "newest first"

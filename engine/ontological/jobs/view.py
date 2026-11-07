@@ -4,9 +4,10 @@ and ops.llm_call.
 - A job's summary: its state, its tables done of all, the Claude calls it spawned and the calls
   the cache answered, and for a refresh, the new tables it found.
 - A compile's tables, each with how many of its stages (`compile.split.STAGES`) are done. A table
-  whose step is done has done them all. One still pending has done the stages its latest try got
-  through, read from the calls logged under it (`stages_done`): the gateway's cache keeps those
-  answers, so a resumed table gets them back without spending quota.
+  whose step is done has done them all. One still pending has done the stages its pack's latest
+  try got through, read from the calls logged under the pack (`stages_done`): compile asks each
+  stage once for a pack's tables, and the gateway's cache keeps those answers, so a resumed pack
+  gets them back without spending quota.
 - A job's call log, newest first: time, task, table, model, and how it ended.
 
 Every function blocks; async callers run them in a thread.
@@ -133,25 +134,23 @@ def detail(job_id: int) -> JobDetail | None:
     if found is None:
         return None
     steps = job_store.job_steps(job_id)
-    pending = [s.table_id for s in steps if s.state == "pending"]
-    calls: dict[str, list[StageCall]] = {}
+    pending = sorted({s.pack for s in steps if s.state == "pending"})
+    calls: dict[int, list[StageCall]] = {}
     if pending:
         rows = store().query_read(
-            "SELECT table_id, task, outcome, attempt FROM ops.llm_call "
-            "WHERE job_id = :job AND table_id = ANY(:ids) ORDER BY id",
-            {"job": job_id, "ids": pending},
+            "SELECT pack, task, outcome, attempt FROM ops.llm_call "
+            "WHERE job_id = :job AND pack = ANY(:packs) ORDER BY id",
+            {"job": job_id, "packs": pending},
         )
         for row in rows:
-            calls.setdefault(str(row["table_id"]), []).append(
+            calls.setdefault(int(row["pack"]), []).append(
                 StageCall(task=row["task"], outcome=row["outcome"], attempt=row["attempt"])
             )
     tables = [
         TableProgress(
             name=s.table_name,
             state=s.state,
-            stages_done=(
-                len(STAGES) if s.state == "done" else stages_done(calls.get(s.table_id, []))
-            ),
+            stages_done=(len(STAGES) if s.state == "done" else stages_done(calls.get(s.pack, []))),
             skipped=(s.detail or {}).get("skipped") if s.state == "skipped" else None,
         )
         for s in steps

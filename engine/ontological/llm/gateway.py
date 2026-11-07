@@ -7,7 +7,7 @@ persistence, and the auth variables blanked. `structured()` keeps upstream's con
 returns None on any failure, so the caller falls back deterministically.
 
 Every spawn is logged in ops.llm_call (`calls.CallLog`), and so is every cache hit, with the job
-and table the caller's `calls.call_scope` names and the model that answered, read from
+and pack the caller's `calls.call_scope` names and the model that answered, read from
 the assistant messages and the `model_fallback` message, not from `model_usage`, which also
 lists Claude Code's own side calls (spike S1). The latest rate-limit event, and what the
 calls and `check()` have learned about the `claude` install, make up `status` (§6.5).
@@ -425,7 +425,7 @@ class ClaudeGateway:
             outcome="ok",
             cached=True,
             job_id=scope.job_id,
-            table_id=scope.table_id,
+            pack=scope.pack,
             table_name=scope.table_name,
         )
         await asyncio.to_thread(self.calls.record, call)
@@ -463,7 +463,7 @@ class ClaudeGateway:
             num_turns=result.num_turns if result else None,
             session_id=result.session_id if result else None,
             job_id=scope.job_id,
-            table_id=scope.table_id,
+            pack=scope.pack,
             table_name=scope.table_name,
         )
         await asyncio.to_thread(self.calls.record, call)
