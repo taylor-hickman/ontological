@@ -22,6 +22,7 @@ from itertools import repeat
 
 from ontological.catalog.parsers.catalog_index import CatalogIndex
 from ontological.catalog.sql_parse import ChunkResult, normalize_many, parse_chunk
+from ontological.compile.fragments import extract_many
 
 #: Upstream's chunk of history: a task's worth of statements.
 CHUNK = 500
@@ -72,6 +73,14 @@ class ParsePool:
         chunks = chunked(sqls, self.workers)
         out: list[str | None] = []
         for part in self._executor.map(normalize_many, chunks, repeat(tuple(dialects))):
+            out.extend(part)
+        return out
+
+    def fragments(self, texts: Sequence[str]) -> list[list[str]]:
+        """Each statement's SQL fragments (`compile.fragments.extract_expressions`), in order:
+        the SQL-attribute stage's sqlglot work, off the engine's GIL as parsing is."""
+        out: list[list[str]] = []
+        for part in self._executor.map(extract_many, chunked(texts, self.workers)):
             out.extend(part)
         return out
 

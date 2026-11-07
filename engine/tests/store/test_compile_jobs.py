@@ -194,8 +194,11 @@ def test_a_crash_leaves_the_job_running_and_the_next_run_resumes_it(
 
     assert done.job_id == job.id and done.complete
     assert table_of(resumed.calls[0].user) == "Employee"
-    asked = {table_of(c.user) for c in resumed.calls if c.task != "column_descriptions"}
+    per_table = {"table_keys", "table_terms"}
+    asked = {table_of(c.user) for c in resumed.calls if c.task in per_table}
     assert asked == set(PACK_ORDER[8:])
+    # then the post-stages, which the crash never reached
+    assert resumed.tasks()[-1] == "bridge_sql"
 
 
 def test_a_job_paused_when_the_engine_stopped_waits_out_the_rest_of_the_pause(
