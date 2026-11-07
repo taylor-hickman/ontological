@@ -14,14 +14,21 @@ function asList(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : []
 }
 
+/** Whether the change is the Term's creation: an import logs a Term it creates from no name. */
+export function isCreation(change: TermChange): boolean {
+  return change.field === 'name' && change.old === null
+}
+
 /** One history line: "You certified the name", "You added synonym “loan”". */
 export function historyLine(change: TermChange): string {
   const who = WHO[change.actor]
   const undo = change.undoes !== null ? ' (undo)' : ''
   switch (change.field) {
     case 'name':
+      if (isCreation(change)) return `${who} created it as ${quoted(change.new)}`
       return `${who} renamed it from ${quoted(change.old)} to ${quoted(change.new)}${undo}`
     case 'description':
+      if (change.old === null && change.new) return `${who} wrote the description${undo}`
       return `${who} ${change.new ? 'changed' : 'cleared'} the description${undo}`
     case 'name_certified':
     case 'description_certified': {

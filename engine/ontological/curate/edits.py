@@ -18,6 +18,12 @@
 - **Undo is an edit too.** `undo` writes back each field's old value as a new edit whose rows name
   the one they revert (`undoes`), so history shows it and undoing an undo makes the edit again.
   An edit is undone once, and not while a later edit holds one of its fields: undo that first.
+  An edit that created a row isn't undone: there is no name to put back.
+- **Compile and import log their writes here too.** They write through the DAL themselves, in
+  their own transaction, so they take each row's fields before they write (`fields_of`) and log
+  what changed after (`log_write`): one edit per Term, holding its fields and its attributes',
+  as actor `compile` or `import`. A row the writer created is logged from `CREATED`, so each
+  field it was given is a change from nothing.
 
 Every call blocks; async callers run them in a thread.
 """
@@ -29,12 +35,12 @@ Every call blocks; async callers run them in a thread.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, cast
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from auto_ontology.dal import schema as s
 from auto_ontology.dal.attributes import update_column_attribute
@@ -72,6 +78,10 @@ class AlreadyUndone(EditRefused):
 
 class Conflict(EditRefused):
     """A later edit changed a field this one changed: undo that one first."""
+
+
+class Creation(EditRefused):
+    """That edit created a Term or attribute, which an undo can't take back."""
 
 
 @dataclass(frozen=True)
@@ -144,6 +154,8 @@ def undo(edit_id: int, *, vdb: PostgresVDB | None = None, actor: Actor = "user")
         changes = _changes("WHERE edit = :edit ORDER BY id FOR UPDATE", {"edit": edit_id})
         if not changes:
             raise NotFound(f"no edit {edit_id}")
+        if any(created(c) for c in changes):
+            raise Creation(f"edit {edit_id} created what it changed, so it can't be undone")
         if store().query_read(
             "SELECT 1 FROM ops.change_log WHERE undoes = :edit LIMIT 1", {"edit": edit_id}
         ):
@@ -179,6 +191,85 @@ def history(entity: Entity, entity_id: str) -> list[Change]:
         "WHERE entity = :entity AND entity_id = :id ORDER BY id DESC",
         {"entity": entity, "id": entity_id},
     )
+
+
+def created(change: Change) -> bool:
+    """Whether the change is a row's creation, logged from `CREATED`: an undo can't revert it."""
+    return change.field == "name" and change.old is None
+
+
+# --- compile's and import's writes ------------------------------------------------------------
+
+# A row before it exists: what a writer's new rows are logged from, so each field it was given is
+# a change and each it left unset isn't.
+CREATED: Mapping[Entity, Mapping[str, Any]] = {
+    "term": {
+        "name": None,
+        "description": None,
+        "synonyms": [],
+        "name_certified": False,
+        "description_certified": False,
+    },
+    "column_attribute": {"name": None, "description": None, "certified": False},
+}
+
+Row = tuple[Entity, str]
+
+
+def fields_of(entity: Entity, ids: Collection[str]) -> dict[Row, dict[str, Any]]:
+    """The logged fields of each of these rows there is, locked until the transaction ends: what a
+    writer outside this module takes before it writes, for `log_write` to compare against."""
+    if not ids:
+        return {}
+    table = s.term if entity == "term" else s.column_attribute
+    rows = store().query_read(
+        select(table.c.id, *(table.c[f] for f in FIELDS[entity]))
+        .where(table.c.id.in_(sorted(ids)))
+        .order_by(table.c.id)
+        .with_for_update()
+    )
+    out: dict[Row, dict[str, Any]] = {}
+    for row in rows:
+        fields = {f: row[f] for f in FIELDS[entity]}
+        if entity == "term":
+            fields["synonyms"] = list(fields["synonyms"] or [])
+        out[(entity, str(row["id"]))] = fields
+    return out
+
+
+def log_write(
+    term_id: str,
+    attribute_ids: Collection[str],
+    before: Mapping[Row, Mapping[str, Any]],
+    *,
+    actor: Actor,
+) -> tuple[Change, ...]:
+    """Log, as one edit by `actor` inside the writer's transaction, each field a write changed on
+    the Term and its attributes since `before`. A row `before` doesn't hold isn't logged: give a
+    row the writer created as `CREATED`. Returns the changes, none when nothing changed."""
+    term: list[Row] = [("term", term_id)]
+    attributes: list[Row] = [("column_attribute", a) for a in attribute_ids]
+    rows = [r for r in dict.fromkeys(term + attributes) if r in before]
+    after = fields_of("term", [i for e, i in rows if e == "term"]) | fields_of(
+        "column_attribute", [i for e, i in rows if e == "column_attribute"]
+    )
+    edit: int | None = None
+    changes: list[Change] = []
+    for entity, entity_id in rows:
+        now = after.get((entity, entity_id))
+        if now is None:
+            continue
+        old = before[(entity, entity_id)]
+        for field in FIELDS[entity]:
+            if now[field] == old[field]:
+                continue
+            edit = edit if edit is not None else _next_edit()
+            changes.append(
+                _log(
+                    edit, entity, entity_id, field, old[field], now[field], actor=actor, undoes=None
+                )
+            )
+    return tuple(changes)
 
 
 # --- the work ---------------------------------------------------------------------------------
