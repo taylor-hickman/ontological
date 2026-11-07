@@ -1,6 +1,7 @@
 import type { EngineState } from '@shared/engine'
 
-type Running = Extract<EngineState, { status: 'running' }>
+/** What a request needs of a running engine. */
+type Running = Pick<Extract<EngineState, { status: 'running' }>, 'engineUrl' | 'token'>
 
 export class EngineError extends Error {
   constructor(

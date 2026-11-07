@@ -24,6 +24,7 @@ import { APP_ORIGIN, APP_SCHEME, appProtocolHandler } from './app-protocol'
 import { contentSecurityPolicy } from './csp'
 import { engineCommand } from './engine/command'
 import { nodeEngineIo } from './engine/io'
+import { engineEnv } from './shell-env'
 import { EngineSupervisor } from './engine/supervisor'
 import { buildMenuTemplate } from './menu'
 import { parseContextMenuItems, parseFileFilters, parseFileName, parseNotification } from './validate'
@@ -56,6 +57,7 @@ let saveTimer: NodeJS.Timeout | undefined
 const ENGINE_WAIT_MS = 2000
 
 let supervisor: EngineSupervisor | null = null
+let quitting = false
 let engineState: EngineState = { status: 'starting' }
 const engineWaiters = new Set<() => void>()
 /** The engine port in the CSP of the window's document: undefined while none has been served. */
@@ -116,7 +118,7 @@ async function documentPolicy(): Promise<string> {
   return contentSecurityPolicy(documentPort)
 }
 
-function startEngineSupervisor(): void {
+async function startEngineSupervisor(): Promise<void> {
   let command: string[]
   try {
     command = engineCommand({ env: process.env, isPackaged: app.isPackaged, appPath: app.getAppPath() })
@@ -124,7 +126,14 @@ function startEngineSupervisor(): void {
     onEngineState({ status: 'failed', error: (err as Error).message })
     return
   }
-  supervisor = new EngineSupervisor(nodeEngineIo({ appData: app.getPath('userData'), command }), onEngineState)
+  // Opened from Finder, the app has launchd's environment; the engine needs the shell's PATH to
+  // find `claude`, and its auth variables to say they are ignored (shell-env.ts).
+  const env =
+    process.platform === 'win32'
+      ? process.env
+      : await engineEnv(process.env, { onError: (err) => console.warn('login shell environment not read:', err) })
+  if (quitting) return // quit while the shell was read: start no engine
+  supervisor = new EngineSupervisor(nodeEngineIo({ appData: app.getPath('userData'), command, env }), onEngineState)
   void supervisor.start()
 }
 
@@ -268,7 +277,7 @@ function registerIpc(): void {
   // Each document load asks, so a reload gets the screen and theme open now. A sync message must
   // always answer, so an unknown sender gets null and the preload's defaults.
   ipcMain.on(IPC.initialState, (event) => {
-    const initial: InitialShellState = { screen: state.screen, theme: state.theme }
+    const initial: InitialShellState = { screen: state.screen, theme: state.theme, setupClosed: state.setupClosed }
     event.returnValue = isMainWindowSender(event) ? initial : null
   })
 
@@ -276,6 +285,12 @@ function registerIpc(): void {
   ipcMain.on(IPC.setScreen, (event, screenId: unknown) => {
     if (!isMainWindowSender(event) || !isScreenId(screenId)) return
     state.screen = screenId
+    saveStateSoon()
+  })
+
+  ipcMain.on(IPC.closeSetup, (event) => {
+    if (!isMainWindowSender(event)) return
+    state.setupClosed = true
     saveStateSoon()
   })
 
@@ -343,7 +358,7 @@ app.whenReady().then(() => {
 
   registerIpc()
   serveRenderer()
-  startEngineSupervisor()
+  void startEngineSupervisor()
   installMenu()
   createWindow()
 
@@ -361,6 +376,7 @@ app.on('window-all-closed', () => {
 // second for an engine that doesn't answer.
 app.on('before-quit', (event) => {
   saveState()
+  quitting = true
   if (leaseReleased || !supervisor) return
   leaseReleased = true
   event.preventDefault()

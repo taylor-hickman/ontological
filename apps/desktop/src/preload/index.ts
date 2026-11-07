@@ -1,13 +1,13 @@
 // The only bridge between the renderer and main (DESIGN.md §3.4). The renderer gets these
 // functions and nothing else: no ipcRenderer, no Node.
 
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { EngineState } from '@shared/engine'
 import { IPC, type InitialShellState, type OntologicalApi, type ShellCommand } from '@shared/ipc'
 
 /** Main's screen and theme as they are now, so a reload doesn't fall back to the launch-time ones. */
 function readInitialState(): InitialShellState {
-  const fallback: InitialShellState = { screen: 'ask', theme: 'system' }
+  const fallback: InitialShellState = { screen: 'ask', theme: 'system', setupClosed: false }
   try {
     const state = ipcRenderer.sendSync(IPC.initialState) as InitialShellState | null
     return state ? { ...fallback, ...state } : fallback
@@ -21,12 +21,14 @@ const api: OntologicalApi = {
   initial: readInitialState(),
   setScreen: (screen) => ipcRenderer.send(IPC.setScreen, screen),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
+  closeSetup: () => ipcRenderer.send(IPC.closeSetup),
   onCommand: (listener) => {
     const handler = (_event: IpcRendererEvent, command: ShellCommand): void => listener(command)
     ipcRenderer.on(IPC.command, handler)
     return () => ipcRenderer.removeListener(IPC.command, handler)
   },
   openFile: (filters) => ipcRenderer.invoke(IPC.openFile, filters),
+  pathForFile: (file) => webUtils.getPathForFile(file),
   saveFile: (name) => ipcRenderer.invoke(IPC.saveFile, name),
   showContextMenu: (items) => ipcRenderer.invoke(IPC.showContextMenu, items),
   notify: (title, body) => ipcRenderer.invoke(IPC.notify, title, body),

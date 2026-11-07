@@ -218,14 +218,32 @@ class AgentRun[M: BaseModel]:
             self._events.put_nowait(None)
 
 
-def resolve_cli(override: str | Path | None) -> Path | None:
-    """The user's `claude`: the settings override when there is one, else a PATH lookup. Never
-    the SDK's bundled binary (§3 rule 1)."""
+def install_locations(home: Path | None = None) -> list[Path]:
+    """Where Claude Code's installers put `claude`, for an engine whose PATH lacks them: an app
+    opened from Finder has launchd's PATH unless the shell's could be read."""
+    home = home or Path.home()
+    return [
+        home / ".local" / "bin" / "claude",  # the native installer
+        home / ".claude" / "local" / "claude",  # a local npm install
+        Path("/opt/homebrew/bin/claude"),
+        Path("/usr/local/bin/claude"),
+    ]
+
+
+def _executable(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
+
+
+def resolve_cli(override: str | Path | None, *, home: Path | None = None) -> Path | None:
+    """The user's `claude`: the settings override when there is one, else a PATH lookup, else
+    the usual install folders. Never the SDK's bundled binary (§3 rule 1)."""
     if override is not None:
         path = Path(override)
-        return path if path.is_file() and os.access(path, os.X_OK) else None
+        return path if _executable(path) else None
     found = shutil.which("claude")
-    return Path(found) if found else None
+    if found:
+        return Path(found)
+    return next((p for p in install_locations(home) if _executable(p)), None)
 
 
 class ClaudeGateway:
@@ -394,7 +412,7 @@ class ClaudeGateway:
         """Find `claude`, read its version, and ping it: a round trip on the `ping` route that
         shows whether the user is logged in (§6.5)."""
         self.cli_path = resolve_cli(self._cli_override)
-        version = None if self.cli_path is None else await _cli_version(self.cli_path)
+        version = None if self.cli_path is None else await cli_version(self.cli_path)
         self._installed = version is not None
         self._version = version
         if version is not None:
@@ -412,7 +430,7 @@ class ClaudeGateway:
         state: State
         if self._installed is False:
             state = "not_installed"
-        elif self._version is not None and _version_tuple(self._version) < MIN_CLAUDE_VERSION:
+        elif self._version is not None and version_tuple(self._version) < MIN_CLAUDE_VERSION:
             state = "outdated"
         elif self._logged_in is False:
             state = "needs_login"
@@ -682,7 +700,7 @@ def _text(session: _Session) -> _Verdict:
     return _Verdict("ok", output=result.result)
 
 
-async def _cli_version(cli: Path) -> str | None:
+async def cli_version(cli: Path) -> str | None:
     """`claude --version`'s version number, or None if it doesn't run or say one."""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -705,7 +723,7 @@ async def _cli_version(cli: Path) -> str | None:
     return match.group(1) if proc.returncode == 0 and match else None
 
 
-def _version_tuple(version: str) -> tuple[int, ...]:
+def version_tuple(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))
 
 

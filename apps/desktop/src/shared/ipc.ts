@@ -18,6 +18,7 @@ export type ContextMenuItem =
 export type ShellCommand =
   | { type: 'navigate'; screen: ScreenId }
   | { type: 'new-question' }
+  | { type: 'add-source' }
   | { type: 'focus-search' }
   | { type: 'toggle-rail' }
   | { type: 'theme'; theme: ThemeSource }
@@ -29,6 +30,8 @@ export type ShellCommand =
 export interface InitialShellState {
   screen: ScreenId
   theme: ThemeSource
+  /** The user has left onboarding once, so it opens only from File → Add source. */
+  setupClosed: boolean
 }
 
 export interface OntologicalApi {
@@ -37,10 +40,14 @@ export interface OntologicalApi {
   /** Remembers the open screen for the next launch. */
   setScreen(screen: ScreenId): void
   setTheme(theme: ThemeSource): Promise<void>
+  /** Remembers that the user left onboarding. */
+  closeSetup(): void
   /** Subscribes to menu commands; returns the unsubscribe function. */
   onCommand(listener: (command: ShellCommand) => void): () => void
   /** A native open dialog. Resolves to the picked path, or null if cancelled. */
   openFile(filters: FileFilter[]): Promise<string | null>
+  /** The path of a file dropped on the page; '' for one that isn't on disk. */
+  pathForFile(file: File): string
   /** A native save dialog with `name` as the suggested file name. Resolves to the path, or null. */
   saveFile(name: string): Promise<string | null>
   /** A native context menu at the pointer. Resolves to the picked item's id, or null if dismissed. */
@@ -61,6 +68,7 @@ export interface OntologicalApi {
 export const IPC = {
   setScreen: 'shell:set-screen',
   setTheme: 'shell:set-theme',
+  closeSetup: 'shell:close-setup',
   command: 'shell:command',
   openFile: 'dialog:open-file',
   saveFile: 'dialog:save-file',

@@ -7,10 +7,11 @@ interface HeaderProps {
   title: string
   screen: ScreenId
   searchRef: RefObject<HTMLInputElement | null>
+  onAddSource(): void
 }
 
 /** DESIGN.md §3.3: breadcrumb and title on the left, search and the screen's one primary action on the right. */
-export function Header({ title, screen, searchRef }: HeaderProps) {
+export function Header({ title, screen, searchRef, onAddSource }: HeaderProps) {
   return (
     <header
       className="drag flex min-h-[52px] shrink-0 flex-wrap items-center gap-3 border-b border-border bg-bg px-5 py-2"
@@ -39,6 +40,16 @@ export function Header({ title, screen, searchRef }: HeaderProps) {
         >
           <PlusIcon />
           New question
+        </button>
+      )}
+      {screen === 'catalog' && (
+        <button
+          type="button"
+          onClick={onAddSource}
+          className="no-drag flex min-h-8 items-center gap-1.5 rounded-lg bg-accent-solid px-3 font-medium text-white"
+        >
+          <PlusIcon />
+          Add source
         </button>
       )}
     </header>

@@ -1,6 +1,7 @@
 """The engine process (ARCHITECTURE.md §4.3, §4.4).
 
-    python -m ontological.engine [--app-data DIR] [--pg-bin DIR] [--model-dir DIR] [--headless]
+    python -m ontological.engine [--app-data DIR] [--pg-bin DIR] [--model-dir DIR]
+                                 [--claude-cli PATH] [--headless]
                                  [--idle-timeout S] [--lease-renew S]
 
 Under engine.lock, it looks for a live engine through engine.json. If there is one, it prints
@@ -47,6 +48,7 @@ import uvicorn
 
 import ontological
 from ontological.api.app import create_app
+from ontological.catalog.sources import Sources, StoreSources
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
@@ -56,6 +58,7 @@ from ontological.jobs.staleness import StalenessCheck
 from ontological.llm.calls import PgCallLog
 from ontological.llm.env import sanitize_environ
 from ontological.llm.gateway import ClaudeGateway
+from ontological.llm.install import Claude, ClaudeCheck
 from ontological.store import dal, pg
 
 log = logging.getLogger("ontological.engine")
@@ -82,6 +85,7 @@ class Config:
     app_data: Path  # <appData>/Ontological
     pg_bin: Path | None
     model_dir: Path | None = None  # the embedding model's files (ontological.embed.model)
+    claude_cli: Path | None = None  # the user's `claude`, when it isn't the one on PATH
     idle_timeout_s: float = IDLE_TIMEOUT_S
     renew_every_s: float = RENEW_EVERY_S
 
@@ -90,15 +94,19 @@ class Store(Protocol):
     def start(self) -> None: ...
     def stop(self) -> None: ...
     def staleness_check(self) -> StalenessCheck: ...
+    def sources(self, jobs: ActiveJobs, embedder: LocalEmbedder | None) -> Sources: ...
+    def claude(self, config: Config) -> Claude: ...
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService: ...
 
 
 class PgStore:
     """The bundled Postgres (§5.3)."""
 
-    def __init__(self, layout: pg.Layout) -> None:
+    def __init__(self, layout: pg.Layout, *, claude_cli: Path | None = None) -> None:
         self.layout = layout
         self._calls: PgCallLog | None = None
+        self.claude_cli = claude_cli
+        self._shared_gateway: ClaudeGateway | None = None
 
     def start(self) -> None:
         """Start or adopt the server, then bring both Alembic chains to their heads (a first
@@ -121,18 +129,33 @@ class PgStore:
     def staleness_check(self) -> StalenessCheck:
         return StalenessCheck()
 
+    def _gateway(self) -> ClaudeGateway:
+        """The one gateway every Claude call goes through (§6): compile jobs and the onboarding
+        test call, so both see the same status."""
+        if self._shared_gateway is None:
+            self._calls = PgCallLog(pg.url(self.layout))
+            self._shared_gateway = ClaudeGateway(
+                calls=self._calls,
+                sandbox=self.layout.app_data / "claude-sandbox",
+                cli_path=self.claude_cli,
+            )
+        return self._shared_gateway
+
+    def sources(self, jobs: ActiveJobs, embedder: LocalEmbedder | None) -> Sources:
+        return StoreSources(jobs=jobs, embedder=embedder)
+
+    def claude(self, config: Config) -> Claude:
+        return ClaudeCheck(self._gateway, cli_path=config.claude_cli)
+
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService:
         """Compile jobs, with the gateway every Claude call goes through (§6)."""
-        self._calls = PgCallLog(pg.url(self.layout))
-        sandbox = self.layout.app_data / "claude-sandbox"
-        gateway = ClaudeGateway(calls=self._calls, sandbox=sandbox)
-        return Jobs(gateway=gateway, active=active, embedder=embedder)
+        return Jobs(gateway=self._gateway(), active=active, embedder=embedder)
 
 
 def pg_store(config: Config) -> Store:
     if config.pg_bin is None:
         raise RuntimeError("no Postgres binaries: pass --pg-bin or set ONTOLOGICAL_PG_BIN")
-    return PgStore(pg.Layout(config.app_data, config.pg_bin))
+    return PgStore(pg.Layout(config.app_data, config.pg_bin), claude_cli=config.claude_cli)
 
 
 def start_embedder(config: Config) -> LocalEmbedder | None:
@@ -160,6 +183,7 @@ def parse_args(argv: Sequence[str]) -> tuple[Config, bool]:
     ap.add_argument("--app-data", type=Path, default=None, help="<appData>/Ontological")
     ap.add_argument("--pg-bin", type=Path, default=os.environ.get("ONTOLOGICAL_PG_BIN"))
     ap.add_argument("--model-dir", type=Path, default=os.environ.get("ONTOLOGICAL_MODEL_DIR"))
+    ap.add_argument("--claude-cli", type=Path, default=os.environ.get("ONTOLOGICAL_CLAUDE_CLI"))
     ap.add_argument("--headless", action="store_true", help="start detached, print, exit")
     ap.add_argument("--idle-timeout", type=float, default=IDLE_TIMEOUT_S, metavar="S")
     ap.add_argument("--lease-renew", type=float, default=RENEW_EVERY_S, metavar="S")
@@ -168,6 +192,7 @@ def parse_args(argv: Sequence[str]) -> tuple[Config, bool]:
         app_data=(a.app_data or default_app_data()).absolute(),
         pg_bin=Path(a.pg_bin) if a.pg_bin else None,
         model_dir=Path(a.model_dir) if a.model_dir else None,
+        claude_cli=Path(a.claude_cli) if a.claude_cli else None,
         idle_timeout_s=a.idle_timeout,
         renew_every_s=a.lease_renew,
     )
@@ -320,6 +345,8 @@ async def _serve(
         version=info.version,
         embedder=embedder,
         jobs=jobs,
+        claude=store.claude(config),
+        sources=store.sources(jobs, embedder),
         jobs_service=service,
     )
     server = _Server(
