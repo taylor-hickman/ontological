@@ -232,7 +232,7 @@ BM25 alone gives 0.748 tables and 0.513 columns at k = 10. Trigram alone gives a
 
 - **Model.** arctic-m has the best hybrid column recall at every k, and its table recall is within 0.015 of the best. No candidate beats it, so it stays the default. bge-small's shortfall (0.02–0.04 on columns, 0.04 on data-layer tables) is not a tie.
 - **`QUESTION_K` = 30** (`answer/pack.py`, was upstream's 10). With hybrid search and arctic-m, recall goes 0.804 → 0.895 → 0.944 → 0.964 for tables and 0.562 → 0.707 → 0.805 → 0.858 for columns at k = 10, 20, 30, 40. The pack grows from about 6 tables and 82 of their columns to 9 and 123. Past 30, each step adds less. M4.7 checks it against answer accuracy.
-- **Coverage distance** (`ModelSpec.coverage_distance`, for M4.4's `check_answerable`). Each model's distances sit on a different scale: arctic-m's own-database nearest attribute has a median of 0.56, while bge-small's has 0.29. At upstream's 0.75, every other model covers every wrong-database question (FPR 1.0), and arctic-m covers 79% of them. Each value is the Youden's-J cut between a question's nearest attribute in its own database and in the other four. It comes from raw questions, so M4.4 checks it on extracted entities.
+- **Coverage distance** (`ModelSpec.coverage_distance`, for M4.4's `check_answerable`). Each model's distances sit on a different scale: arctic-m's own-database nearest attribute has a median of 0.56, while bge-small's has 0.29. At upstream's 0.75, every other model covers every wrong-database question (FPR 1.0), and arctic-m covers 79% of them. Each value is the Youden's-J cut between a question's nearest attribute in its own database and in the other four. It came from raw questions; M4.4 moved each value to its calibration on extracted entities, which for arctic-m is 0.671.
 - **Not tuned here.** `plan`'s per-entity k values (2, 3 for evidence, 1 Term) need extracted entities, and the certified bonus needs certified items; the eval has neither. RRF's k = 60 and the 50 candidates per ranking stay as S8 set them.
 
 
@@ -249,6 +249,19 @@ Produces: the full answer path, the chat screen, and defaults set from measured 
 | M4.5 | SSE event stream with re-attach and cancel (§8.4) | M4.3 |
 | M4.6 | Chat screen: steps, validated SQL, rows and CSV, ResultChart port, usage meter, source selector | M4.5, M2.7 |
 | M4.7 | First tuning round (four runs, see [Tuning rounds](#tuning-rounds)), then held-out; set the defaults in §6.3 and record the scores here | M4.3, M3.9, M3.10 |
+
+**M4.4 decided (2026-11-07): `check_answerable` scores at each model's coverage distance, recalibrated on extracted entities; arctic-m's is 0.671.** `ontological/answer/answerable.py` ports upstream's entity-coverage pipeline. One `answerable_extract` call (Haiku, low effort, cached) rewrites the question and extracts up to 5 entities with upstream's prompt, without its Glossary and Evidence sections. Each entity searches the column attributes (`ENTITY_K` = 2) in the database given, or in the one whose attributes cover the most entities. The score is the fraction of entities with an attribute at or under the engine's `embedder.spec.coverage_distance`. Two changes from upstream: an entity is covered only by its own hits' distances (upstream's dedupe lets an attribute two entities found cover both at the nearer one's distance), and the LLM filter of SQL attributes and custom analyses is dropped, since it never changes the score. A failed extraction lets the question stand in, and the result says so (`extracted: false`). `POST /answerable` serves it, with `missing[]` and each entity's covering attributes. The UI pill (M4.6) and the MCP tool (M6.2) call that route.
+
+The M3.9 values didn't hold on entities. `ontological_eval answerable` extracted the 76 dev questions' entities (256 entities, 3.4 a question, none fell back) and ran M3.9's calibration on them: an entity's nearest attribute in its own database is a positive, and in each other eval database a negative. Entities sit further from their attributes than whole questions do (arctic-m's own-database median is 0.58–0.59, against 0.56 for questions). At 0.636, arctic-m covered 72% of own-database entities, and only 43% of questions were fully covered in their own database. The entity cut was 0.671. A second extraction, after a one-character prompt change missed the cache, gave 260 entities and a cut of 0.672, so the value is stable across Haiku's extractions. The table is that second run, on the prompt as committed. The two runs made 152 Haiku calls, $0.06 at API prices; a rerun on the same prompt makes none.
+
+| model | M3.9 (questions) | spec now | entity cut (TPR / FPR) | own full | other full | other full @0.75 |
+|---|---|---|---|---|---|---|
+| `bge-small` | 0.346 | 0.345 | 0.345 (0.89 / 0.14) | 0.737 | 0.046 | 1.000 |
+| `arctic-m` | 0.636 | **0.671** | 0.672 (0.91 / 0.17) | 0.789 | 0.046 | 0.276 |
+| `nomic` | 0.356 | 0.376 | 0.375 (0.90 / 0.17) | 0.737 | 0.046 | 1.000 |
+| `bge-base` | 0.415 | 0.412 | 0.412 (0.91 / 0.16) | 0.776 | 0.046 | 1.000 |
+
+"Own full" is the share of dev questions `check_answerable` scores 1.0 in their own database at the spec's value, and "other full" the share of question-database pairs it scores 1.0 elsewhere. Dense distances are what it scores. Once M4.3 puts hybrid search under retrieval, a hit's distance is still its cosine distance to the entity, but the two hits an entity keeps may not include its dense-nearest, so coverage can only fall. The rerun after M4.3 shows whether that matters.
 
 ### M5: Curation
 
