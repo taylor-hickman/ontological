@@ -50,11 +50,13 @@ import ontological
 from ontological.answer.service import Answers, StoreAnswers
 from ontological.api.app import create_app
 from ontological.catalog.sources import Sources, StoreSources
+from ontological.curate.service import OntologyService, StoreOntology
 from ontological.embed.embedder import LocalEmbedder
 from ontological.engine import discovery
 from ontological.engine.lifetime import IDLE_TIMEOUT_S, RENEW_EVERY_S, Lifetime
+from ontological.jobs import store as job_store
 from ontological.jobs.active import ActiveJobs
-from ontological.jobs.service import Jobs, JobsService
+from ontological.jobs.service import Jobs, JobsService, auto_compile_from
 from ontological.jobs.staleness import StalenessCheck
 from ontological.llm.calls import PgCallLog
 from ontological.llm.env import sanitize_environ
@@ -94,10 +96,11 @@ class Config:
 class Store(Protocol):
     def start(self) -> None: ...
     def stop(self) -> None: ...
-    def staleness_check(self) -> StalenessCheck: ...
+    def staleness_check(self, new_tables: Callable[[job_store.Job], object]) -> StalenessCheck: ...
     def sources(self, jobs: ActiveJobs, embedder: LocalEmbedder | None) -> Sources: ...
     def claude(self, config: Config) -> Claude: ...
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService: ...
+    def ontology(self, embedder: LocalEmbedder | None) -> OntologyService: ...
     def answers(self, embedder: LocalEmbedder | None) -> Answers: ...
 
 
@@ -128,8 +131,8 @@ class PgStore:
         dump = pg.stop(self.layout)
         log.info("store stopped; quit dump %s", dump.name if dump else "not needed")
 
-    def staleness_check(self) -> StalenessCheck:
-        return StalenessCheck()
+    def staleness_check(self, new_tables: Callable[[job_store.Job], object]) -> StalenessCheck:
+        return StalenessCheck(new_tables=new_tables)
 
     def _gateway(self) -> ClaudeGateway:
         """The one gateway every Claude call goes through (§6): compile jobs and the onboarding
@@ -152,6 +155,10 @@ class PgStore:
     def jobs(self, active: ActiveJobs, embedder: LocalEmbedder | None) -> JobsService:
         """Compile jobs, with the gateway every Claude call goes through (§6)."""
         return Jobs(gateway=self._gateway(), active=active, embedder=embedder)
+
+    def ontology(self, embedder: LocalEmbedder | None) -> OntologyService:
+        """The Terms and Ontology screens' reads and edits; an edit re-embeds with `embedder`."""
+        return StoreOntology(embedder)
 
     def answers(self, embedder: LocalEmbedder | None) -> Answers:
         """Questions, answered through the same gateway."""
@@ -330,9 +337,9 @@ async def _serve(
     embedder: LocalEmbedder | None,
     store: Store,
 ) -> None:
-    staleness = store.staleness_check()
     jobs = ActiveJobs()
     service = store.jobs(jobs, embedder)
+    staleness = store.staleness_check(auto_compile_from(service, asyncio.get_running_loop()))
     lifetime = Lifetime(
         idle_timeout_s=config.idle_timeout_s,
         renew_every_s=config.renew_every_s,
@@ -354,6 +361,7 @@ async def _serve(
         claude=store.claude(config),
         sources=store.sources(jobs, embedder),
         jobs_service=service,
+        ontology=store.ontology(embedder),
         answers=store.answers(embedder),
     )
     server = _Server(

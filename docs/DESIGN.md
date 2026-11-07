@@ -342,7 +342,7 @@ Shortcut hints in the sidebar use `--text-muted` at 11 px. Windows and Linux swa
 
 ## 10. Open questions
 
-1. **Graph scale.** sigma.js handles thousands of nodes, but a 200-table warehouse will need clustering by schema or term group. Decide after M3's WWI compile.
+1. **Graph scale.** The graph draws each node as a button over SVG edges (M5.2), which suits a few hundred nodes. A 200-table warehouse will need clustering by schema or term group, or sigma.js's WebGL renderer with the list view as its accessible form. Decide after M3's WWI compile.
 2. **Ask with two sources in one conversation.** Answers come from one source (§8.1). Should a follow-up that hits a different source start a new conversation or mark the switch inline?
 3. **Monaco or CodeMirror** for "Open in editor". CodeMirror 6 is smaller and themes from the same tokens.
 4. **Windows and Linux chrome.** `titleBarOverlay` is planned but unmocked. macOS ships first (§10).

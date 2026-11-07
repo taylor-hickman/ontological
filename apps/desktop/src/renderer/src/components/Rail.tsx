@@ -18,7 +18,7 @@ export function Rail({ label, sheet, onClose, children }: RailProps) {
       data-sheet={sheet || undefined}
       onKeyDown={sheet ? (e) => e.key === 'Escape' && onClose() : undefined}
       className={`flex min-w-0 flex-col gap-6 border-l border-border bg-rail px-[22px] py-6 ${
-        sheet ? 'absolute inset-y-0 right-0 z-10 w-[340px] max-w-full shadow-[-8px_0_24px_rgba(20,24,33,0.08)]' : 'flex-[1_1_300px] max-w-[360px]'
+        sheet ? 'absolute inset-y-0 right-0 z-10 w-[340px] max-w-full overflow-y-auto shadow-[-8px_0_24px_rgba(20,24,33,0.08)]' : 'max-h-full flex-[1_1_300px] max-w-[360px] overflow-y-auto'
       }`}
     >
       <div className="flex items-center justify-between gap-2">

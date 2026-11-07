@@ -11,6 +11,8 @@ interface SidebarProps {
   onNavigate(screen: ScreenId): void
   jobs: JobSummary[]
   onAddSource(): void
+  /** The screen's context under the navigation: the certification meter on Ontology. */
+  context?: React.ReactNode
 }
 
 function NavItem({
@@ -56,7 +58,7 @@ function NavItem({
 }
 
 /** DESIGN.md §3.3: 232 px, window controls, wordmark, source switcher, navigation, screen context, Settings. */
-export function Sidebar({ screen, sources, onNavigate, onAddSource, jobs }: SidebarProps) {
+export function Sidebar({ screen, sources, onNavigate, onAddSource, jobs, context }: SidebarProps) {
   const first = sources?.[0]
   const badge = jobsBadge(jobs)
   return (
@@ -102,7 +104,9 @@ export function Sidebar({ screen, sources, onNavigate, onAddSource, jobs }: Side
         ))}
       </div>
       {/* Screen context goes here: Recent on Ask, the certification meter on Ontology. */}
-      <div className="min-h-0 flex-1" data-testid="sidebar-context" />
+      <div className="min-h-0 flex-1" data-testid="sidebar-context">
+        {context}
+      </div>
       <NavItem
         current={screen === 'settings'}
         label="Settings"

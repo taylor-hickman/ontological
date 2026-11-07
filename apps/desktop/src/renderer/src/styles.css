@@ -217,3 +217,10 @@
     transition: none !important;
   }
 }
+
+/* The Ontology graph's dotted canvas (docs/design/mockups/ontology.html). */
+.graph-dots {
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
